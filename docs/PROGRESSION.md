@@ -940,6 +940,85 @@ Les suspects restants, par ordre de probabilite :
 
 Aucun de ces trois n'a ete verifie. C'est le prochain chantier.
 
+### Phase 17 - `check_life` : l'analyse de `bk2` ne devait pas avoir lieu
+
+Le suspect le plus probable de la Phase 16 (`check_life` et le `score`)
+l'etait. La routine est desormais transcrite et **verifiee**.
+
+#### Le bug
+
+`_check_life` (L20958-21042) analyse les 17 voisins. Le point de structure
+que nous avions faux : **le bloc d'analyse de `bk2` (`LAB_4DDE8`) n'est
+atteint que si `valid_move == 0`.**
+
+.. code-block:: none
+
+    pour k dans 17 voisins :
+        r = valid_move(case, offset[k])
+        si r != 0 :
+            si r == 2 : score -= 15        # rocher, LAB_4DDAA
+            goto LAB_4DE2A                 # <-- saute l analyse de bk2
+        ...
+
+L'eau (`r == 3`) et le hors-carte (`r == 1`)_sortent donc **avant**
+`LAB_4DDE8`. Nous analysions `bk2` quand meme, et comme `bk2` vaut `0`
+hors carte, la branche `elif k != 0 and 0x20 < d1 <= 0x2C` pouvait
+declencher un `return 0` a tort.
+
+Deux consequences, qui expliquent la croissance trop rapide :
+
+1. un villageois **perdait son village** (`score <= 0` le renvoyait a
+   l'etat explorateur) ;
+2. et surtout, `threshold = score` dans `grow_peep` : un score artificiellement
+   bas **baissait le seuil de scission**, donc les villageois se scindaient
+   d'autant plus vite.
+
+#### Le correctif
+
+Le `continue` est place immediatement apres le traitement du rocher, et le
+test du centre non constructible est rendu explicite :
+
+.. code-block:: none
+
+    if r != 0:
+        if r == 2: score -= 0x0F
+        continue                    # LAB_4DE2A, sans lire bk2
+    nb = block + off
+    if blk[nb] == $1F+tribu or blk[nb] == $0F:
+        if score == 0: score = 0x32
+        score += 0x0F
+    elif k == 0:
+        return 0                    # LAB_4DDA
+    # LAB_4DDE8 : uniquement pour r == 0
+
+#### Verifie
+
+* **2000 cas random** (position, tribu, contenu de carte aleatoire)
+  confrontes a une reecriture independante du listing : **identique**.
+* Les 68/68 tiennent sur 7 graines, `check_render` OK, `smoke_sim` OK,
+  `stress` 6/6.
+* La croissance est divisee par deux en milieu de partie (graine 59) :
+
+| tour | population avant | apres |
+|---|---|---|
+| 400 | 289 | **142** |
+| 800 | 866 | **375** |
+| 1600 | 6 442 | **2 306** |
+| 2400 | 29 962 | **16 056** |
+
+#### Ce qui reste trop rapide
+
+Au tour 3200 on atteint encore 208 habitants — **le plafond `MAX_PEEPS`** — et
+50 000 a 56 000 de population. Le correctif a donc bien reduit l'ecart, mais
+pas supprime. Restent a instruire :
+
+1. la transition villageois -> ville et le moment ou `FRAME_TOWN` est pose ;
+2. la formule de l'age `FRAME_AGE + score * 10 / 0x131`, qui indexe
+   `population_add` et `mana_add` ;
+3. la population de depart (`_place_first_people`, lignes 7652-7686).
+
+Aucun n'a ete verifie a ce jour.
+
 ### Reste a faire
 ### Reste a faire
 

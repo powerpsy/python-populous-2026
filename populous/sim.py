@@ -225,7 +225,40 @@ class Game:
 
     # ------------------------------------------------------- _check_life
     def check_life(self, tribe: int, block: int) -> int:
-        """Score d'exploitabilité autour de ``block`` (asm $4DD56, intégral)."""
+        """Score d'exploitabilité autour de ``block`` — `_check_life` (L20958-21042).
+
+        Transcription integrale. Un point de structure etait faux avant cette
+        version, et il pesait sur toute la croissance :
+
+        **L'analyse de ``bk2`` (LAB_4DDE8) n'est atteinte que si
+        ``valid_move == 0``.** Pour une case hors carte (``r == 1``) ou de
+        l'eau (``r == 3``), l'asm saute directement a ``LAB_4DE2A``
+        (L21018-21022 pour l'eau) sans jamais regarder ``bk2``. Nous
+        analysions quand meme ``bk2``, ce qui faisait rendre ``0`` trop
+        souvent : un villageois perdait son village, et le seuil de scission
+        (``threshold = score``) baissait, donc il se scindait davantage.
+
+        .. code-block:: none
+
+            pour k dans 17 voisins :
+                r = valid_move(case, offset[k])
+                si r != 0 :
+                    si r == 2 : score -= 15        # rocher
+                    continuer                      # <- L21018-21022
+                nb = case + offset[k]
+                si blk[nb] == $1F+tribu ou blk[nb] == $0F :
+                    si score == 0 : score = 50
+                    score += 15
+                elif k == 0 :
+                    return 0                                    # LAB_4DDA
+                # LAB_4DDE8 : analyse de bk2, uniquement pour r == 0
+                d1 = bk2[nb]
+                si k < 9 et bk2[case] == $2A et $29 <= d1 <= $2C :
+                    all_of_city += 1
+                elif k != 0 et $20 < d1 <= $2C :
+                    return 0                        # enclavé par un bâtiment
+            score = max(score, 0x23) ; 0x131 -> 0x0BEA
+        """
         own = tribe + 0x1F
         map_blk, map_bk2 = self.map.blk, self.map.bk2
         score = 0
@@ -235,33 +268,32 @@ class Game:
         for k in range(N_NEIGHBOURS):
             off = OFFSET_VECTOR[k]
             r = self.map.valid_move(block, off)
-            nb = block + off
-            if r == 0:
-                v = map_blk[nb]
-                if v == own:
-                    pass
-                elif v == BLK_FLAT:
-                    pass
-                else:
-                    if k == 0:                          # centre non constructible
-                        return 0
-                if score == 0:
-                    score = 0x32                        # 50 pour la première case
-                score += 0x0F                           # +15
-            elif r == 2:                                # rocher
-                score -= 0x0F
-            # r == 1 (hors carte) et r == 3 (eau) : neutres
 
-            d1 = map_bk2[nb] if 0 <= nb < MAP_CELLS else 0   # hors carte : 0 (BSS)
+            if r != 0:
+                if r == 2:
+                    score -= 0x0F           # LAB_4DDAA : rocher
+                # r == 1 (hors carte) et r == 3 (eau) : on saute l analyse
+                continue                     # LAB_4DE2A, sans lire bk2
+
+            nb = block + off
+            v = map_blk[nb]
+            if v == own or v == BLK_FLAT:
+                if score == 0:
+                    score = 0x32            # 50 a la premiere case favorable
+                score += 0x0F               # +15 par case
+            elif k == 0:
+                return 0                     # LAB_4DDA : centre non constructible
+
+            d1 = map_bk2[nb]
             if k < 9 and centre_bk2 == 0x2A and 0x29 <= d1 <= 0x2C:
                 all_of_city += 1
-            elif k > 0 and 0x20 < d1 <= 0x2C:
-                return 0                                # enclavé par un bâtiment
+            elif k != 0 and 0x20 < d1 <= 0x2C:
+                return 0                     # LAB_4DE1E : enclave par un batiment
 
-        if score < 0x23:
+        if score < 0x23:                     # CMP.W #$0023 / BGE
             score = 0
-        if score == 0x131:
-            score = 0x0BEA                              # 305 -> 3050 grande ville
+        if score == 0x131:                   # CMP.W #$0131 / BNE
+            score = 0x0BEA                   # 305 -> 3050 : grande ville
         return score
 
     # --------------------------------------------------------- _set_town
