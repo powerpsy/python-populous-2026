@@ -2071,6 +2071,95 @@ Reste a faire, dans l'ordre : le tableau de signatures, puis le noyau 68000
 (les opcodes sont dans le listing, sous forme d'octets, dans chaque
 commentaire `;XXXX:`). Les ADF restent hors de git.
 
+### Phase 32 - `_move_magnet_peeps` : le mecanisme reel, enfin trouve
+
+Lecture achevee jusqu'a `LAB_41CF6`. La routine ne calcule **pas** un
+vecteur : elle **selectionne une direction dans une table**. C'est le point
+que personne n avait note, et c'est tout le sens de la routine.
+
+#### La table de directions
+
+.. code-block:: none
+
+    L5219: LAB_41CF6
+    L5220: MOVE.W  (-6,A5),D0        ; dx, qui vaut -1, 0 ou +1
+    L5221: ADDQ.W  #1,D0             ; 0, 1, 2
+    L5222: MULS    #$0003,D0         ; 0, 3, 6
+    L5223: ADD.W   (-8,A5),D0        ; + dy
+    L5224: ADDQ.W  #1,D0             ; indice 1..9
+    L5226: ASL.L   #1,D0             ; en octets
+    L5227: LEA     (_to_delta,A4),A0
+    L5228: MOVE.W  (0,A0,D0.L),(-2,A5)
+    L5232: LEA     (_to_offset,A4),A0
+    L5233: MOVE.W  (0,A0,D0.L),-(A7)
+
+Donc l'indice est
+
+.. code-block:: none
+
+    i = (dx + 1) * 3 + dy + 1
+
+soit une **grille 3x3** centree sur l'entree 4. `_to_delta` donne le
+decalage a appliquer, `_to_offset` le decalage de case a tester.
+
+Les deux tables sont contigues : `_to_delta` est a `A4+$840A`, `_to_offset`
+a `A4+$841C`, soit 18 octets d'ecart — exactement **9 mots**. Chacune
+indexee par `2*i`, `i` de 1 a 9. Ce n'est donc pas un vecteur calcule, c'est
+une **table de 9 entrees** qu'on indexe.
+
+#### Ce que la direction doit passer
+
+.. code-block:: none
+
+    L5235: JSR ___valid_move        ; valid_move(A2->block, offset)
+    L5237: (-4,A5) = D0              ; le resultat
+    L5238: BNE  LAB_41D7A            ; r != 0 -> autres cas
+
+Puis, quand ``r == 0`` (le pas est permis) :
+
+.. code-block:: none
+
+    L5239: TST.L ($E,A2) / BEQ LAB_41D5A
+    L5246: ADD.W  (8,A2),D1          ; case voisine
+    L5248: CMPI.B #$35,(0,A0,D1.W)   / BEQ LAB_41D7A
+
+Si le peep a une cible designee, la case voisine ne doit pas contenir
+`$35`. `$35` est un type de terrain — a verifier, mais le comportement est
+clair : certaines cases interdisent le pas meme quand `valid_move` dit oui.
+
+Et le resultat est ecrit **en un seul octet**, a l'offset `0x15` du peep :
+
+.. code-block:: none
+
+    L5256: MOVE.B (1,A0,D1.L),D0     ; _to_offset[i] + 1
+    L5257: MOVE.B D0,($15,A2)        ; le champ du pas
+
+Le `+1` est regulier : `_to_delta` donne le pas, et l'octet suivant dans
+`_to_offset` donne la direction a memoriser.
+
+#### Le cas `r == 2` — la guerre
+
+.. code-block:: none
+
+    L5264: CMPI.W #$0002,(-4,A5) / BNE LAB_41DA2
+    L5266: TST.W (_war,A4)     / BEQ LAB_41DA2
+    L5273: MOVE.B (1,A0,D1.L),D0
+    L5274: MOVE.B D0,($15,A2)
+
+Si `valid_move` renvoie 2 (rocher) **et** qu'il y a guerre, le pas est
+quand meme accepte. La guerre change donc la traversabilite d'un rocher.
+C'est un mecanisme de gameplay, pas un detail.
+
+#### Ce qu il reste
+
+``LAB_41DA2`` a ``LAB_41F06`` — environ 200 lignes : la repartition des
+peeps en(role,normal,etc.), le traitement de `LAB_516AA`, et la sortie.
+Plus `_get_heading` (L5469-5539, 71 lignes).
+
+Toujours **rien de code** : la table de directions et le mecanisme de
+`valid_move` sont clairs, mais ecrire la moitie de la routine ne servirait
+rien. La regle de la Phase 26 tient.
+
 ### Reste a faire
 ### Reste a faire
 
