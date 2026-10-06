@@ -858,6 +858,70 @@ a instruire :
 
 C'est le prochain chantier de **calibrage**, distinct de la transcription.
 
+### Phase 16 - La croissance est-elle mal transcrite ? Non. C'est le rythme.
+
+Question posee en Phase 15 : la croissance est-elle due a une erreur de
+transcription, ou a l'equilibrage ? **On a verifie : la transcription est
+exacte.** Trois points controles ligne a ligne contre le listing.
+
+**1. La scission.** L3904-3912 :
+
+.. code-block:: none
+
+    enfant.vie  = parent.vie - (seuil >> 1)     ; MOVE.W D1,(4,A0)
+    parent.vie  = seuil >> 1                    ; MOVE.W D0,(4,A0)
+
+soit exactement `child.life = p.life - threshold // 2` puis
+`p.life = threshold // 2`. Notre `grow_peep` fait deja cela. La population
+est donc **conservee** par la scission : elle ne peut pas etre la cause.
+
+**2. L'apport de population.** L4008-4014, a `LAB_40F40`, donc **toujours**
+execute — que la scission ait eu lieu ou non :
+
+.. code-block:: none
+
+    A0 = peep ; D0 = age ; D0 = age * 2
+    D1 = _population_add[age]
+    ADD.W D1,(4,A0)          ; peep->vie += population_add[age]
+
+Notre `p.life += self.land.population_add[age]` est en fin de `grow_peep`,
+hors de la branche de scission : conforme.
+
+Noter que `mana_add[age]` va, lui, a la **mana** de la tribu (L3876), et non
+a la population. La distinction est exacte chez nous aussi.
+
+**3. La frequence.** `grow_peep` n'est appele que tous les 8 tours chez nous
+(`(game_turn & 7) == 0`), comme le « cycle des 8 tours » du listing.
+
+**Les tables.** `_population_add` est declare en BSS dans le listing
+(`DS.L 5 / DS.W 1`) : ses valeurs sont chargees a l'execution depuis
+`land*.dat` (L16489). Celles que nous lisons pour `land0` sont :
+
+.. code-block:: none
+
+    population_add = [0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5]
+    mana_add       = [0, 0, 0, 0, 1, 2, 3,  4,  5,  6, 20]
+
+ progression plausible, et coherente avec ce qu'on attend d'un fichier de
+terrain.
+
+**Conclusion : l'ecart est un probleme de rythme, pas de transcription.**
+Chaque tour de simulation correspond a **un seul** passage de la boucle de
+tour de l'asm — `_move_peeps` n'y est appele qu'une fois (L681), et la boucle
+reboucle sur `LAB_3E7E8` (L1013) a chaque vertical blank. La question
+ouverte est donc : **combien de temps reel representa un tour de simulation
+chez nous ?**
+
+Chez nous, un tour = une image a 30 img/s, soit 3200 tours = **107 secondes**.
+Or 2000 tours nous donnent deja 15 000 a 73 000 habitants. Dans le jeu
+d'origine, une telle population demande une session de plusieurs minutes.
+
+C'est donc a instruire sur la **base de temps** du VBI Amiga (50 Hz en PAL) et
+sur le nombre de passages de boucle reels par seconde, et non sur les
+constantes du jeu. **Travail non fait** : je n'ai pas eu la profondeur
+d'analyse necessaire pour trancher, et pretendre le contraire serait
+inventer. C'est le premier chantier a reprendre.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -871,9 +935,9 @@ C'est le prochain chantier de **calibrage**, distinct de la transcription.
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : la revue des rares zones non transcrites
   (l'IA, quelques regles de deplacement).
-* **Calibrage de la croissance** : apres le correctif de la Phase 15, la
-  population croit bien trop vite (Phase 15, fin). Verifier
-  `population_add`, le seuil de scission `0x131` et `offspring < 4`.
+* **Base de temps** : la population croit trop vite. La transcription est
+  verifiee exacte (Phase 16) — l'enjeu est le nombre de tours de simulation
+  par seconde reel, a comparer au VBI Amiga (50 Hz PAL). **Non fait.**
 * **`_do_place_funny`** (L8862) : ecrit dans `peeps[0xD1..0xD2]`, donc
   **au-dela** de `MAX_PEEPS` (208) ; la table `_funny` n'est que
   partiellement reconstruite dans ce listing. Demande d'etendre le tableau.
