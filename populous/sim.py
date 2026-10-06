@@ -25,6 +25,7 @@ Corrections apportées au document par relecture directe du code :
 """
 from __future__ import annotations
 
+from . import m68k
 from .constants import (
     ACT_NONE, BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
     BLK_TRIBE0, BLK_WATER,
@@ -271,16 +272,22 @@ class Game:
 
             if r != 0:
                 if r == 2:
-                    score -= 0x0F           # LAB_4DDAA : rocher
+                    # LAB_4DDAA : `ADDI.W #$fff1,D4`. D4 est un **mot**, il
+                    # reboucle donc a zero s'il passe sous zero. Un score
+                    # negatif, lu ensuite par `CMP.W #$0023 / BGE`, apparait
+                    # alors tres grand : le villageois ne se scinde pas. En
+                    # Python sans boucle, le resultat parait plausible et le
+                    # verdict est oppose.
+                    score = m68k.add_word(score, -0x0F)
                 # r == 1 (hors carte) et r == 3 (eau) : on saute l analyse
                 continue                     # LAB_4DE2A, sans lire bk2
 
             nb = block + off
             v = map_blk[nb]
             if v == own or v == BLK_FLAT:
-                if score == 0:
+                if m68k.test_word_eq_zero(score):
                     score = 0x32            # 50 a la premiere case favorable
-                score += 0x0F               # +15 par case
+                score = m68k.add_word(score, 0x0F)    # +15 par case
             elif k == 0:
                 return 0                     # LAB_4DDA : centre non constructible
 
@@ -290,11 +297,11 @@ class Game:
             elif k != 0 and 0x20 < d1 <= 0x2C:
                 return 0                     # LAB_4DE1E : enclave par un batiment
 
-        if score < 0x23:                     # CMP.W #$0023 / BGE
+        if not m68k.cmp_word_ge(score, 0x23):     # CMP.W #$0023 / BGE
             score = 0
-        if score == 0x131:                   # CMP.W #$0131 / BNE
+        if m68k.to_word(score) == 0x131:         # CMP.W #$0131 / BNE
             score = 0x0BEA                   # 305 -> 3050 : grande ville
-        return score
+        return m68k.to_word(score)
 
     # --------------------------------------------------------- _set_town
     def set_town(self, p: Peep, grow: int) -> None:

@@ -1079,6 +1079,73 @@ verifiee par execution.
    fixe nulle part. Elle demande soit une mesure sur l'emulateur, soit un
    choix de conception assume. **Non tranche.**
 
+### Phase 19 - L'interpretation materiel : le 68000 a des mots qui rebouclent
+
+Le port se fait **fidele d'abord**. Cette phase traite la categorie que le
+listing impose sans qu'on la voie : l'**interpretation materiel**.
+
+#### Le defaut
+
+Un `int` Python est de taille illimitée. Un registre du 68000 fait **16 ou 32
+bits** et **reboucle**. Toute valeur calculee dans un registre reboucle donc a
+zero en passant la borne.
+
+C'est la source d'ecart la plus discrete du port : le code Python « fait
+sens », donne les memes resultats sur les cas nomines, et **diverge des que
+l'overflow est atteint**.
+
+#### `populous/m68k.py`
+
+Un module qui rend la borne explicite, avec la recette du listing a cote de
+chaque primitive : `to_word`, `to_long_word`, `s16`, `s32`, `add_word`,
+`add_long`, `test_word_eq_zero`, `cmp_word_ge` / `cmp_word_lt` (comparaisons
+**signees**), `cmp_byte_ge` / `cmp_byte_le`, `mulu_word`, `divu_word`,
+`divs_word`, `asr_word`, `asl_word`.
+
+Deux conversions distinctes qu'il ne faut pas confondre :
+
+* la **troncature** (`to_word`) : un mot lu dans un long ;
+* l'**extension de signe** (`to_long_word`) : `MOVEA.L (8,A5),A0` et non
+  `MOVEA.W` — un parametre passe en `char` se lit donc **en signe**.
+
+#### Applique a `check_life`
+
+L'accumulateur `D4` est un mot. Quatre rochers le font tomber sous zero ;
+le 68000 le ramene a `0xFFC4`. Teste ensuite par `CMP.W #$0023 / BGE`, il
+apparait **tres grand** — donc le seuil n'est jamais atteint, et le
+villageois ne se scinde pas. En Python sans boucle, le score reste negatif :
+le resultat **parait** correct et le verdict est **oppose**.
+
+.. code-block:: none
+
+    score = m68k.add_word(score, -0x0F)      # LAB_4DDAA : ADDI.W #$fff1
+    if m68k.test_word_eq_zero(score): ...     # TST.W / BEQ
+    if not m68k.cmp_word_ge(score, 0x23):     # CMP.W #$0023 / BGE
+        score = 0
+    return m68k.to_word(score)
+
+Mesure : `0x32 - 4*0x0F` vaut `-10` en Python, et **`0xFFF6`** sur 68000.
+
+*Verifie* : **3000 cas random** confrontes a une transcription independante
+en arithmetique 16 bits → **identiques**. Les 68/68 tiennent, `smoke_sim` OK,
+`stress` 5/5.
+
+#### Ce qui reste a passer en 16 bits
+
+Le module est pret ; il reste a l'appliquer aux autres accumulateurs. Par
+ordre de risque :
+
+| site | champ | risque |
+|---|---|---|
+| `grow_peep` L4014 | `vie` — `ADD.W` | reboucle a `0x10000` ; peu atteint en pratique, mais `bataille` et `battle_over` manipulent la vie directement |
+| `move_peeps` L3308 | `mana` — `ADD.L` | reboucle a `0x100000000` ; tres lentement atteint |
+| `_do_battle` | exchanging des vies | le plafond `0x7D00` est un mot : le depassement doit boucler |
+| `Rng` | les tirages | le generateur de l'asm est lui-meme en arithmetique 16 bits |
+| `_sculpt`, `check_life` deja fait | les scores de deplacement | idem |
+
+Tant que ces sites ne sont pas convertis, **la portabilite 68000 du port
+n'est pas etablie** — c'est le chantier ouvert.
+
 ### Reste a faire
 ### Reste a faire
 
