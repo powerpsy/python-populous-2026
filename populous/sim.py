@@ -46,7 +46,7 @@ class Peep:
     __slots__ = (
         "state", "tribe", "offspring", "weapons", "life", "w6",
         "block", "prev_block", "frame", "target", "spawn_block",
-        "make_level_res",
+        "make_level_res", "face",
     )
 
     def __init__(self) -> None:
@@ -62,6 +62,13 @@ class Peep:
         self.target = -1        # index du peep visé, -1 = aucun (0 dans le jeu)
         self.spawn_block = 0
         self.make_level_res = 0
+        # +0x15 : un OCTET. Le listing y ecrit l'octet **haut** du mot
+        # `_to_offset[delta]`, donc 0xFF pour un deplacement vers l'ouest et
+        # 0x00 vers l'est (L5256-5257). Relu plus loin par `EXT.W`, donc la
+        # valeur vue en signe est -1 ou 0 -- et la comparaison avec
+        # `_to_offset[D4]` de L5415 n'est donc satisfaite que pour la
+        # direction O. Ce n'est pas un index de pas.
+        self.face = 0
 
     def __repr__(self) -> str:                      # pragma: no cover
         return ("Peep(t=%d trib=%d vie=%d bloc=%d état=%02X frm=%02X)"
@@ -647,6 +654,53 @@ class Game:
         """
         t = self.peeps[i].target
         return self.peeps[t] if 0 <= t < MAX_PEEPS else None
+
+    def get_heading(self, i: int) -> None:
+        """``_get_heading`` (L5469-5536) : la cible devient l'ennemi le plus proche.
+
+        Transcription integrale. Recherche de **distance de Manhattan** sur
+        tous les peeps, avec trois exclusions :
+
+        .. code-block:: none
+
+            L5486: MOVE.B (1,A2),D0 / CMP.B (1,A3),D0 / BEQ -> meme tribu
+            L5489: TST.W (4,A3)        / BLE -> vie nulle
+            L5493: BTST #7,(A3)        / BNE -> etat bit 7
+
+        Et surtout **l auto-reference par defaut** :
+
+        .. code-block:: none
+
+            L5480: MOVE.L A2,($E,A2)     ; la cible c'est moi-meme
+            L5527: MOVE.L A3,($E,A2)     ; puis l'ennemi le plus proche
+
+        Ce n'est donc pas une marqueuse « arrive » : c'est la valeur de
+        depart, et elle subsiste quand aucun ennemi n est eligible. Le champ
+        ``target`` de la Phase 29 se revele avoir deux lectures superposees,
+        et l asm les melange — ce qui est coherent avec le code mort du bloc
+        ``act = 4`` trouve en Phase 26.
+
+        La borne ``$270F`` (9999) est l'initiale de ``best`` ; comme la
+        distance maximale d une carte 64x56 vaut au plus 118, elle n'est
+        jamais atteinte — c'est un simple grand infini.
+        """
+        p = self.peeps[i]
+        best = 0x270F
+        x = p.block & 0x3F
+        y = p.block >> 6
+        p.target = i                                 # L5480
+        for j in range(self.no_peeps):
+            q = self.peeps[j]
+            if q.tribe == p.tribe:
+                continue                             # L5486-5488
+            if q.life <= 0:
+                continue                             # L5489-5490
+            if q.state & 0x80:
+                continue                             # L5493-5494
+            d = abs((q.block & 0x3F) - x) + abs((q.block >> 6) - y)
+            if d < best:                             # L5523 CMP.W / BGE
+                best = d
+                p.target = j                         # L5527
 
     def move_peeps(self) -> None:
         """Un tour de simulation (asm $4059A)."""
