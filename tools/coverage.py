@@ -72,6 +72,10 @@ PLANIFIE: set[str] = {
     "_devil_effect",          # Phase 26 : lu, structure relue, code mort trouve
     "_set_devil_magnet",      # Phase 26 : depends de _devil_effect
     "_do_computer_effect",    # Phase 26 : appele par _devil_effect, pas encore lu
+    # Phase 28 : 2 blocs sur 8 lus. Ecart de TYPE releve -- `peeps[0x0E]`
+    # est un POINTEUR dans l'asm, un indice chez nous. Arbitrage a rendre.
+    "_move_magnet_peeps",
+    "_get_heading",           # appele par _move_magnet_peeps, meme morceau
 }
 
 RE_FONCTION = re.compile(r"^(_[A-Za-z0-9_]+):\s*$")

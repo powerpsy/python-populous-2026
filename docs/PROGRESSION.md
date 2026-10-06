@@ -1781,6 +1781,102 @@ liste `PLANIFIE`, qui distingue les deux et les compte a part.
 
 La couverture devient une cible qu'on surveille, pas un chiffre qu'on oublie.
 
+### Phase 28 - `_move_magnet_peeps` : structure relevee, et un ecart de type
+
+560 lignes de code, non couvertes (`tools\coverage.py`). Relection des
+2 premiers blocs sur 8. La transcription n'est pas faite — mais deux
+constats meritaient d etre ecrits avant, parce qu'ils changent la maniere
+de la transcrire.
+
+#### Le gradient : un idiome repete, pas une soustraction
+
+Le calcul de la direction vers la cible est ecrit partout sous cette forme :
+
+.. code-block:: none
+
+    TST.W  D1 / BLE.S  -> D0 = 0        (4949-4954)
+             sinon      -> D0 = 1
+    TST.W  D1 / BGE.S  -> D1 = 0        (4956-4961)
+             sinon      -> D1 = 1
+    SUB.W  D1,D0                        (4963)
+
+soit exactement ``(D1 > 0) - (D1 < 0)``, c'est-a-dire un **``sign``**. Le
+motif revient des dizaines de fois dans la routine — pour l'aimant
+(`LAB_52DE6`) comme pour la cible designee. Une transcription litterale
+ecrirait quarante fois ces douze lignes ; une transcription qui « comprend »
+ecrirait ``sign()``. Les deux sont correctes, mais la seconde ne peut pas
+ete verifiee sans le coup d'oeil d'origine. On l'ecrira avec ``sign`` et on
+la gardera en regard du listing.
+
+Resultat :
+
+.. code-block:: none
+
+    (-6,A5) = sign((LAB_52DE6[tribu] & $3F) - (A2->block & $3F))
+    (-8,A5) = sign((LAB_52DE6[tribu] >> 6) - (A2->block >> 6))
+
+soit `magnet_to - block`, case par case, coordonnee par coordonnee.
+
+#### Ecart de representation : `peeps[0x0E]` est un POINTEUR
+
+L4914 dereference le champ :
+
+.. code-block:: none
+
+    MOVEA.L ($E,A2),A0      ; A2->0x0E, un LONG
+    MOVE.W  (8,A0),D0       ; -> la case de la cible
+    MOVE.W  (4,A0),D0       ; -> sa vie
+    MOVE.B  (1,A0),D0       ; -> sa tribu
+    MOVE.B  (A0),D0         ; -> son etat
+
+Chez nous, ``Peep.target`` est un **indice** :
+
+.. code-block:: none
+
+    self.target = -1        # index du peep vise, -1 = aucun (0 dans le jeu)
+
+Les tests booléens coincident — `0` dans l'asm, `-1` chez nous, meme
+signification. Mais **nous ne dereferenceons jamais**. Concretement, le
+gradient est calcule vers `magnet_to` chez nous, alors que le listing le
+calcule vers **la position de la cible designee**, lue dans le peep vise.
+
+C'est donc un ecart de **type**, pas de logique : la meme information ne peut
+pas etre lue de la meme facon. Deux options, et il faut trancher :
+
+* garder l'indice et ajouter une resolution `peeps[target]` la ou le listing
+  fait `A0 = peeps[0x0E]` — fidele, mais notre `-1` doit se comporter comme le
+  pointeur nul `0` de l'asm ;
+* ou modelede la cible par son index comme le fait le listing pour `block`,
+  ce qui suppose de relire les 9 dereferencements et de verifier qu'ils
+  donnaient la meme case.
+
+C'est une decision de portabilite, pas de lecture : les deux sont defendables.
+
+#### Deux mecanismes reveals au passage
+
+**La conversion en aimant** (`LAB_41AF4`, L5009) : quand la cible atteint la
+case visee, le peep est reattribue —
+
+.. code-block:: none
+
+    MOVE.B (-13,A5),(1,A2)   ; 1 = tribu, et (-13,A5) vaut 0 ou $FF
+
+`(-13,A5)` est l'octet haut du mot ou L4910 avait range la tribu. Donc la
+tribu du peep devient **0 ou 255** — pas 1. Le port n'a rien de comparable.
+
+**`_view_who`** (L5003-5007) : si la vue est sur personne (`_view_who == 0`),
+elle est forcee sur la cible. Petit detail d'affichage, mais il est dans le
+listing.
+
+#### Ce qu il reste a lire
+
+7 blocs sur 8, et surtout `_get_heading` (L5028, lui aussi non couvert), que
+cette routine appelle. La transcription doit donc etre un morceau unique
+`_move_magnet_peeps` + `_get_heading`, comme `_devil_effect` +
+`_do_computer_effect`. C est aussi la premiere fois qu un ecart de **type de
+donnees** et non de logique impose un arbitrage : c est ce qui rend le
+travail interessant, et ce que la Phase 23 avait montre sur les doors.
+
 ### Reste a faire
 ### Reste a faire
 
