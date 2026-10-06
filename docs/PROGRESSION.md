@@ -858,70 +858,89 @@ a instruire :
 
 C'est le prochain chantier de **calibrage**, distinct de la transcription.
 
-### Phase 16 - La croissance est-elle mal transcrite ? Non. C'est le rythme.
+### Phase 16 - La croissance : transcription exacte, et l'hypothese « rythme » REFUTEE
 
-Question posee en Phase 15 : la croissance est-elle due a une erreur de
-transcription, ou a l'equilibrage ? **On a verifie : la transcription est
-exacte.** Trois points controles ligne a ligne contre le listing.
+> **Correction de la Phase 16 v1.** J'y concluaisais que l'ecart venait de la
+> base de temps (« un tour par vertical blank »). **C'est faux**, et la
+> verification ci-dessous le refute. Le fond reste valable : la
+> transcription est exacte. C'est la conclusion qui etait fausse.
 
-**1. La scission.** L3904-3912 :
+Question posee en Phase 15 : la croissance trop rapide vient-elle d'une
+erreur de transcription ou de l'equilibrage ?
 
-.. code-block:: none
+#### 1. La scission — exacte
 
-    enfant.vie  = parent.vie - (seuil >> 1)     ; MOVE.W D1,(4,A0)
-    parent.vie  = seuil >> 1                    ; MOVE.W D0,(4,A0)
-
-soit exactement `child.life = p.life - threshold // 2` puis
-`p.life = threshold // 2`. Notre `grow_peep` fait deja cela. La population
-est donc **conservee** par la scission : elle ne peut pas etre la cause.
-
-**2. L'apport de population.** L4008-4014, a `LAB_40F40`, donc **toujours**
-execute — que la scission ait eu lieu ou non :
+L3831-3851, le conditionnement complet :
 
 .. code-block:: none
 
-    A0 = peep ; D0 = age ; D0 = age * 2
-    D1 = _population_add[age]
-    ADD.W D1,(4,A0)          ; peep->vie += population_add[age]
+    if stats[t].can_build == 1:              # CMPI.W #$0001
+        if peep->vie > 0x131:               # CMPI.W #$0131,(4,A0) / BLE
+            if stats[t].queued == 0:         # TST.W (LAB_516AC) / BNE
+                seuil = 0x131                # MOVE.W #$0131,(-12,A5)
+                stats[t].queued = 1
 
-Notre `p.life += self.land.population_add[age]` est en fin de `grow_peep`,
-hors de la branche de scission : conforme.
-
-Noter que `mana_add[age]` va, lui, a la **mana** de la tribu (L3876), et non
-a la population. La distinction est exacte chez nous aussi.
-
-**3. La frequence.** `grow_peep` n'est appele que tous les 8 tours chez nous
-(`(game_turn & 7) == 0`), comme le « cycle des 8 tours » du listing.
-
-**Les tables.** `_population_add` est declare en BSS dans le listing
-(`DS.L 5 / DS.W 1`) : ses valeurs sont chargees a l'execution depuis
-`land*.dat` (L16489). Celles que nous lisons pour `land0` sont :
+puis le partage (L3904-3912) :
 
 .. code-block:: none
 
-    population_add = [0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5]
-    mana_add       = [0, 0, 0, 0, 1, 2, 3,  4,  5,  6, 20]
+    enfant.vie = parent.vie - (seuil >> 1)
+    parent.vie = seuil >> 1
 
- progression plausible, et coherente avec ce qu'on attend d'un fichier de
-terrain.
+Identique a notre `grow_peep`. La population est **conservee** par la
+scission : elle ne peut pas expliquer l'ecart.
 
-**Conclusion : l'ecart est un probleme de rythme, pas de transcription.**
-Chaque tour de simulation correspond a **un seul** passage de la boucle de
-tour de l'asm — `_move_peeps` n'y est appele qu'une fois (L681), et la boucle
-reboucle sur `LAB_3E7E8` (L1013) a chaque vertical blank. La question
-ouverte est donc : **combien de temps reel representa un tour de simulation
-chez nous ?**
+#### 2. La porte des 8 tours — exacte, et elle gate aussi la population
 
-Chez nous, un tour = une image a 30 img/s, soit 3200 tours = **107 secondes**.
-Or 2000 tours nous donnent deja 15 000 a 73 000 habitants. Dans le jeu
-d'origine, une telle population demande une session de plusieurs minutes.
+L3819-3821 :
 
-C'est donc a instruire sur la **base de temps** du VBI Amiga (50 Hz en PAL) et
-sur le nombre de passages de boucle reels par seconde, et non sur les
-constantes du jeu. **Travail non fait** : je n'ai pas eu la profondeur
-d'analyse necessaire pour trancher, et pretendre le contraire serait
-inventer. C'est le premier chantier a reprendre.
+.. code-block:: none
 
+    D0 = _game_turn ; D0 &= 7
+    if D0 != 0: goto LAB_40F58      # BNE.W : saute tout le bloc
+
+Point decisif : le saut d'exclusion arrive a `LAB_40F58`, c'est-a-dire
+**apres** le `ADD.W D1,(4,A0)` de L4014 (`vie += population_add[age]`).
+L'apport de population est donc lui aussi limite aux tours multiples de 8.
+Notre `(game_turn & 7) == 0` qui enveloppe tout `grow_peep` est conforme.
+
+#### 3. Le rythme — l'hypothese est refutee
+
+J'ai cherche le ralentissement de la boucle de tour :
+
+* `_move_peeps` (L681) est appele **sans divisieur**, une fois par passage,
+  garde seulement par `_pause` et `_paint_map` (L676-679) ;
+* le seul `Delay()` du jeu est dans `_free_inter` (L245), le chemin de
+  sortie, et vaut 9 unites ;
+* `_waitfor(n)` (L15278) attend bien `n` verticals blanks via `_vbi_timer`
+  (incremente par la VBI, L19526) — mais son **unique appelant** est le
+  chemin serie/login, avec `n = 0x4B = 75` (L11653). La boucle de jeu
+  ne l'appelle pas.
+
+Autrement dit la boucle **tourne librement**, son rythme etant borne par la
+vitesse de rendu de la machine. Notre 30 img/s n'est donc pas 10x trop
+rapide : c'est un ordre de grandeur plausible pour un Amiga logiciel.
+
+**Conclusion : l'ecart de croissance n'est ni une erreur de transcription,
+ni un probleme de base de temps.**
+
+#### Ce qui reste a instruire
+
+Les suspects restants, par ordre de probabilite :
+
+1. **`check_life` et le `score`** — le seuil des villageois non-ville est
+   `score`, et non `0x131`. Si notre `score` est trop eleve, les
+   villageois se scindent trop tot. Verifier la formule de l'asm.
+2. **la transition villageois -> ville** et la formule de l'age
+   (`FRAME_AGE + score * 10 / 0x131`), qui indexe `population_add` et
+   `mana_add` : un age faux decale toute la croissance.
+3. **la population de depart** et le rythme des naissances : l'asm ajuste
+   la population initiale selon le mode (`_place_first_people`, lignes
+   7652-7686).
+
+Aucun de ces trois n'a ete verifie. C'est le prochain chantier.
+
+### Reste a faire
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -935,9 +954,10 @@ inventer. C'est le premier chantier a reprendre.
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : la revue des rares zones non transcrites
   (l'IA, quelques regles de deplacement).
-* **Base de temps** : la population croit trop vite. La transcription est
-  verifiee exacte (Phase 16) — l'enjeu est le nombre de tours de simulation
-  par seconde reel, a comparer au VBI Amiga (50 Hz PAL). **Non fait.**
+* **Croissance trop rapide** : la transcription et la base de temps sont
+  verifiees et exclues (Phase 16). Restent `check_life` / le `score`, la
+  transition villageois -> ville et la formule de l'age, et la population
+  de depart. **Non instruit.**
 * **`_do_place_funny`** (L8862) : ecrit dans `peeps[0xD1..0xD2]`, donc
   **au-dela** de `MAX_PEEPS` (208) ; la table `_funny` n'est que
   partiellement reconstruite dans ce listing. Demande d'etendre le tableau.
