@@ -1673,6 +1673,114 @@ Il faut donc traiter `_devil_effect` + `_do_computer_effect` +
 `_set_devil_magnet` (L9601) comme **un seul morceau**, puis brancher
 `ai_choose` dessus en supprimant l'heuristique. C'est le prochain chantier.
 
+### Phase 27 - On change de methode : transcrire d abord, comprendre ensuite
+
+Jusqu'ici le processus etait : **comprendre une routine, la transcrire, la
+documenter, passer a la suivante.** Cette phase inverse l'ordre, pour une
+raison qu'il faut ecrire noir sur blanc.
+
+#### Pourquoi
+
+Les trois erreurs de lecture de ce port etaient toutes du meme genre :
+
+| erreur | genre |
+|---|---|
+| `min()` au lieu du selecteur de minimum | interpretation |
+| `a == A` au lieu de `a` = adversaire | interpretation |
+| `LAB_52DEA` = mot haut de `pop` | interpretation |
+
+**Aucune n'est une erreur de transcription.** Toutes viennent d'avoir infere
+l'intention au lieu de copier la structure. `CMP`/`BLE`, `MULS #$0016`,
+`LAB_52DEA = +6` : tout y etait ecrit, noir sur blanc. Une transcription
+**mecanique** — sans interpretation, juste la structure — les aurait eues
+justes du premier coup.
+
+Le risque d'une transcription mecanique est qu'elle n'a pas d'oracle. Elle en
+a un ici : `autopilot.py` (68 controles), `stress.py`, `smoke_sim.py`. Une
+version mecanique se valide par « les tests tiennent », et quand un test
+casse, elle dit quelle ligne. Ce qui manquait jusqu'ici, c'était precisement
+cette base de comparaison.
+
+#### Le chiffre qu'on n'avait jamais mesure
+
+Les marqueurs `[APPROX]` ne disent rien de la couverture : ils sont ecrits la
+ou nous avons regarde, donc la ou nous avons doute. **Une routine jamais lue
+n'a aucun marqueur** — non parce qu'elle est correcte, mais parce que personne
+ne l'a visitee.
+
+.. code-block:: none
+
+    python tools\coverage.py            # resume
+    python tools\coverage.py --top 40   # les plus grosses non couvertes
+    python tools\coverage.py --holes    # les trous « lines cut »
+
+.. code-block:: none
+
+    routines _xxx:         : 564
+      dont lignes de code  : 21602
+
+    COUVERTURE REELLE      : 173 / 564  (30.7%)
+      par alias declare    : 13
+      par citation de nom  : 160
+      analysees, a coder   : 3
+      NON couvertes        : 388
+
+**Un tiers du listing.** Et la liste des plus grosses routines non couvertes
+n'est pas une liste de restes :
+
+.. code-block:: none
+
+    _do_action          640 l.   _two_players       621 l.
+    _move_magnet_peeps  560 l.   _game_options      540 l.
+    _show_world         517 l.   _save_load         490 l.
+    _animate            475 l.   _end_game          399 l.
+    _won_conquest       316 l.   _place_first_people 205 l.
+
+`_move_magnet_peeps`, `place_first_people`, `_show_world` sont du jeu. Le
+port les remplace par quelque chose qui marche, sans que rien ne dise que
+ce n'est pas la meme chose.
+
+#### Les trous du listing
+
+Six routines contiennent un « lines cut », et le listing ne les comble pas :
+
+.. code-block:: none
+
+    _move_peeps     L3245   1138 l.   [citee]
+    _sculpt         L7271    289 l.   [alias]
+    _do_place_funny L8862    148 l.   [alias]
+    _end_game      L14019    399 l.   [non couverte]
+    _read_back_scr L16359     36 l.   [non couverte]
+    _load_ground   L16468    152 l.   [non couverte]
+
+Une transcription mecanique bute sur chacun. Il faut une regle de traitement
+par trou — ce qui est du travail d'analyse, pas du travail de copie.
+
+#### L'outil a deja attrape une incoherence
+
+Au premier lancement, il a signale **deux alias casses** :
+
+.. code-block:: none
+
+    !! ALIAS CASSE : 2  (le symbole Python a disparu)
+         _devil_effect -> Game.devil_effect
+         _set_devil_magnet -> Game.set_devil_magnet
+
+C'etait exact : la Phase 26 a **analyse** ces routines sans les transcrire, et
+le port les declarait quand meme couvertes. Une routine analysee qui passe
+pour transcrite est precisement le piege que `[APPROX]` ne voit pas. D'ou la
+liste `PLANIFIE`, qui distingue les deux et les compte a part.
+
+#### Le nouveau processus
+
+1. **transcrire mecaniquement** une routine, sans l'interpret ;
+2. **verifier par execution** (autopilot, stress) ;
+3. **reporter l'alias** dans `tools/coverage.py` ;
+4. **comprendre** ensuite, et seulement si une reecriture ameliore la
+   lisibilite — en gardant la version mecanique pour diff.
+
+La couverture devient une cible qu'on surveille, pas un chiffre qu'on oublie.
+
 ### Reste a faire
 ### Reste a faire
 
