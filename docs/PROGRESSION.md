@@ -1019,6 +1019,66 @@ pas supprime. Restent a instruire :
 
 Aucun n'a ete verifie a ce jour.
 
+### Phase 18 - Dernier suspect elimine, et ce que cela revele
+
+La transition villageois -> ville (L3634-3666) :
+
+.. code-block:: none
+
+    if score >= 0x0BEA:                       # CMPI.W #$0bea / BLT LAB_40AA0
+        good_towns[tribu] += 1               # ADDQ.W #1,(-40,A5)+tribu*2
+        peep->frame = 0x2A                   # grande ville
+        goto LAB_40ACE
+    else:
+        peep->frame = score * 10 / 0x131 + 0x20   # MULS #$000a / DIVS #$0131
+        towns[tribu] += 1                    # ADDQ.W #1,(LAB_52DEA)+tribu*16
+    age = peep->frame - 0x20                  # (-10,A5)
+
+Exactement ce que nous faisions. Detail releve au passage : les deux
+branches n'incrementent pas le **meme** compteur — la grande ville touche
+`good_towns`, la ville normale `LAB_52DEA`. Nous n'en incrementons qu'un,
+c'est un ecart de **statistique**, sans effet sur la croissance.
+
+#### Bilan : toute la chaine de croissance est verifiee
+
+| element | asm | verdict |
+|---|---|---|
+| scission | L3904-3912 | exact |
+| porte des 8 tours | L3819-3821 | exact |
+| `population_add` | L4008-4014 | exact |
+| `check_life` | L20958-21042 | **corrige (Phase 17)** |
+| transition -> ville | L3634-3666 | exact |
+| formule de l'age | L3651-3654 | exact |
+| rythme de la boucle | libre | 30 img/s plausible |
+
+Sept elements controles, un seul etait faux. Apres le correctif de la
+Phase 17, plus rien dans la chaine de croissance n'est connu comme errone.
+
+#### Ce que cela revele
+
+Du coup, l'ecart restant s'explique probablement **autrement** qu'on le
+croyait : par la **comparaison entre tours et secondes reelles**.
+
+Chez nous, un tour = une image a 30 img/s, donc 3200 tours = **107
+secondes**. Or l'asm ne fixe **aucun** rythme a la boucle : elle tourne
+liberement, bornee par la vitesse de rendu de la machine. Sur un Amiga
+7 MHz qui rend en logiciel un ecran 320x256 avec la fenetre en 8 passes,
+un rythme de **10 a 15 tours/s** est plausible — contre 30 chez nous.
+
+A 10 tours/s, 3200 tours represente **5 minutes** de jeu : et la, atteindre
+les 208 habitants du plafond et 50 000 de population n'a plus rien
+d'anormal. Autrement dit une partie de notre port, lancee en conditions
+reelles, est probablement **deux a trois fois trop rapide** — mais ce n'est
+pas une erreur de transcription, c'est une question de **cadence**, et elle
+se reglera sur une cible de tours par seconde choisie explicitement, puis
+verifiee par execution.
+
+.. warning::
+   Ce raisonnement est une **hypothese** : la frequence reelle de la boucle
+   d'origine n'est pas mesurable depuis le listing, puisque le jeu ne la
+   fixe nulle part. Elle demande soit une mesure sur l'emulateur, soit un
+   choix de conception assume. **Non tranche.**
+
 ### Reste a faire
 ### Reste a faire
 
@@ -1033,10 +1093,10 @@ Aucun n'a ete verifie a ce jour.
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : la revue des rares zones non transcrites
   (l'IA, quelques regles de deplacement).
-* **Croissance trop rapide** : la transcription et la base de temps sont
-  verifiees et exclues (Phase 16). Restent `check_life` / le `score`, la
-  transition villageois -> ville et la formule de l'age, et la population
-  de depart. **Non instruit.**
+* **Cadence de la partie** : toute la chaine de croissance est verifiee
+  exacte (Phases 16-18). L'ecart restant tient probablement au nombre de
+  tours par seconde — l'asm ne fixe aucun rythme et tourne librement. Decide
+  d'une cible de tours/s, puis verifiee par execution. **Non tranche.**
 * **`_do_place_funny`** (L8862) : ecrit dans `peeps[0xD1..0xD2]`, donc
   **au-dela** de `MAX_PEEPS` (208) ; la table `_funny` n'est que
   partiellement reconstruite dans ce listing. Demande d'etendre le tableau.
