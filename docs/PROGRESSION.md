@@ -1197,6 +1197,80 @@ tours de combat.
 
 *Suite* : 68/68 sur 7 graines, `check_render` OK, `smoke_sim` OK, `stress` 5/5.
 
+### Phase 21 - `_do_battle` : le reboulement et le test de mort
+
+#### Ce que le listing dit vraiment
+
+`do_battle` (L6066-6181) calcule deux jets, puis une soustraction par
+combattant. La formule est **verifiee** :
+
+.. code-block:: none
+
+    jet1 = (tirage/3 + 1) * vie_A        # (-6,A5)
+    jet2 = (tirage/3 + 1) * vie_B        # (-10,A5)
+    degats = armes * (jet / 100) + 10
+    vie -= degats                         # SUB.W
+
+L'ordre des operandes de `___divs` etait **non verifie** depuis le debut du
+port. Il est tranche : `_divs` (L23385) negue D0 puis D1, donc
+`divs(D0, D1) = D0 / D1`. Notre formule `armes * (vie/100) + 10` est donc
+**juste**. Et `_mulu` (L22892) fait le produit 32x32 attendu.
+
+#### Deux ecarts 68k corriges
+
+**1. La soustraction reboucle.**
+
+`SUB.W D0,(4,A0)` ecrit un D0 long dans un champ **mot** : seul le bas de
+D0 part, et le resultat reboucle a `0x10000`. Une vie qui passe sous zero
+vaut `0xFFxx`, pas un entier negatif.
+
+**2. Le test de mort est en signe — et c'est le pire des deux.**
+
+L6167-6171 teste `TST.W (4,A0) / BGT`. Or `TST` ne pose que le bit N : `BGT`
+y teste donc le **signe**, pas la nullite. Une vie reboulee a `0xFFF0` a le
+bit 15 pose, `BGT` ne passe pas → elle est comptee comme **morte**.
+
+Notre `<= 0` la comptait **vivante**. L'ecart est completement inverse, et
+il ne se voit que parce que le reboulement est pose — sans lui, les deux
+versions « paraissent » correctes.
+
+.. code-block:: none
+
+    opp.life = m68k.add_word(opp.life, -(atk.weapons * (low // 100) + 10))
+    atk_dead = not m68k.cmp_word_gt(atk.life, 0)   # TST.W / BGT
+
+*Verifie* : les six cas de test (0, 1, 100, 0x8000, 0xFFF0, 0xFFFF) ; reboulement
+force (`100 - 150 = 0xFFCE`) ; et sur 3 graines apres 2500 tours de combat,
+**aucune vie ne survit avec le bit 15 pose**, toutes restent dans `0..0x7FFF`.
+
+#### Decouverte : l'asm est asymetrique, nous ne le sommes pas
+
+En relisant les deux branches, elles ne sont pas miroir :
+
+| branche | condition | cible 1 | cible 2 |
+|---|---|---|---|
+| L6105-6130 | `jet1 > jet2` | **A** (A0=`(8,A5)`) | **A** encore (A0=`(8,A5)`) |
+| L6133-6158 | sinon | **A** | **a** (A0=`(-16,A5)`) |
+
+ou `a = &peeps[A->index]`, c'est-a-dire l'entree canonique du meme peep. Donc
+dans la premiere branche, **les deux soustractions visent le meme peep**, avec
+`A->weapons` puis `a->weapons` — deux fois sur le meme.
+
+C'est soit un defaut de l'original, soit un artefact du listing. Notre
+version applique `min(jet_A, jet_B)` aux deux combattants : c'est une
+**symetrie de notre invention**, pas de l'asm.
+
+**Consequence** : `do_battle` porte un marqueur `[APPROX]` de plus. Il ne
+suffit pas d'appliquer le `min` de l'asm — il faut choisir laquelle des deux
+branches on transcrit, et c'est un arbitrage de portabilite, pas de lecture.
+La formule etant verifiee, l'erreur porte sur la **repartition** des degats,
+donc sur l'issue des combats serres, pas sur leur existence.
+
+#### Suite
+
+68/68 sur 7 graines, `check_render` OK, `check_assets` OK, `smoke_sim` OK,
+`stress` 5/5.
+
 ### Reste a faire
 ### Reste a faire
 

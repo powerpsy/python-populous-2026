@@ -111,6 +111,17 @@ def cmp_word_lt(a: int, b: int) -> bool:
     return s16(a) < s16(b)
 
 
+def cmp_word_gt(a: int, b: int) -> bool:
+    """``CMP.W src,Dn / BGT`` : ``destination > source``, en signe.
+
+    Attention, c'est aussi ce que fait `TST.W D0 / BGT` avec une source nulle :
+    `TST` ne pose que le bit N, donc `BGT` y teste simplement le **signe**.
+    Une vie reboulee sous zero vaut `0xFFxx`, le bit 15 est pose, et `BGT`
+    ne passe pas : la valeur est donc comptee comme **morte**.
+    """
+    return s16(a) > s16(b)
+
+
 def cmp_byte_ge(a: int, b: int) -> bool:
     """Comparaison d'octets signee (``CMP.B``), 8 bits."""
     def s8(x: int) -> int:

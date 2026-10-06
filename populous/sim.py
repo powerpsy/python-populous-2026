@@ -525,14 +525,25 @@ class Game:
         roll_atk = (self.rng.below(3) + 1) * atk.life
         low = roll_atk if roll_atk <= roll_opp else roll_opp
 
-        opp.life -= atk.weapons * (low // 100) + 10
-        atk.life -= opp.weapons * (low // 100) + 10
+        # L6108-6130 puis L6146-6158 : le degat est
+        #     armes * (vie / 100) + 10
+        # et il est **soustrait par `SUB.W`** : seul le mot bas de D0 est
+        # ecrit dans un champ mot. La vie reboucle donc a 0x10000.
+        opp.life = m68k.add_word(opp.life,
+                                 -(atk.weapons * (low // 100) + 10))
+        atk.life = m68k.add_word(atk.life,
+                                 -(opp.weapons * (low // 100) + 10))
 
         self.set_frame(atk)
         self.set_frame(opp)
 
-        atk_dead = atk.life <= 0
-        opp_dead = opp.life <= 0
+        # L6167-6171 : le test de mort est `TST.W (4,A0) / BGT`. `TST.W`
+        # teste le bit 15 : une vie reboulee sous zero vaut `0xFFxx`, et
+        # `BGT` ne passe **pas** -> elle est comptee comme morte. Un `<= 0`
+        # en Python la verrait vivante : c'est l'ecart que le reboulement
+        # revele.
+        atk_dead = not m68k.cmp_word_gt(atk.life, 0)
+        opp_dead = not m68k.cmp_word_gt(opp.life, 0)
         if atk_dead:
             self.zero_population(atk_idx)
         if opp_dead:
