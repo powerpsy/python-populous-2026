@@ -241,6 +241,9 @@ class PowerEngine:
         """Execute l'action en attente ``_stats[tribe]`` (table §4.3)."""
         st = self.g.sim.stats[tribe]
         self.dispatch(tribe, st.act, st.p1, st.p2)
+        # L'action a ete consommee : la file est vide.
+        st.act = ACT_NOP
+        st.queued = 0
 
     def dispatch(self, tribe: int, act: int, x: int, y: int) -> bool:
         """Execute ``act`` sur la case ``(x, y)`` — dispatch unique du joueur.
@@ -251,6 +254,14 @@ class PowerEngine:
         On expose donc les deux moities separement. ``do_queued`` n'est plus
         qu'un appel de convenance pour l'IA, dont la cible est deja dans
         ``_stats+1/+2``.
+
+        .. note::
+           ``queued`` (offset ``+8``, ``LAB_516AC``) est **vide par
+           `do_queued`**, une fois l'action consommee. Sans cela le drapeau
+           restait a 1 indefiniment : or `grow_peep` (asm L3841) n'autorise une
+           ville a se scinder que si ``queued == 0``. Le verrou etait donc
+           pose pour de bon et **aucun habitant ne naissait plus** apres les
+           premieres villes.
         """
         sim = self.g.sim
         st = sim.stats[tribe]

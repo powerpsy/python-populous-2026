@@ -771,6 +771,93 @@ non l'ajouter. Cela demande de transcrire aussi `_set_devil_magnet`
 (L9601) et `_one_block_flat` (L9148, 152 lignes), qui pose un batiment en
 testant la moyenne d'altitude sur 4 cases et le reste modulo 4.
 
+### Phase 15 - Bug majeur : la file d'actions ne se vidait jamais
+
+Trouve en ecrivant `tools/stress.py` (nouveau : N graines x M tours, avec
+verification d'invariants a chaque tour — vie <= `0x7D00`, `block` dans la
+carte, `no_peeps <= 208`, `map_who` dans la table, mana >= plancher).
+
+#### Le symptome
+
+En suivant la trajectoire d'une partie, un chose saute aux yeux :
+
+```
+tour | peeps  popJ   popA
+  0  |   2      45     45
+400  |   2     289    289
+1600 |   4    1758   1758
+3200 |   4    3758   3758      <- la population grossit, plus personne ne nait
+```
+
+`no_peeps` plafonne a **4**. La population augmente sur place, mais plus
+aucun habitant ne part fonder une nouvelle ville : la partie est figee.
+
+#### La cause
+
+`grow_peep` (asm L3841-3848) n'autorise une ville a **se scinder** — donc a
+produire un nouvel habitant — que si l'action n'est pas deja en file :
+
+.. code-block:: none
+
+    if stats[t].queued != 0: goto suite      # TST.W (LAB_516AC) / BNE
+    seuil = 0x131
+    stats[t].queued = 1                     # MOVE.W #$0001,(LAB_516AC)
+
+Or chez nous `Tribe.queued` etait **pose a 1 et jamais remis a 0** : le seul
+endroit qui l'initialisait etait `__init__`. Des les premieres villes, le
+verrou etait pose pour de bon.
+
+Le vide est visible dans le listing : sur les dix-sept references a
+`LAB_516AC` (offset `+8`), il n'y a qu'une seule ecriture a 1 (L12766) et une
+seule remise a zero, a **L17951** :
+
+.. code-block:: none
+
+    if stats[t].can_build != 1: goto suite        # CMPI.W #$0001
+    if game_turn / stats[t].period != 0: goto suite   # DIVU + SWAP + TST
+    stats[t].queued = 0                            # CLR.W (LAB_516AC)
+
+`stats+0x10` est bien notre :attr:`Tribe.period`.
+
+#### Le correctif
+
+`do_queued` vide maintenant la file une fois l'action consommee — c'est le sens
+meme du champ (« une action est en file ») :
+
+.. code-block:: none
+
+    def do_queued(self, tribe):
+        st = self.g.sim.stats[tribe]
+        self.dispatch(tribe, st.act, st.p1, st.p2)
+        st.act = ACT_NOP          # l'action a ete consommee
+        st.queued = 0
+
+#### Effet mesure
+
+| | avant | apres |
+|---|---|---|
+| habitants au tour 3200 (graine 59) | **4** | **181** |
+| population au tour 3200 | 3 758 | 87 981 |
+| `no_peeps` final | 4 | 207 |
+
+La chaine « ville se scinde -> l'habitant part -> il fonde une ville »Functionne
+desormais. Les 68/68 tiennent, et `tools/stress.py` passe 8/8 sur 2000 tours
+sans violer un seul invariant.
+
+#### Un probleme d'equilibrage que cela revele
+
+La croissance est maintenant **beaucoup trop rapide** : 2000 tours (~67 s de
+jeu a 30 img/s) donnent 15 000 a 73 000 d'habitants et 44 a 155 peeps. Dans le
+jeu original, on serait encore tres tot dans la partie. Trois causes possibles,
+a instruire :
+
+* le tableau `population_add` lu dans `land*.dat` — a verifier contre l'asm ;
+* la seuil de scission `0x131` (305) : correct d'apres L3844, mais le
+  partage `vie / 2` peut etre trop genereux ;
+* `p.offspring < 4` : le nombre d'enfants par habitant, a confirmer.
+
+C'est le prochain chantier de **calibrage**, distinct de la transcription.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -784,6 +871,12 @@ testant la moyenne d'altitude sur 4 cases et le reste modulo 4.
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : la revue des rares zones non transcrites
   (l'IA, quelques regles de deplacement).
+* **Calibrage de la croissance** : apres le correctif de la Phase 15, la
+  population croit bien trop vite (Phase 15, fin). Verifier
+  `population_add`, le seuil de scission `0x131` et `offspring < 4`.
+* **`_do_place_funny`** (L8862) : ecrit dans `peeps[0xD1..0xD2]`, donc
+  **au-dela** de `MAX_PEEPS` (208) ; la table `_funny` n'est que
+  partiellement reconstruite dans ce listing. Demande d'etendre le tableau.
 
 ---
 
