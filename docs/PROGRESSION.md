@@ -2006,6 +2006,71 @@ Rien n est code : transcription partielle d une routine dont les branches se
 ressemblent jusqu au bout n apporte rien et cree du code mort. C est
 exactement ce que la Phase 26 a refuse de faire, et la regle tient.
 
+### Phase 31 - Spike oracle : le code est bien la, mais les adresses different
+
+Objectif du spike : verifier, en une seance, qu'un 68000 minimal peut
+executer une vraie routine du jeu. Resultat : **oui, le code est la, mais la
+disposition n est pas celle du listing.** Une hypothese du projet est
+fausse, et on l'a appris pour le prix d'une seance au lieu de dix.
+
+#### Ce qui est confirme
+
+Les octets reels sont dans `reference/original/extracted/DAD` (131 072 o).
+`_newrand` s'y trouve, et le motif est exact :
+
+.. code-block:: none
+
+    DAD offset 0xDAA0 :
+      30 39 00 07 45 28    MOVE.W $00074528,D0
+      c0 fc 24 a1          MULU #$24a1,D0
+      06 40 24 df          ADDI.W #$24df,D0
+      08 80 00 0f          BCLR #$F,D0
+
+Les constantes du listing — `$24a1`, `$24df`, le `BCLR #15` — sont la. Le
+programme est le bon.
+
+#### Ce qui est infirmé
+
+Notre build DAD et le listing tetracorp **n ont pas la meme disposition**.
+Sur deux routines a signature unique :
+
+| routine | dist. dossier | dist. listing | egaux ? |
+|---|---|---|---|
+| `_divs` | 0x5172 | 0x4BB0 | **non** |
+| `_mulu` | 0x509A | 0x46E2 | **non** |
+
+Et les bases implicites different : `0x3E284` contre `0x3DE8E`. De meme,
+`_seed` est a `$74528` chez nous et a `$52DD0` dans le listing.
+
+Donc l'affirmation du projet — « notre build DAD differe de 1 a 2 Ko du
+listing » — **est fausse**. Ce n'est pas un decalage, c'est un autre
+agencement du code.
+
+#### Consequence pour l'oracle
+
+L'oracle **reste possible**, mais pas comme on l'imaginait :
+
+* les octets sont bien les bonnes instructions, donc un interpreteur les
+  execute correctement ;
+* mais on ne peut pas retrouver une routine par l'adresse du listing : il
+  faut un **tableau de correspondance par signature**, un par routine — la
+  suite d'octets qui la demarre, qu'on retrouve par recherche.
+
+C'est un travail de mise au point, pas une impasse. Une fois le tableau
+bati, l'oracle fonctionne sur les 564 routines — et il devient le juge neutre
+que la transcription mecanique n avait pas.
+
+#### Ce que ca ne change pas
+
+Rien sur le port lui-meme. Le listing tetracorp reste la reference : c'est
+lui qui fait foi, et c'est lui que le port doit suivre. L'interpreteur ne
+servira qu'a **verifier** nos transcriptions contre une machine, pas a les
+ecrire.
+
+Reste a faire, dans l'ordre : le tableau de signatures, puis le noyau 68000
+(les opcodes sont dans le listing, sous forme d'octets, dans chaque
+commentaire `;XXXX:`). Les ADF restent hors de git.
+
 ### Reste a faire
 ### Reste a faire
 
