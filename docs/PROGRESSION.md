@@ -1575,6 +1575,104 @@ transcrits. C'est la que se trouvent les seuils de mana releves tot :
 Aucun de ces nombres n'entre dans le port. Tant que `_devil_effect` n'est pas
 transcrit, `ai_choose` reste une invention.
 
+### Phase 26 - `_devil_effect` : analyse complete, et une correction
+
+`_devil_effect` va de L9300 a L9522 — **223 lignes**, pas les 300 estimees.
+Lue integralement. Cette phase rend l'analyse ; l'implementation est
+reportee parce qu'elle ne peut pas etre isolee (voir plus bas).
+
+#### Correction : `LAB_52DEA` n'est pas le mot haut de `pop`
+
+La Phase 23 affirmait que cette porte etait **inerte**. C'etait faux, et la
+faute vient de la disposition memoire :
+
+.. code-block:: none
+
+    52DE4  +0    magnet
+    52DE6  +2    magnet_to
+    52DE8  +4    command
+    52DEA  +6    town_count     <-- le champ teste
+    52DEC  +8    good_pop
+    52DF0  +12   mana
+
+`good_pop` occupe bien +8 — mais `LAB_52DEA` est **+6**, donc `town_count`. La
+porte est **vivante** : des que la tribu compte plus de `$32` villes,
+`_one_block_flat` sort. Corrige dans le code.
+
+#### Les seuils sont des variables, pas des constantes
+
+Les six seuils sont `LAB_518x x + une constante`, jamais une valeur fixe :
+
+| variable | champ | + delta | valeur initiale |
+|---|---|---|---|
+| `LAB_51894` | `mana` | `+0x3E7` | 80 000 → **80 999** (tremblement) |
+| `LAB_51890` | `mana` | `+0x7CF` | 40 000 → **41 999** (inondation) |
+| `LAB_51888` | `mana` | `+0x1F4` | 7 500 → **8 000** (aimant) |
+| `LAB_5188C` | `mana` | `+0x1F4` | 10 000 → **10 500** (effet Vpc) |
+| `LAB_51884` | `mana` | `+0x1F4` | 2 500 → **3 000** (effet Pc) |
+| `LAB_51880` | `mana` | `+0x1F4` | 5 000 → **5 500** (attaque) |
+
+Les valeurs initiales sont exactement des entrees de `_mana_values` — les
+**indices 4, 3, 5, 6, 7 et 8**. Les deltas (`$1F4` = 500, `$7CF` = 1999,
+`$3E7` = 999) sont separes, et variables : Conquest les modifie. Il faudra
+donc des attributs mutables, pas des constantes codees en dur.
+
+#### Les bits testes, et d'ou vient la legerie
+
+Le masque est le mot `+0x0E`. Il est copie dans `(-6,A5)` (octet bas) et
+`(-5,A5)` (octet haut), donc les `BTST` visent :
+
+| instruction | bit reel | pouvoir |
+|---|---|---|
+| `BTST #0,(-6,A5)` | 0 | tremblement de terre |
+| `BTST #7,(-5,A5)` | 15 | inondation |
+| `BTST #5,(-5,A5)` | 13 | aimant |
+| `BTST #6,(-5,A5)` | 14 | effet Vpc |
+| `BTST #4,(-5,A5)` | 12 | effet Pc |
+| `BTST #3,(-5,A5)` | 11 | attaque |
+
+et deux `AND.W #$0050` sur l'octet bas (bits 4 et 6).
+
+#### Decouverte : l'action `act = 4` est du code mort
+
+Le bloc `LAB_44F90` (L9476-9491) doit poser un arbre (`act = 4`). Il est
+**inatteignable**. Voici pourquoi :
+
+.. code-block:: none
+
+    L9452-9455:  _magnet[tribu] - 1  ->  (-2,A5)
+    L9459-9462:  _magnet[tribu] - 1  ->  (-4,A5)     <-- la meme valeur
+
+Les deux variables recoivent **exactement la meme chose**. Puis :
+
+.. code-block:: none
+
+    L9463: CMPI.W #$ffff,(-2,A5) / BEQ LAB_44FCA
+    L9466: CMPI.W #$ffff,(-4,A5) / BEQ LAB_44F90
+    L9467: LAB_53018[(-2,A5)*$16] / L9474: CMP.W avec LAB_53018[(-4,A5)*$16]
+
+`LAB_53018` est `_peeps + 4`, c'est-a-dire la **vie** des peeps. On compare
+donc `vie[n]` a `vie[n]` : toujours egal, donc `BLE` est toujours pris et
+`LAB_44FCA` est toujours atteint. Le seul chemin vers `LAB_44F90` exigeait
+`(-4,A5) == $FFFF` et `(-2,A5) != $FFFF` — impossible.
+
+Autrement dit : **l'IA ne releve jamais le terrain elle-meme**. Le `t12 += 1`
+de L9477 est donc lui aussi mort, et le compteur `t12` n'est incremente que
+par le chemin `LAB_4500E` (L9520), le vrai effet informatique. `CLR.W ($12,A2)`
+de L9417 le remet a zero dans l'autre branche.
+
+#### Pourquoi l'implementation est reportee
+
+`_devil_effect` appelle `_do_computer_effect` (L9526) pour `act = 3` et
+`act = 6`. Cette routine est **aussi** necessaire, et elle n'est pas encore
+lue. Transcrire la moitie d'un enonce ne rend pas le resultat plus fidele :
+`ai_choose` resterait un mélange du listing et d'une approximation, et c'est
+exactement ce que la Phase 25 a supprime.
+
+Il faut donc traiter `_devil_effect` + `_do_computer_effect` +
+`_set_devil_magnet` (L9601) comme **un seul morceau**, puis brancher
+`ai_choose` dessus en supprimant l'heuristique. C'est le prochain chantier.
+
 ### Reste a faire
 ### Reste a faire
 

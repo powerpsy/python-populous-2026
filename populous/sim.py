@@ -1041,9 +1041,10 @@ class Game:
           le bit **8** du mot ``+0x0E`` — pas son bit 0. C'est le masque de
           pouvoirs ``power_mask & 0x100``.
 
-        * ``LAB_52DEA`` n'est pas un champ : c'est le **mot haut de ``pop``**
-          (long a +8). Il ne depasse donc jamais ``$32``, et cette porte est
-          **inerte**. On l'ecrit quand meme, fidelement.
+        * ``LAB_52DEA`` est le champ **+6** du joueur, c'est-a-dire
+          ``town_count`` : le listing sort donc des que la tribu compte plus
+          de ``$32`` villes. *(Une premiere lecture y voyait le mot haut de
+          `pop` ; c'est faux — `good_pop` occupe +8 et `mana` +12.)*
 
         Ensuite la somme des quatre sommets de la case — en ``ADD.W``, donc
         rebouclante — puis la division. Et la legerie du listing :
@@ -1077,8 +1078,8 @@ class Game:
         pl = self.players[tribe]
         if m68k.cmp_word_lt(m68k.to_word(pl.mana), 0x14):
             return                                    # L9159-9164
-        if m68k.cmp_word_gt((pl.pop >> 16) & 0xFFFF, 0x32):
-            return                                    # L9165-9170 (inerte)
+        if m68k.cmp_word_gt(pl.town_count, 0x32):     # L9165-9170, champ +6
+            return
         if not (st.power_mask & 0x100):               # L9172-9173
             return
         if not (self.flags & 0x04):                   # L9174-9175
