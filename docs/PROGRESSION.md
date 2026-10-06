@@ -2160,6 +2160,97 @@ Toujours **rien de code** : la table de directions et le mecanisme de
 `valid_move` sont clairs, mais ecrire la moitie de la routine ne servirait
 rien. La regle de la Phase 26 tient.
 
+### Phase 33 - `_move_magnet_peeps` et `_get_heading` : lecture complete
+
+Les deux routines sont lues en entier (`_move_magnet_peeps` L4905-5468,
+`_get_heading` L5469-5536). La transcription n'est pas ecrite, mais la
+lecture a produit deux choses : le mecanisme de la queue, et **une faute que
+j'ai presque introduite**.
+
+#### `_get_heading` est l'IA de poursuite
+
+L5469-5536, en entier :
+
+.. code-block:: none
+
+    best = $270F
+    x = peep->block & $3F
+    y = peep->block >> 6
+    peep->0x0E = peep                    <- L5480, auto-reference par defaut
+    for i in range(no_peeps):
+        if peeps[i].tribe  == peep.tribe:  continue
+        if peeps[i].life   <= 0:           continue
+        if peeps[i].state  & $80:          continue
+        d = |(peeps[i].block & $3F) - x| + |(peeps[i].block >> 6) - y|
+        if d < best:
+            best = d
+            peep->0x0E = &peeps[i]        <- L5527
+
+C'est une recherche de **distance de Manhattan** du plus proche ennemi, et le
+resultat part dans `0x0E`. L'auto-reference de L5480 n'est donc pas une
+marqueuse d'arrivee generique : c'est la valeur **par defaut** — « pas
+d'ennemi trouve, la cible c'est moi-meme ». Ce qui rend le cas « cible atteinte »
+de la Phase 29 correct par accident, et non par intention.
+
+Le bit 7 de l'etat (L4936 et L5493) sert a deux endroits : ici pour ignorer un
+peep, et dans `_move_magnet_peeps` pour ne pas le prendre pour cible.
+
+#### L'echappatoire de la queue
+
+Quand le pas direct est refuse, la routine ne s'arrete pas : elle essaie les
+huit directions l'une apres l'autre (L5388-5450), avec `D4` recadre par
+`TST.W / BGE` et `CMP.W #7 / BLE` — donc replie sur 0..7 — et sature a
+`$03E7` (999) si aucune ne passe. C'est un **`break`** ecrit en asm : on
+prefere tourner plutot que s'arreter.
+
+#### Une table presque cassee
+
+Les tables sont contigues, ce qui donne un **controle** :
+`_to_offset` a `DC.L $ffc0ffc1, $00010041, $0040003f, $ffffffbf`, ce qui en
+big-endian donne `[-64, -63, 1, 65, 64, 63, -1, -65]` — exactement notre
+`TO_OFFSET`. La convention big-endian est donc etablie.
+
+Devant `_to_delta` (`DC.L $00070006, $00050000, $00000004, $00010002 ;
+DC.W $0003`), j'ai conclu a la main que la table etait inversee par paires,
+et j'ai **corrige** `TO_DELTA` en `[6, 7, 0, 5, 4, 0, 2, 1, 3]`.
+
+Un script de confrontation a refute la tentative :
+
+.. code-block:: none
+
+  _to_offset conforme : True
+  _to_delta  conforme : False     -> apres MA modification
+
+En relisant sans la modification : les deux sont conformes. **Notre
+`TO_DELTA` etait juste ; c'est mon decodage a l'oeil qui etait faux.**
+Modification annulee.
+
+C'est exactement le piege que la Phase 27 ecrit : mes erreurs viennent de
+l'interpretation. Ici elle a failli casser une table de direction. Elle
+n'a pas touche au jeu — `TO_DELTA` n'est utilise nulle part — mais elle
+m'aurait casse **precisement** la ou j'allais ecrire le code.
+
+Le controle gratuit, a retenir : quand deux tables sont contigues, la
+convention de lecture se verifie sur celle qu'on connait deja. Il n'aurait
+fallu que cette verification.
+
+#### Ce qui bloque encore
+
+L'indice va de 0 a 8, centre a 4 :
+
+.. code-block:: none
+
+    i = (dx+1)*3 + dy + 1        ->  0..8
+
+et `_to_delta[4] = 0`, ce qui est coherent : le centre signifie « ne bouge
+pas ». Mais `_to_delta[3] = 0` aussi, alors que `(dx=0, dy=-1)` est le nord.
+Les deux lectures ne se rejoignent pas encore.
+
+Et surtout : **notre build DAD a une autre disposition** (Phase 31), donc ses
+valeurs de tables peuvent differer de celles du listing. Trancher sans les
+octets serait deviner. Il faut soit les octets du DAD, soit un recoupement
+croise avec une autre source.
+
 ### Reste a faire
 ### Reste a faire
 

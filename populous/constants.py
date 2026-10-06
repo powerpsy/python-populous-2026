@@ -35,6 +35,12 @@ TO_OFFSET = [-64, -63, 1, 65, 64, 63, -1, -65]
 DIR_SPRITE = [-65, -64, -63, 1, 65, 64, 63, -1]
 
 # _to_delta, $000517F8 (asm 24269-24271) : 9 mots
+#
+# Lecture **big-endian**, comme le 68000 — verifie par execution contre
+# `_to_offset` ci-dessus, dont les huit valeurs sont exactes. Une premiere
+# tentative avait inverse les paires en decodant les DC.L a la main ; le
+# script de confrontation a montré que c'etait la tentative qui etait fausse.
+# Ne pas relire ces DC.L a l oeil.
 TO_DELTA = [7, 6, 5, 0, 0, 4, 1, 2, 3]
 
 # _big_city, $00051862 (asm 24284-24286) : 9 sprites internes d'une grande ville
