@@ -48,6 +48,8 @@ if str(ROOT) not in sys.path:
 import pygame  # noqa: E402
 
 from populous.assets import load_pic  # noqa: E402
+from populous.config import (DEFAULT_GROUND, DEFAULT_SEED, FPS,  # noqa: E402
+                             TURNS_PER_FRAME, ZOOM)
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_LOWER, ACT_RAISE, ACT_TREE,  # noqa: E402
@@ -1278,25 +1280,47 @@ class Game:
         self.set_ground(self.ground)
 
     def run(self) -> None:
+        """La boucle d'image.
+
+        .. note::
+           L'asm ne fixe aucun rythme : sa boucle reboucle sur `LAB_3E7E8`
+           sans attendre (Phase 18). Nous fixons donc un nombre d'images et
+           un nombre de tours par image — deux **parametres**, exposes dans
+           :mod:`populous.config`, parce que l'original ne les fixe pas non
+           plus.
+
+           Le diviseur s'accumule en virgule flottante plutot qu'avec un
+           compteur entier, afin que `TURNS_PER_FRAME` accepte n'importe
+           quelle valeur (1.0, 3.0, 7.5...) sans derivation cumulative.
+        """
+        par_image = max(0.0, TURNS_PER_FRAME)
+        credit = 0.0
         while self.running:
             for ev in pygame.event.get():
                 self.handle(ev)
             self.poll_mouse()          # debounce + _zoom_map + _interogate
-            self.image()               # _move_peeps + audio + composition
+            if par_image >= 1.0:
+                for _ in range(int(par_image)):
+                    self.image()
+            else:
+                credit += par_image
+                if credit >= 1.0:
+                    credit -= 1.0
+                    self.image()
             self.people = sum(1 for v in self.sim.map.who if v)
             self.screen.blit(pygame.transform.scale(self.frame,
                                                     self.screen.get_size()),
                              (0, 0))
             pygame.display.flip()
             self.frames += 1
-            self.clock.tick(30)        # 30 images/s : cadence de l'original
+            self.clock.tick(FPS)
         pygame.quit()
 
 
 def main(argv: list[str]) -> None:
-    seed = int(argv[0]) if len(argv) > 0 else 1
-    ground = int(argv[1]) if len(argv) > 1 else 0
-    zoom = int(argv[2]) if len(argv) > 2 else 3
+    seed = int(argv[0]) if len(argv) > 0 else DEFAULT_SEED
+    ground = int(argv[1]) if len(argv) > 1 else DEFAULT_GROUND
+    zoom = int(argv[2]) if len(argv) > 2 else ZOOM
     Game(seed, ground, zoom).run()
 
 
