@@ -1940,6 +1940,72 @@ La transcription de `_move_magnet_peeps` et de `_get_heading` reste a faire —
 **justifiee** plutot que choisie, ce qui veut dire que la transcription
 n'aura plus a arbitrer en cours de route.
 
+### Phase 30 - `_move_magnet_peeps` : les trois branches, enfin distinguees
+
+Blocs 1 a 4 sur 8 lus (L4905-5162). Les 250 premieres lignes sont **le meme
+idiome repete** : lire un champ, soustraire, `sign`, deposer dans `(-6,A5)`
+ou `(-8,A5)`. Trois points convergent vers `LAB_41CF6` : L4981, L5079 et
+L5157. C est la queue qui fait le travail.
+
+#### Les trois branches, et ce qui les distingue vraiment
+
+Toutes les trois finissent par un gradient en `sign`, mais **vers deux
+cibles differentes** :
+
+| branche | condition | gradient vers |
+|---|---|---|
+| L4935-4948 | `0x0E != 0` — cible designee | **`cible->block`** — `(8,A0)` |
+| L5011-5078 | `0x0E == 0` et `magnet[tribu] == 0` | `magnet_to[tribu]` — `LAB_52DE6` |
+| L5089-5157 | `0x0E == 0`, `magnet != 0`, `magnet-1 == arg2` | `magnet_to[tribu]` — `LAB_52DE6` |
+
+La premiere lit bien la case de la cible designee :
+
+.. code-block:: none
+
+    L4935: MOVEA.L ($E,A2),A0
+    L4936: MOVE.W  (8,A0),D0   / AND.W #$003f
+    L4938: MOVE.W  (8,A2),D0   / AND.W #$003f
+    L4940: SUB.W   D1,D0
+    L4941: MOVE.W  D0,(-10,A5)
+
+C'est donc bien la cible designee qui pilote le deplacement, et
+`magnet_to` ne sert qu'a la cas « pas de cible ». Les deux chemins sont
+reellement separees : **`magnet_to` n'est jamais recale vers la cible.**
+
+Ce que notre port fait aujourd'hui : le gradient vers `magnet_to` dans **les
+deux** cas. L'ecart est donc precis et localise — il ne se produit que
+quand un peep a une cible designee.
+
+#### Une correction sur ma propre Phase 28
+
+J'y avais ecrit que la premiere branche lisait « la position de la cible
+designee », mais j presentais les trois gradient comme equivalents. C etait
+trop vite : les branches 2 et 3 lisent `magnet_to`, **pas** la cible. Les
+trois gradient sont donc les memes *forme* mais pas les memes *cible*, et c
+est exactement ce qui distingue la premiere branche des deux autres.
+
+#### L'idiome, une fois pour toutes
+
+.. code-block:: none
+
+    TST.W D / BLE -> 0 ; sinon 1        ; (D > 0)
+    TST.W D / BGE -> 0 ; sinon 1        ; (D < 0)
+    SUB.W  D2, D1                       ; = (D > 0) - (D < 0)  = sign(D)
+
+Tous les `AND.W #$003f` et `ASR.W #6` sont la decomposition de `block` en
+`(x, y)` : `block & $3F` et `block >> 6`. Le reste de la routine n est que
+ce motif, enchaine sur des sources differentes.
+
+#### Ou en est la transcription
+
+Il reste 4 blocs sur 8 — les gradients restants et surtout la queue
+`LAB_41CF6`, qui est le seul endroit ou quelque chose se passe vraiment. Plus
+`_get_heading` (L5028), non couvert, que la routine appelle.
+
+Rien n est code : transcription partielle d une routine dont les branches se
+ressemblent jusqu au bout n apporte rien et cree du code mort. C est
+exactement ce que la Phase 26 a refuse de faire, et la regle tient.
+
 ### Reste a faire
 ### Reste a faire
 
