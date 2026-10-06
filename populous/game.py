@@ -48,6 +48,7 @@ if str(ROOT) not in sys.path:
 import pygame  # noqa: E402
 
 from populous import config  # noqa: E402
+from populous import m68k  # noqa: E402
 from populous.assets import load_pic  # noqa: E402
 from populous.config import DEFAULT_GROUND, DEFAULT_SEED, FPS  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
@@ -772,39 +773,60 @@ class Game:
         if not (0x3E <= u <= 0x10A) or not (-0x40 <= v <= 0x88) or mx < 0x40:
             return False
 
+        # L7307-7312, garde qu'on n'avait pas. On ne poursuit que si
+        # l'UNE des trois conditions est vraie ; sinon on rend la main.
+        #
+        #     TST.W _ok_to_build / BNE  -> poursuivre
+        #     CMPI.W #2,_mode / BNE     -> poursuivre
+        #     TST.W _paint_map  / BNE   -> poursuivre
+        #     sinon                     -> rendre 0
+        #
+        # Autrement dit : en mode peinture de carte (mode 2) sans
+        # `_ok_to_build`, la souris ne designe **aucune** case. Notre port
+        # en designait une quand meme.
+        if not (sim.ok_to_build or sim.mode != 2 or sim.paint_map):
+            return False
+
         d4 = (mx - 0x38) >> 4              # diagonale visee dans la fenetre
-        alt = self.terrain.alt
-        n_alt = len(alt)
-        base = self.yoff * 0x41 + self.xoff
+        terrain = self.terrain
+        # L7321-7324 : `MULS #$0041` puis `ADD.W` -- les deux en 16 bits,
+        # donc `base` reboucle a 0x10000.
+        base = m68k.to_word(self.yoff * 0x41 + self.xoff)
         nb = 9
         step = 0x48
         if d4 > 8:                         # coin droit du losange
             nb = 0x11 - d4
-            base += d4 - 8
-            step += (d4 - 8) * 8
+            base = m68k.to_word(base + (d4 - 8))                  # L7334
+            step = m68k.to_word(step + m68k.asl_word(d4 - 8, 3))  # L7337-7338
         elif d4 < 8:                       # coin gauche du losange
             nb = d4 + 1
-            base += (8 - d4) * 0x41
-            step += (8 - d4) * 8
+            base = m68k.to_word(base + m68k.to_word((8 - d4) * 0x41))
+            step = m68k.to_word(step + m68k.asl_word(8 - d4, 3))
 
         col = -1
         cur_step = step
         for i in range(nb):
-            k = base + i * 0x42
-            top = cur_step - alt[k % n_alt if k < n_alt else n_alt - 1] * 8
-            cur_step += 0x10
+            # L7364-7368 : `MULS #$0042` puis `ADD.W (-30,A5)`, les deux en
+            # 16 bits, puis `EXT.L` qui **etend le signe**. Un `base`
+            # reboulee avec le bit 15 pose donne un indice NEGATIF, et le
+            # 68000 lit alors _alt **avant** le tableau. Notre ancien
+            # `k % n_alt` etait un garde-fou de notre invention.
+            idx = m68k.to_long_word(m68k.to_word(i * 0x42 + base))
+            # L7370-7373 : `ASL.W #3` puis `SUB.W` -- reboucles 16 bits.
+            top = m68k.to_word(cur_step - m68k.asl_word(terrain._cell(idx), 3))
+            cur_step = m68k.to_word(cur_step + 0x10)              # L7375
             # CMP.W D1,D2 / BGT : D2-D1 = (mousey+4) - top, donc BGT saute
             # quand le sommet de la case est *au-dessus* du curseur. La boucle
             # **ne s'arrete pas** (LAB_43662 ne fait qu'incrementer D6) : on
             # descend la diagonale en notant chaque case, et c'est la derniere
             # dont le bord haut n'a pas encore depasse le curseur qui gagne.
-            if top <= my + 4:
+            if not m68k.cmp_word_gt(top, my + 4):                # L7383-7384
                 col = i
-                sim.cur_screen = (d4 * 0x10 + 0x3D, top - 3)
+                sim.cur_screen = (d4 * 0x10 + 0x3D, m68k.to_word(top - 3))
         if col < 0:
             return False
 
-        base += col * 0x42
+        base = m68k.to_word(base + col * 0x42)
         sim.cur_y = base // 0x41           # _cur_y
         sim.cur_x = base - sim.cur_y * 0x41    # _cur_x
         self._on_cell()

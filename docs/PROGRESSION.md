@@ -1349,6 +1349,82 @@ listing impose. L'equilibrage se reglage plus tard, sur un port deja fidel.
 *Suite* : 68/68 sur 7 graines, `check_render` OK, `check_assets` OK,
 `smoke_sim` OK, `stress` 5/5. Aucune vie ne survit avec le bit 15 pose.
 
+### Phase 23 - `_sculpt` : un garde manquant, et des bornes posees
+
+#### Le vrai ecart : L7307-7312 n'existait pas chez nous
+
+Entre le controle de zone (L7295-7306) et le calcul de la diagonale (L7317),
+le listing a un garde que notre port sautait :
+
+.. code-block:: none
+
+    L7307: TST.W   _ok_to_build / BNE  -> poursuivre
+    L7309: CMPI.W  #2,_mode     / BNE  -> poursuivre
+    L7311: TST.W   _paint_map   / BNE  -> poursuivre
+    L7313: LAB_43588: D0 = 0 ; RTS        -> sinon, rendre la main
+
+On ne poursuit que si **l'une** des trois est vraie. Autrement dit : en mode
+peinture de carte (``_mode == 2``) sans `_ok_to_build`, la souris ne designe
+**aucune** case. Notre port en designait une quand meme.
+
+Les deux variables existaient deja chez nous (``sim.py`` L134 et L154) mais le
+garde n'etait pas pose — le genre d'ecart que seule la relecture du listing
+ revele, parce que les deux morceaux etaient presents et leur liaison absente.
+
+*Verifie* sur les **cinq** combinaisons, a une position ou `sculpt` aboutit
+(mode 1) :
+
+| mode | ok_to_build | paint_map | obtenu | attendu |
+|---|---|---|---|---|
+| 1 | 0 | 0 | designates | designe |
+| 2 | 1 | 0 | designe | designe |
+| 2 | 0 | 1 | designe | designe |
+| 2 | 0 | 0 | **rien** | **rien** |
+| 3 | 0 | 0 | designe | designe |
+
+#### Les bornes 16 bits, posees
+
+`_sculpt` manipule cinq accumulateurs en **mot** : ``base`` (L7321-7324,
+`MULS #$0041` + `ADD.W`), ``step`` (L7337-7338, `ASL.W #3` + `ADD.W`), l'indice
+dans `_alt` (L7364-7368) et la soustraction d'altitude (L7370-7373).
+
+Le point le pluspiege est L7364-7368 :
+
+.. code-block:: none
+
+    MOVE.W D6,D1 / MULS #$0042,D1 / ADD.W (-30,A5),D1
+    EXT.L  D1                          <-- etend le SIGNE
+    MOVE.W (_alt,A4,D1.L),D2
+
+Un `base` reboulee avec le bit 15 pose donne un indice **negatif**, et le
+68000 lit `_alt` **avant** le tableau. Notre ancien `k % n_alt` etait un
+garde-fou de notre invention, entierement different.
+
+**Mesure : aucune borne n'est atteinte.** `base` plafonne a `yoff*65 + xoff +
+8*66 = 3168`, tres loin de `65535`. Ces conversions sont donc **correctes sans
+effet** — meme constat que Phase 20 : le port est petit devant le 68000. On les
+garde parce qu'elles rendent le code exact par construction, pas pour l'effet.
+
+*Verifie* : **4000 positions** de souris confrontes a une reecriture
+independante en arithmetique 16 bits → **identique**. 68/68 sur 7 graines,
+`check_render` OK, `check_assets` OK, `smoke_sim` OK, `stress` 5/5.
+
+#### Decouverte annexe : `_ok_to_build` est un drapeau collant
+
+`grep` sur le listing : `_ok_to_build` n'est ecrit qu'a deux endroits —
+
+* L613 `CLR.W _ok_to_build` (initialisation), et
+* L15981 **`OR.W D6,_ok_to_build`** (jamais un effacement).
+
+ou `D6` vient de `(0,A2)` bits OR a 1 si la tribu du message est `_player` et
+que `(0x12,A2) != 0`. Le drapeau est donc **pose une fois et jamais repris** :
+des la reception d'un message autorisant a batir, le garde du mode 2 s'ouvre
+pour le reste de la session.
+
+Chez nous `ok_to_build` reste a 0 en permanence : le mode 2 ne pourra donc
+jamais designer de case tant que le gestionnaire de messages n'est pas
+transcrit. C'est le prochain morceau, et il conditionne ce garde.
+
 ### Reste a faire
 ### Reste a faire
 
