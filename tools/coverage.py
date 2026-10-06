@@ -80,6 +80,7 @@ PLANIFIE: set[str] = {
 
 RE_FONCTION = re.compile(r"^(_[A-Za-z0-9_]+):\s*$")
 RE_TROU = re.compile(r"^\s*;\s*lines cut", re.IGNORECASE)
+RE_APPEL = re.compile(r"\b(?:JSR|BSR)\w*\s+(_{1,3}[A-Za-z0-9_]+)")
 
 
 def lire_asm() -> list[str]:
@@ -139,6 +140,32 @@ def classe(r: dict, source: str) -> tuple[str, str]:
     return "absent", ""
 
 
+def appelants(lignes: list[str]) -> dict[str, set[str]]:
+    """Qui appelle qui, a partir des `JSR`/`BSR` du listing.
+
+    On ne garde que les cibles nommées ``_xxx:`` ; les appels par
+    bibliotheque (``___xxx``) sont resolus sur le nom sans les deux
+    soulignes, car le listing fournit le trampoline.
+    """
+    noms = {r["nom"] for r in routines(lignes)}
+    courant = None
+    out: dict[str, set[str]] = {}
+    for l in lignes:
+        m = RE_FONCTION.match(l)
+        if m:
+            courant = m.group(1)
+            out.setdefault(courant, set())
+            continue
+        m = RE_APPEL.search(l)
+        if m and courant:
+            cible = m.group(1)
+            if cible.startswith('___'):
+                cible = '_' + cible[3:]
+            if cible in noms:
+                out[courant].add(cible)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--top", type=int, default=25,
@@ -190,6 +217,31 @@ def main() -> int:
         if not trouves:
             print("  aucun")
         return 0
+
+    print()
+    print("=== joignabilite des routines COUVERTES ===")
+    app = appelants(lignes)
+    couvertes = {r["nom"] for r in rs
+                 if classe(r, source)[0] in ("alias", "cite")}
+    sans_appelant = sorted(n for n in couvertes if not app.get(n))
+    injoignables = []
+    for n in sorted(couvertes):
+        cibles = {c for c in app.get(n, ()) if c in couvertes}
+        if not cibles:
+            manquant = sorted(app.get(n, ()) - couvertes)
+            injoignables.append((n, manquant))
+    print("  couvertes                       : %d" % len(couvertes))
+    print("  dont jamais appelees par le code : %d"
+          % len(sans_appelant))
+    for n in sans_appelant[:8]:
+        print("       %s" % n)
+    print("  dont INJOIGNABLES (aucun appelant")
+    print("      lui-meme couvert)          : %d" % len(injoignables))
+    for n, manquant in injoignables[:args.top]:
+        print("       %-26s appelants manquants : %s"
+              % (n, ", ".join(manquant[:5]) or "(aucun)"))
+    if len(injoignables) > args.top:
+        print("       ... et %d autres" % (len(injoignables) - args.top))
 
     print()
     print("=== %d plus grosses routines NON couvertes ===" % args.top)
