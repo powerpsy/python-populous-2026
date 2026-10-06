@@ -81,10 +81,3 @@ Le code de ce dépôt est sous licence MIT.
 proviennent du jeu original et restent la propriété d'Electronic Arts. Les
 images disque `*.adf` sont exclues du suivi par `.gitignore` : ce sont
 l'œuvre elle-même, pas du code.
-
-## À propos de ce dépôt
-
-Ce dépôt est distinct de
-[`powerpsy/python-populous`](https://github.com/powerpsy/python-populous), qui
-est une autre implémentation Python du même jeu. Les deux projets partagent le
-nom du jeu, pas leur architecture.
