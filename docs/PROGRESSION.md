@@ -1499,6 +1499,82 @@ Aucune des 7 graines de reference ne teste le mode 2 : `68/68` partout,
 `check_render` OK, `check_assets` OK, `smoke_sim` OK, `stress` 5/5. Le gain
 est de fidelite, pas de rendement.
 
+### Phase 25 - `_one_block_flat` : le noop de l'IA remplace par le listing
+
+Premier morceau de l'IA. C'etait un `return None` avec le marqueur
+`[APPROX]` ; la routine fait 149 lignes de listing et **decide reellement**
+quand l'IA touche le terrain.
+
+#### Les cinq portes d'entree
+
+.. code-block:: none
+
+    TST.W  (8,A0)                    / BNE   queued != 0
+    CMPI.L #$14,(LAB_52DF0+t*16)     / BLT   mana < 20
+    CMPI.W #$32,(LAB_52DEA+t*16)     / BGT   mot haut de pop
+    BTST   #0,($F,A0)                / BEQ   bit 8 du masque
+    BTST   #2,LAB_518A7              / BEQ   drapeau global
+
+Deux lectures qui ne vont pas de soi :
+
+**`BTST #0,($F,A0)`** lit le bit 0 de l'**octet +0x0F**, donc le bit **8** du
+mot `+0x0E` — pas son bit 0. C'est `power_mask & 0x100`. C'est le second cas
+du projet ou un offset d'octet au lieu d'un offset de mot change tout.
+
+**`LAB_52DEA` n'est pas un champ** : c'est le **mot haut de `pop`** (long a
++8). Il ne depasse jamais `$32`, donc cette porte est **inerte**. On l'ecrit
+quand meme, fidelement — c'est gratuit, et ca garantit le resultat si la
+representation change.
+
+#### Le `SWAP` qui change tout
+
+.. code-block:: none
+
+    DIVS #$4,D0 / SWAP D0 / MOVE.W D0,(-6,A5)    ->  (-6,A5) = le RESTE
+    DIVS #$4,D0 /         MOVE.W D0,(-8,A5)      ->  (-8,A5) = le QUOTIENT
+
+`DIVS` laisse le quotient en D0.W et le **reste en D1.W**. Apres le `SWAP`, le
+mot bas de D0 n'est donc plus le quotient mais le reste. Le parametre qui
+choisit l'intention de la routine est `s % 4`, pas `s // 4`. Or `s % 4` ne
+prend que les valeurs 0, 1, 2, 3 — et seules **1 et 3** agissent :
+
+| reste | intention | condition |
+|---|---|---|
+| 3 | poser un arbre, `act = 1` | altitude **egale** au quotient |
+| 1 | creuser, `act = 2` | altitude **au-dessus** du quotient, et `LAB_518A7 & 8` nul |
+| 0, 2 | rien | — |
+
+La double boucle porte sur les quatre cases voisines (`x`, `x+1` × `y`,
+`y+1`), mais le test d'altitude se fait toujours sur `y * $41 + x` : sur la
+**case**, pas sur le sommet.
+
+#### Les bornes
+
+La somme des quatre sommets est un `ADD.W` a repetition, et l'offset passe par
+`EXT.L` — donc l'indice est **en signe**, et une valeur reboulee avec le bit 15
+pose lit `_alt` **avant** le tableau. Aucun modulo n'a ete ajoute : ce serait
+notre invention, comme le `k % n_alt` corrige en Phase 23.
+
+*Verifie* : les quatre portes une par une, puis **3000 couples (tribu, case)**
+confrontes a une reecriture independante → **identique**, 227 actions emises
+sur 3000 appels.
+
+*Suite* : 68/68 sur 7 graines, `check_render` OK, `check_assets` OK,
+`smoke_sim` OK, `stress` 5/5.
+
+#### Reste de l'IA
+
+`_devil_effect` (L9300, ~300 l.) et `_set_devil_magnet` (L9601) ne sont pas
+transcrits. C'est la que se trouvent les seuils de mana releves tot :
+
+.. code-block:: none
+
+    tremblement 80999   inondation 41999   aimant 8000
+    effetVpc 10500      effetPc 3000       attaque 5500
+
+Aucun de ces nombres n'entre dans le port. Tant que `_devil_effect` n'est pas
+transcrit, `ai_choose` reste une invention.
+
 ### Reste a faire
 ### Reste a faire
 

@@ -119,6 +119,10 @@ class Game:
     def __init__(self, seed: int = 0, land: LandTables | None = None,
                  player: int = 0, map: GameMap | None = None) -> None:
         self.map = map if map is not None else GameMap()
+        # Les altitudes de SOMMET (`_alt`, 65x65) vivent dans le terrain, pas
+        # dans `GameMap` qui ne porte que les 4096 cases. `_one_block_flat`
+        # (L9148) en a besoin, donc on garde la reference.
+        self.terrain = None
         self.rng = Rng(seed)
         self.land = land if land is not None else load_land(0)
 
@@ -1018,8 +1022,109 @@ class Game:
         return best
 
     def one_block_flat(self, tribe: int, block: int) -> None:
-        """**[APPROX]** ``_one_block_flat`` — réserve la case par l'IA (noop ici)."""
-        return None
+        """``_one_block_flat`` (L9148-9296) : l'IA-emet une action de terrain.
+
+        **Transcription complete**, plus portee que le noop qui la
+        remplacait. Les cinq portes d'entree, dans l'ordre du listing :
+
+        .. code-block:: none
+
+            TST.W  (8,A0)          / BNE          st.queued != 0  -> sortir
+            CMPI.L #$14,(LAB_52DF0+t*16) / BLT   mana < 20        -> sortir
+            CMPI.W #$32,(LAB_52DEA+t*16) / BGT   mot haut de pop  -> sortir
+            BTST   #0,($F,A0)      / BEQ          -> sortir
+            BTST   #2,LAB_518A7    / BEQ          -> sortir
+
+        Deux lectures qui ne vont pas de soi :
+
+        * ``BTST #0,($F,A0)`` lit le bit 0 de l'**octet +0x0F**, c'est-a-dire
+          le bit **8** du mot ``+0x0E`` — pas son bit 0. C'est le masque de
+          pouvoirs ``power_mask & 0x100``.
+
+        * ``LAB_52DEA`` n'est pas un champ : c'est le **mot haut de ``pop``**
+          (long a +8). Il ne depasse donc jamais ``$32``, et cette porte est
+          **inerte**. On l'ecrit quand meme, fidelement.
+
+        Ensuite la somme des quatre sommets de la case — en ``ADD.W``, donc
+        rebouclante — puis la division. Et la legerie du listing :
+
+        .. code-block:: none
+
+            DIVS #$4,D0 / SWAP D0 / MOVE.W D0,(-6,A5)   -> (-6,A5) = RESTE
+            DIVS #$4,D0 /         MOVE.W D0,(-8,A5)     -> (-8,A5) = QUOTIENT
+
+        Apres le ``SWAP``, le mot bas de D0 n'est plus le quotient mais le
+        **reste**. Donc ``(-6,A5)`` est ``s % 4`` et ``(-8,A5)`` est ``s // 4``.
+        Le reste ne sert qu'a choisir entre deux intentions :
+
+        =============  =========================================================
+        reste          action
+        =============  =========================================================
+        3              poser un arbre : ``act = 1`` si l'altitude vaut le
+                       quotient
+        1              creuser : ``act = 2`` si l'altitude est **au-dessus**
+                       du quotient et que ``LAB_518A7 & 8`` est nul
+        0, 2           rien
+        =============  =========================================================
+
+        La double boucle porte sur les quatre cases voisines, mais le test
+        d'altitude se fait toujours sur ``y * $41 + x`` — sur la case, pas
+        sur le sommet.
+        """
+        st = self.stats[tribe]
+        if st.queued:
+            return                                    # L9157-9158
+        pl = self.players[tribe]
+        if m68k.cmp_word_lt(m68k.to_word(pl.mana), 0x14):
+            return                                    # L9159-9164
+        if m68k.cmp_word_gt((pl.pop >> 16) & 0xFFFF, 0x32):
+            return                                    # L9165-9170 (inerte)
+        if not (st.power_mask & 0x100):               # L9172-9173
+            return
+        if not (self.flags & 0x04):                   # L9174-9175
+            return
+
+        alt = self.terrain.alt if self.terrain is not None else []
+        n_alt = len(alt)
+
+        def sommet(i: int) -> int:
+            """Lecture de ``_alt`` ; hors-tableau, comme sur le 68000."""
+            return alt[i] if 0 <= i < n_alt else 0
+
+        x0 = block & 0x3F                              # L9181-9183
+        y0 = (block >> 6) & 0x3F                      # L9184-9186, ASR.W #6
+
+        # L9187-9218 : somme des quatre sommets, chaque `ADD.W` rebouclant.
+        # L'offset passe par `EXT.L`, donc l'indice est en signe : une valeur
+        # reboulee avec le bit 15 pose lit `_alt` **avant** le tableau. Aucun
+        # modulo n'est ajouter ici -- ce serait notre invention.
+        base = m68k.to_long_word(m68k.to_word(y0 * 0x41 + x0))
+        s = sommet(base)
+        s = m68k.add_word(s, sommet(base + 1))
+        s = m68k.add_word(s, sommet(base + 0x42))
+        s = m68k.add_word(s, sommet(base + 0x41))
+        if s == 1:
+            return                                    # L9219-9221
+        q = m68k.divs_word(s, 4)                      # L9228-9231
+        r = m68k.to_word(s - q * 4)                   # L9223-9227, apres SWAP
+
+        for x in range(x0, x0 + 2):                   # D4, L9291-9295
+            for y in range(y0, y0 + 2):               # D5, L9285-9289
+                a = sommet(m68k.to_long_word(m68k.to_word(y * 0x41 + x)))
+                if r == 3:                            # L9238-9257
+                    if a == q:
+                        st.act = 1
+                        st.p1 = x
+                        st.p2 = y
+                        st.queued = 1
+                        return
+                elif r == 1:                          # L9260-9282
+                    if m68k.cmp_word_gt(a, q) and not (self.flags & 0x08):
+                        st.act = 2
+                        st.p1 = x
+                        st.p2 = y
+                        st.queued = 1
+                        return
 
     def putpixel(self, block: int, colour: int) -> None:
         """``_a_putpixel(block, colour)`` — pastille de la mini-carte."""

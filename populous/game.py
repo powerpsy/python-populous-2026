@@ -116,6 +116,9 @@ class Game:
         # et `map_blk` sont donc vus a l'identique par le rendu.
         self.sim = Sim(seed + 1, load_land(ground),
                        map=self.terrain.game_map())
+        # `_one_block_flat` (L9148) lit les altitudes de sommet, qui sont dans
+        # le terrain et pas dans `GameMap`.
+        self.sim.terrain = self.terrain
         self.powers = PowerEngine(self)
         self.sound = SoundEngine()
         self.music = MusicEngine(self.sound)
@@ -1296,6 +1299,7 @@ class Game:
         self.colours = map_colours(self.ren.header)
         self.sim = Sim(self.seed + 1, load_land(g),
                        map=self.terrain.game_map())
+        self.sim.terrain = self.terrain
         self._settle_peoples()
 
     def set_seed(self, s: int) -> None:
