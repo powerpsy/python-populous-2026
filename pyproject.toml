@@ -1,0 +1,22 @@
+[project]
+name = "python-populous"
+version = "1.0.0"
+description = "Remake de Populous (Amiga, 1989) fidele au desassemblage du binaire original"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["populous", "amiga", "game", "remake", "disassembly", "pygame"]
+
+dependencies = [
+    "pygame>=2.5",
+    "pillow>=10.0",
+]
+
+[project.scripts]
+python-populous = "populous.game:main"
+
+[tool.setuptools]
+packages = ["populous"]
+
+[tool.setuptools.package-data]
+populous = ["../assets/**/*"]

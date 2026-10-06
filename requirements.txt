@@ -1,0 +1,7 @@
+# pygame 2.6.1 classique : c'est ce que la suite de tests verifie.
+# pygame-ce fonctionne aussi (il expose le meme module `pygame`), mais si
+# les deux sont installes, c'est pygame qui l'emporte a l'import.
+pygame>=2.5
+
+# decodage des assets (sprites, icones, polices) via PIL
+pillow>=10.0

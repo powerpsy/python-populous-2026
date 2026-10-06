@@ -3,3 +3,17 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# Images disque du jeu original (Populous, Electronic Arts / Bullfrog, 1990).
+# Elles ne doivent PAS etre versionnees : c'est l'oeuvre elle-meme, pas du
+# code. Deux dumps coexistent (racine et reference/original/game/) et ils
+# different sur ~70 % des octets, mais tous deux sont l'image du disque.
+#
+# Le port reste reproductible : ce sont les fichiers *extraits*
+# (reference/original/extracted/) qui sont versionnes, et eux suffisent a
+# rejouer toute l'analyse. L'ADF n'est utile que pour l'extraction initiale.
+*.adf
+
+# Sorties de debogage / apercus regenerables
+/tmp/
+*.out
