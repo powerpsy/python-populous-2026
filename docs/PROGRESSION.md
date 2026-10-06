@@ -2348,6 +2348,63 @@ au nord ».
 
 Plus aucune inconnue bloquante. La transcription s'ecrit.
 
+### Phase 35 - `0x15` tranche : un drapeau d orientation, pas un pas
+
+Dernier point bloquant de `_move_magnet_peeps`. Les trois tables relues
+dans les octets du DAD :
+
+.. code-block:: none
+
+    _to_delta  a 0x147A4 : [7, 6, 5, 0, 0, 4, 1, 2, 3]   = notre TO_DELTA
+    _to_offset a 0x147B6 : [-64,-63,1,65,64,63,-1,-65]   = notre TO_OFFSET
+                          0x147B6 - 0x147A4 = 18 = 9 mots  contigues
+    _opposite  a 0x14754 : [4, 5, 6, 7, 0, 1, 2, 3]      = notre OPPOSITE
+
+Les trois concordent **exactement** avec le listing, et sont contigues comme
+l asm le decrit. Notre build DAD n a donc qu une disposition de **code**
+differente ; les **donnees** sont les memes. La Phase 31 doit se lire ainsi :
+ce ne sont pas les tables qui bougent.
+
+#### Le champ `0x15`
+
+.. code-block:: none
+
+    L5256: MOVE.B (1,A0,D1.L),D0    ; octet a _to_offset*2 + 1
+    L5257: MOVE.B D0,($15,A2)       ; -> peep[0x15]
+
+C est l **octet haut** du mot `_to_offset[d]` :
+
+| d | direction | mot | octet haut |
+|---|---|---|---|
+| 0 | N | 0xFFC0 | 0xFF |
+| 2 | E | 0x0001 | 0x00 |
+| 6 | O | 0xFFFF | 0xFF |
+
+Soit `0xFF` exactement pour les offsets **negatifs** (N, NE, O, NO), `0x00`
+pour les positifs (E, SE, S, SO). Donc `peep[0x15]` est un **drapeau
+d orientation** — gauche ou droite — et non un index de pas.
+
+Il n y avait donc aucun tableau de pas a trouver : la table etait complete,
+et l hypothese « index de pas » etait fausse. Un `MOVE.B` a l offset `+1`
+d une table de mots se lit comme une lecture de signe, rien de plus.
+
+Notre `Peep` n a pas ce champ, alors que le rendu s en sert deja ailleurs
+(`0x20 if p.target else 0`). C est le champ a ajouter.
+
+#### Un motif qui se repete chez moi
+
+Trois fois dans cette seule phase, j ai calcule une adresse de table de
+tete : `_to_delta` a 0x1479E au lieu de 0x147A4, puis une comparaison de
+distances qui a produit deux lectures contradictoires, puis la decomposition
+d un offset en (dx, dy). Les trois etaient des **erreurs d arithmetique**,
+pas des malentendus sur le code.
+
+Le controle qui les evite, et qui a fonctionne a chaque fois : confronter le
+calcul a une **mesure independante** — la signature de 16 octets trouvee
+par recherche, l offset voisin relu dans les octets, la contrainte
+semantique « une direction opposee inverse le deplacement ». L erreur
+d arithmetique meurt contre une mesure ; elle survit contre une relecture.
+
 ### Reste a faire
 ### Reste a faire
 
