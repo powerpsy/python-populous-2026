@@ -641,6 +641,26 @@ class Game:
         # (f) boucle principale
         for i in range(self.no_peeps):
             p = self.peeps[i]
+
+            # L15968-15981, en tete de la boucle par peep :
+            #
+            #     MOVE.B (0,A2),D6 / ANDI.W #$00f8,D6
+            #     ...
+            #     CMPI.W #$00d1,(A7)+ / BGE LAB_49C38
+            #     OR.W  D6,_ok_to_build
+            #
+            # Le drapeau est **cumulatif** : mis a zero une seule fois, a
+            # l'initialisation (L613 `CLR.W`), et jamais efface ensuite.
+            # Le seul test qui nous interesse est `TST.W / BNE` : il suffit
+            # qu'un seul peep porte son etat hors des huit bits bas.
+            #
+            # `CMPI.W #$00d1,(A7)+` ecarte les index >= 210 ; nos peeps
+            # s'arretent a 208 (`no_peeps` = 0xD0), donc rien n'est ecarte.
+            self.ok_to_build |= p.state & 0xF8
+            # `TST.W ($12,A2) / BEQ LAB_49C2C` : le champ `t12` n'est ecrit
+            # nulle part dans le listing, il reste nul, et le `ORI.W #$0001`
+            # de L15977 n'est donc jamais execute. Le bit 0 n'entre pas ici.
+
             if p.life <= 0:
                 continue
 

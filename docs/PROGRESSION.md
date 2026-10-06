@@ -1425,6 +1425,80 @@ Chez nous `ok_to_build` reste a 0 en permanence : le mode 2 ne pourra donc
 jamais designer de case tant que le gestionnaire de messages n'est pas
 transcrit. C'est le prochain morceau, et il conditionne ce garde.
 
+### Phase 24 - `_ok_to_build` : le drapeau collant, enfin alimente
+
+La Phase 23 laissait un garde corrige mais **immuable** : `ok_to_build` restait
+a 0, donc le mode 2 ne designait jamais de case. Voici d'ou il vient.
+
+#### Le producer du drapeau
+
+Le label `_move_sprite` est trompeur — c'est la boucle par peep de
+`move_peeps`. En tete de corps (L15968-15981) :
+
+.. code-block:: none
+
+    MOVE.B  (0,A2),D6 / ANDI.W #$00f8,D6      # etat & 0xF8
+    MOVE.B  (1,A2),D7 / EXT.W D7              # tribu, en signe
+    CMP.W   _player,D7 / BNE LAB_49C2C
+    TST.W   ($12,A2)   / BEQ LAB_49C2C        # champ +0x12
+    ORI.W   #$0001,D6
+LAB_49C2C:
+    CMPI.W  #$00d1,(A7)+ / BGE LAB_49C38      # index-1 >= 209 -> on saute
+    OR.W    D6,_ok_to_build
+
+Trois lectures, et chacune elimine une piste :
+
+**Le champ `+0x12` ne sert a rien ici.** C'est notre `t12`, et `grep` sur tout
+le port montre qu'il **n'est ecrit nulle part** : il reste nul. Le `BEQ` est
+donc toujours pris et le `ORI.W #$0001` de L15977 **n'est jamais execute**. Le
+bit 0 n'entre donc pas dans le drapeau.
+
+**Le test sur la tribu n filtre rien**, puisque le `ORI.W #1` est mort : D6
+reste `etat & 0xF8` que le peep soit au joueur ou non.
+
+**Le `CMPI.W #$00d1` n'ecarte rien** : il porte sur `index - 1`, et nos peeps
+s'arretent a 208 (`no_peeps` = 0xD0).
+
+Il ne reste donc qu'une seule regle, posee en tete de la boucle par peep :
+
+.. code-block:: none
+
+    ok_to_build |= peep.state & 0xF8
+
+et elle est **collante** : `CLR.W` une seule fois a l'initialisation (L613),
+jamais effacee ensuite. Le seul test est `TST.W / BNE` — il suffit qu'un
+seul peep porte son etat hors des huit bits bas.
+
+#### Ce que ca donne, et c'est signifiant
+
+| etat | valeur | `& 0xF8` | contribue |
+|---|---|---|---|
+| `ST_EXPLORER` | 0x02 | 0x00 | non |
+| `ST_BATTLE` | 0x08 | 0x08 | **oui** |
+| `ST_DROWNING` | 0x10 | 0x10 | **oui** |
+
+Sur 3 000 tours :
+
+| graine | etat max | drapeau final | s'ouvre au tour |
+|---|---|---|---|
+| 1 | 0x02 | 0x00 | jamais |
+| 59 | 0x22 | **0x20** | **2 162** |
+| 314 | 0x02 | 0x00 | jamais |
+
+Le garde du mode 2 s'ouvre donc **quand la tribu entre en combat ou se noie**,
+et seulement alors. Ce n'est pas une autorisation de batir au sens d'un
+message : c'est un temoin de l'etat des unites. Le port le reproduit
+maintenant, et les graines sans combat le garde ferme — ce qui est coherent.
+
+*Invariant verifie* : sur 1 500 tours, **aucune descente** du drapeau. Un
+`OR.W` ne peut pas redescendre, et c'est bien ce qu'on observe.
+
+#### Ce que ca ne change pas
+
+Aucune des 7 graines de reference ne teste le mode 2 : `68/68` partout,
+`check_render` OK, `check_assets` OK, `smoke_sim` OK, `stress` 5/5. Le gain
+est de fidelite, pas de rendement.
+
 ### Reste a faire
 ### Reste a faire
 
