@@ -1877,6 +1877,69 @@ cette routine appelle. La transcription doit donc etre un morceau unique
 donnees** et non de logique impose un arbitrage : c est ce qui rend le
 travail interessant, et ce que la Phase 23 avait montre sur les doors.
 
+### Phase 29 - `peeps[0x0E]` : l'indice est sur, et voila pourquoi
+
+La Phase 28 posait une condition a l'arbitrage « garder l'indice » : verifier
+qui ecrit `0x0E`. La verification est faite, et elle est **favorable**.
+
+#### Quatre ecritures, pas une de plus
+
+.. code-block:: none
+
+    L5480:  MOVE.L A2,($E,A2)     ; auto-reference
+    L5527:  MOVE.L A3,($E,A2)
+    L19874: MOVE.W D0,($E,A0)     ; sur un MOT, pas un long
+    L19885: MOVE.W D0,($E,A0)
+
+Quatre dans tout le listing. Trois consequences :
+
+* **Aucune ne depend de la position.** Un pointeur ne « suit » donc pas un
+  deplacement du peep vise — et un indice non plus. Les deux representations
+  se comportent identiquement.
+
+* **Les 22 octets d'un peep ne bougent jamais** en memoire. Un pointeur ne
+  pendille donc pas davantage qu'un indice ; il devient invalide quand le
+  emplacement est reutilise, ce qui arrive dans les deux cas.
+
+* Nous remettons `target` a `-1` dans `zero_population` (`sim.py` L417) et a
+  la naissance (L836), donc le recyclage est propre.
+
+L'arbitrage de la Phase 28 est donc **valide**, et pour une raison objective
+et non par preference.
+
+#### L'auto-reference est le sentinelle « arrive »
+
+L5480 ecrit ``MOVE.L A2,($E,A2)`` : le peep se designe **lui-meme**. Ce n'est
+pas une bogue, c'est le marqueur d'arrivee. En effet L4914-4917 :
+
+.. code-block:: none
+
+    MOVEA.L ($E,A2),A0
+    MOVE.W  (8,A0),D0        ; la case de la cible
+    CMP.W   (8,A2),D0        ; ... egale a la mienne ?
+    BEQ.S   LAB_41A26        ; oui -> calculer un CAP, pas un gradient
+
+Quand la cible est le peep lui-meme, la comparaison est trivialement vraie, et
+la routine calcule un cap au lieu de suivre un gradient. Les trois etats du
+champ sont donc :
+
+| asm | ici | sens |
+|---|---|---|
+| `0` (pointeur nul) | `-1` | suit l'aimant (L4912) |
+| le peep lui-même | son propre indice | **arrivé** (L5480) |
+| un autre peep | son indice | s'y dirige |
+
+Les trois sont representables par un indice. `Game.target_peep(i)` (ajoute ce
+tour) implemente la resolution en un seul endroit, avec le garde pour le
+pointeur nul.
+
+#### Ce que ca ne change pas
+
+La transcription de `_move_magnet_peeps` et de `_get_heading` reste a faire —
+7 blocs sur 8, plus la routine appelee. Mais la representation est maintenant
+**justifiee** plutot que choisie, ce qui veut dire que la transcription
+n'aura plus a arbitrer en cours de route.
+
 ### Reste a faire
 ### Reste a faire
 

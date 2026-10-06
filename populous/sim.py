@@ -615,6 +615,39 @@ class Game:
         return sum(p.life for _, p in self.living() if p.tribe == tribe)
 
     # -------------------------------------------------------- _move_peeps
+    def target_peep(self, i: int) -> Peep | None:
+        """``A0 = peeps[0x0E]`` : le peep vise par le peep ``i``.
+
+        Dans l'asm, ``peeps[0x0E]`` est un **pointeur** ; chez nous c'est un
+        indice. La correspondance est exacte, et l'arbitrage de la Phase 28
+        (garder l'indice) tient grace a trois faits :
+
+        * il n'y a que **quatre** ecritures de ``0x0E`` dans tout le listing
+          (L5480, L5527, L19874, L19885) ;
+        * aucune ne depend de la position : un pointeur ne « suit » donc pas
+          un deplacement, et un indice non plus ;
+        * les 22 octets d'un peep ne bougent jamais sur la memoire, donc un
+          pointeur ne pendille pas davantage qu'un indice — et nous
+          remettons ``target`` a -1 dans ``zero_population`` et a la naissance.
+
+        Les trois etats du champ, tous representables :
+
+        ==================  =========  ===================================
+        asm                  ici         sens
+        ==================  =========  ===================================
+        ``0`` (pointeur nul) ``-1``      suit l'aimant (L4912)
+        ``le peep lui-meme`` son indice   **arrive** (L5480)
+        un autre peep        son indice   s'y dirige
+        ==================  =========  ===================================
+
+        L'auto-reference est le sentinelle « arrive » : L5480 ecrit
+        ``MOVE.L A2,($E,A2)``, puis L4916 compare ``cible->block`` a
+        ``peep->block``. Les deux sont le meme, donc le test passe et la
+        routine calcule un cap plutot que de suivre un gradient.
+        """
+        t = self.peeps[i].target
+        return self.peeps[t] if 0 <= t < MAX_PEEPS else None
+
     def move_peeps(self) -> None:
         """Un tour de simulation (asm $4059A)."""
         self.game_turn += 1
