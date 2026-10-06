@@ -331,9 +331,25 @@ class PowerEngine:
         elle pose des arbres pour proteger, puis des pierres.
 
         On ne touche qu'a la fiche de l'IA (``tribe``), jamais celle du joueur.
+
+        **Le portillon.** L'asm teste ``LAB_516AC`` — c'est-a-dire
+        ``stats+8``, notre :attr:`~populous.sim.Tribe.queued` — **avant**
+        toute decision (L3256) :
+
+        .. code-block:: none
+
+            for t in (0, 1):
+                if stats[t].queued == 0: _set_devil_magnet(t)
+                if stats[t].queued == 0: _devil_effect(t)
+
+        Autrement dit l'IA ne reflechit **que lorsqu'elle n'a aucune action
+        en file** : pendant qu'une ville se fonde (``queued`` pose par
+        `sim.py` L603/L727), elle ne decide plus. Ce portillon manquait.
         """
         sim = self.g.sim
         st = sim.stats[tribe]
+        if st.queued:
+            return                       # asm L3256 : TST.W (8,A0) / BNE
         if st.act not in (0, ACT_NOP):
             return                            # une action est deja en attente
         mana = self.mana(tribe)
