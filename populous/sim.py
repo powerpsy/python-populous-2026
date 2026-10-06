@@ -604,7 +604,9 @@ class Game:
             pl.town_count = 0
             pl.pop = 0
             if self.toggle:
-                pl.mana += 1                    # +1 mana tous les 2 tours
+                # L3308 : `ADDQ.W #1,(LAB_52DF0)+tribu*16` -- le champ est un
+                # LONG, l'addition reboucle donc a 0x100000000.
+                pl.mana = m68k.add_long(pl.mana, 1)
             st.p2a = 0
             st.p26 = -1
             st.strongest = -1
@@ -767,7 +769,8 @@ class Game:
         if self.cheat != 0 and p.tribe == self.cheat - 1:
             threshold = 0x32
 
-        pl.mana += self.land.mana_add[age]
+        # L3876 : `ADD.L D1,(A0)` -- champ LONG
+        pl.mana = m68k.add_long(pl.mana, self.land.mana_add[age])
         p.weapons = self.land.weapons_add[age]
 
         if p.life > threshold:
@@ -800,7 +803,9 @@ class Game:
                     self.funny_done = 1
                     self.do_place_funny(1)
 
-        p.life += self.land.population_add[age]
+        # L4014 : `ADD.W D1,(4,A0)` -- champ MOT, reboucle a 0x10000.
+        # C'est ce qui borne la vie a 16 bits sur le materiel.
+        p.life = m68k.add_word(p.life, self.land.population_add[age])
 
     def find_free_slot(self) -> int | None:
         """Premier emplacement libre (``life <= 0``) ; met ``no_peeps`` à jour."""

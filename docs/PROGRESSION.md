@@ -1146,6 +1146,57 @@ ordre de risque :
 Tant que ces sites ne sont pas convertis, **la portabilite 68000 du port
 n'est pas etablie** — c'est le chantier ouvert.
 
+### Phase 20 - Le generateur aleatoire : verifie, et les bornes posees
+
+#### `Rng` — aucune divergence
+
+C'etait le risque le plus grave : si la sequence des tirages s'ecartait,
+**toute** la partie s'ecarterait, et aucun test ne l'aurait montre.
+
+`_newrand` (L19129-19135) est deterministe et court :
+
+.. code-block:: none
+
+    MOVE.W _seed,D0      # le mot haut de D0 reste indetermine...
+    MULU #$24a1,D0       # ...mais MULU ne lit que le mot BAS -> 32 bits
+    ADDI.W #$24df,D0     # mot bas seul
+    BCLR #$F,D0          # bit 15
+    MOVE.W D0,_seed
+    RTS
+
+*Verifie* : **120 000 tirages** (20 000 x 6 graines, dont 0x0000, 0x7FFF,
+0xFFFF) confrontes a une reecriture independante → **zero ecart**. Le mot
+haut de `D0` est bien preserve, et le bit 15 est bien toujours efface.
+
+Le risque « tout diverge des la premiere graine » est **ecarte**.
+
+#### Les bornes 16 et 32 bits, posees
+
+Trois sites convertis a `m68k` :
+
+| site | asm | type |
+|---|---|---|
+| mana, 1 par 2 tours | L3308 `ADDQ.W` sur un champ **long** | `add_long` |
+| mana, par age | L3876 `ADD.L D1,(A0)` | `add_long` |
+| vie, par age | L4014 `ADD.W D1,(4,A0)` | `add_word` |
+
+**Mesure : en jeu normal, aucune borne n'est atteinte.**
+
+| grandeur | maximum atteint | borne |
+|---|---|---|
+| vie d'un peep | 3 508 | 65 535 |
+| mana d'une tribu | 23 527 | 4 294 967 295 |
+
+Autrement dit ces conversions sont **correctes mais sans effet aujourd'hui** :
+elles compte sur les parties tres longues, ou si l'equilibrage change. C'est
+exactement ce qu'on veut — la fidelite d'abord, l'effet quand il y en a un.
+
+Le reboulement a ete verifie en le forçant : vie `65530 + 10 = 4`, mana
+`0xFFFFFFFC + 8 = 4`. Et aucune depasse le plafond de `0x7D00` apres 2500
+tours de combat.
+
+*Suite* : 68/68 sur 7 graines, `check_render` OK, `smoke_sim` OK, `stress` 5/5.
+
 ### Reste a faire
 ### Reste a faire
 
