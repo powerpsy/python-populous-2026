@@ -47,9 +47,10 @@ if str(ROOT) not in sys.path:
 
 import pygame  # noqa: E402
 
+from populous import config  # noqa: E402
 from populous.assets import load_pic  # noqa: E402
-from populous.config import (DEFAULT_GROUND, DEFAULT_SEED, FPS,  # noqa: E402
-                             TURNS_PER_FRAME, ZOOM)
+from populous.config import DEFAULT_GROUND, DEFAULT_SEED, FPS  # noqa: E402
+from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_LOWER, ACT_RAISE, ACT_TREE,  # noqa: E402
@@ -1318,9 +1319,23 @@ class Game:
 
 
 def main(argv: list[str]) -> None:
+    """Point d'entree.
+
+    .. code-block:: none
+
+        python -m populous.game [graine] [sol] [zoom] [tours_par_image]
+
+    Le dernier argument est le levier de cadence (voir
+    :data:`populous.config.TURNS_PER_FRAME`). ``3.0`` donne 10 tours/s a
+    30 img/s, cadence plausible pour un Amiga. Les valeurs par defaut
+    viennent de :mod:`populous.config`, donc les modifier dans ce fichier
+    suffit dans la plupart des cas.
+    """
     seed = int(argv[0]) if len(argv) > 0 else DEFAULT_SEED
     ground = int(argv[1]) if len(argv) > 1 else DEFAULT_GROUND
     zoom = int(argv[2]) if len(argv) > 2 else ZOOM
+    if len(argv) > 3:
+        config.TURNS_PER_FRAME = float(argv[3])
     Game(seed, ground, zoom).run()
 
 
