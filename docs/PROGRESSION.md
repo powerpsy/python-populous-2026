@@ -1271,6 +1271,84 @@ donc sur l'issue des combats serres, pas sur leur existence.
 68/68 sur 7 graines, `check_render` OK, `check_assets` OK, `smoke_sim` OK,
 `stress` 5/5.
 
+### Phase 22 - `_do_battle` : deux erreurs de lecture, corrigees
+
+Cette phase corrige l'analyse de la phase 21 — qui etait **fausse** — puis le
+code. Les deux erreurs se tiennent, et c'est en les enchainant qu'on les a
+trouvees.
+
+#### Erreur 1 : le `if/else` n'est pas une dissymetrie
+
+.. code-block:: none
+
+    L6103: CMP.L (-10,A5),D0     # compare jet1 a jet2
+    L6104: BLE.S LAB_4275E       # jet1 <= jet2 -> branche 2, qui utilise jet1
+                                # jet1 >  jet2 -> branche 1, qui utilise jet2
+
+Les deux branches n'emploient **que le plus petit des deux jets**. Le
+`if/else` est un simple **selecteur de minimum**. Notre `min(...)` etait donc
+juste, et l'arbitrage « quelle branche ? » etait sans objet — les deux donnent
+le meme resultat.
+
+#### Erreur 2 : `a` n'est pas le meme peep
+
+L6071-6073 calcule `a = _peeps + A->index * $16`. J'avais lu l'offset 6 comme
+l'index du peep lui-meme, et conclu `a == A`, donc « un seul combattant,_degat
+double ».
+
+**L'offset 6 est `w6`, l'index de l'adversaire.** Donc `a = &peeps[A->w6]` est
+l'**adversaire**, et `a != A`.
+
+Le test qui tranche : `_battle_over` n'est appele que de L6189 et L6199, tous
+deux dans `_do_battle`. Sous `a == A`, les deux sont **inatteignables** — un
+peep mort passe par `zero_population`, un peep vivant sort par `RTS`. On
+n'aurait donc jamais de mana de combat ni de ruines. Or le jeu original montre
+des ruines. `a != A` est donc impose par le listing.
+
+#### Le vrai ecart, et la correction
+
+.. code-block:: none
+
+    L6084-6090: jet1 = (tirage/3 + 1) * a->vie      # L6099-6100 : idem
+    L6094-6101: jet2 = (tirage/3 + 1) * a->vie      # sur a, encore
+
+Les **deux** jets sont bastis sur la vie de **`a`**, c'est-a-dire de
+l'adversaire — **pas une vie par combattant**. C'etait notre erreur.
+
+Nos degats, eux, etaient deja justes : l'adversaire subit les armes de `A`,
+et `A` subit les armes de l'adversaire. Les deux branches echangent ces deux
+ecritures sans plus changer le jeu de valeurs.
+
+.. code-block:: none
+
+    jet1 = (self.rng.below(3) + 1) * opp.life
+    jet2 = (self.rng.below(3) + 1) * opp.life
+    low = jet2 if jet1 > jet2 else jet1
+
+Le nombre de tirages reste de deux : la **sequence du Rng n'est pas decalee**,
+seule la valeur du minimum change.
+
+#### Effet mesure
+
+| graine | pop J avant | pop J apres |
+|---|---|---|
+| 1 | 47 108 | **23 168** |
+| 59 | 45 926 | **20 090** |
+| 314 | 18 032 | **7 082** |
+
+La population chute de moitie. L'explication est directe : contre un
+adversaire a **forte** vie, les deux jets sont forts et le degat aussi ; contre
+un adversaire a **faible** vie, les deux jets sont faibles et le coup ne fait
+presque rien. Avant, le `min` melangeait une vie forte et une vie faible, donc
+le minimum tenait toujours le petit bout — les coups etaient toujours
+moderes. Le combat devient **brut par paliers** au lieu d'etre uniforme.
+
+C'est un changement de comportement, pas un ajustement : c'est ce que le
+listing impose. L'equilibrage se reglage plus tard, sur un port deja fidel.
+
+*Suite* : 68/68 sur 7 graines, `check_render` OK, `check_assets` OK,
+`smoke_sim` OK, `stress` 5/5. Aucune vie ne survit avec le bit 15 pose.
+
 ### Reste a faire
 ### Reste a faire
 

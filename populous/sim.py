@@ -521,9 +521,16 @@ class Game:
         opp_idx = atk.w6
         opp = self.peeps[opp_idx]
 
-        roll_opp = (self.rng.below(3) + 1) * opp.life
-        roll_atk = (self.rng.below(3) + 1) * atk.life
-        low = roll_atk if roll_atk <= roll_opp else roll_opp
+        # L6084-6091 puis L6094-6101 : les DEUX jets sont bastis sur `a`,
+        # c'est-a-dire `&peeps[A->w6]` — **l'adversaire** — et sur sa vie
+        # a chaque fois. Pas une vie par combattant.
+        jet1 = (self.rng.below(3) + 1) * opp.life
+        jet2 = (self.rng.below(3) + 1) * opp.life
+
+        # L6102-6104 : `CMP.L jet2,D1 / BLE LAB_4275E`. Les deux branches
+        # n'emploient **que le plus petit** des deux jets : le if/else est
+        # un simple selecteur de minimum, pas une dissymetrie.
+        low = jet2 if jet1 > jet2 else jet1
 
         # L6108-6130 puis L6146-6158 : le degat est
         #     armes * (vie / 100) + 10
