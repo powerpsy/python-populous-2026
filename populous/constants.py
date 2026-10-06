@@ -31,6 +31,12 @@ N_BIG_NEIGHBOURS = 25              # grande ville (CMP #$19, lignes 5904/5978)
 # _to_offset, $0005180A (asm 24272-24273) : 8 directions, ordre N NE E SE S SO O NO
 TO_OFFSET = [-64, -63, 1, 65, 64, 63, -1, -65]
 
+# _opposite, A4+$83BA : 8 mots, relus dans les OCTETS du DAD (offset
+# fichier $14754). Chaque entree donne la direction opposee, et la
+# contrainte « doit inverser le deplacement » suffit a la valider toute
+# seule : 0<->4 (N/S), 1<->5 (NE/SO), 2<->6 (E/O), 3<->7 (SE/NO).
+OPPOSITE = [4, 5, 6, 7, 0, 1, 2, 3]
+
 # _dir_sprite, $00051850 (asm 24281-24282) : même chose, ordre NO N NE E SE S SO O
 DIR_SPRITE = [-65, -64, -63, 1, 65, 64, 63, -1]
 

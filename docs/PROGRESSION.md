@@ -2251,6 +2251,103 @@ valeurs de tables peuvent differer de celles du listing. Trancher sans les
 octets serait deviner. Il faut soit les octets du DAD, soit un recoupement
 croise avec une autre source.
 
+### Phase 34 - Le blocage leve : les tables, relues dans les OCTETS
+
+La Phase 33 bloquait sur deux inconnues. Les deux sont resolues, en
+cherchant dans le binaire plutot qu'en relisant le listing.
+
+#### 1. `A4` n'est pas nul
+
+`LEA (_peeps,A4)` s'encode `41ec9c26`, donc `A4 + $9C26 = $53014`, soit
+
+.. code-block:: none
+
+    A4 = $493EE
+
+et le recoupement est immediat : `MOVE.W D0,$99E2(A4)` place `_seed` a
+`A4 + $99E2 = $52DD0`, ce que le listing confirme. Donc la table du code
+(`_to_offset` a `A4+$841C`) et celle de la section de donnees (`$5180A`)
+designent le meme objet, a travers le A4 qui change.
+
+#### 2. Les tables du DAD, relues dans les octets
+
+`_to_offset` a une signature de 16 octets unique. Cherchee dans le DAD :
+
+.. code-block:: none
+
+    trouvee a l offset fichier 0x147B6
+    18 octets juste avant -> _to_delta
+    mots : 0007 0006 0005 0000 0000 0004 0001 0002 0003
+    vals : [7, 6, 5, 0, 0, 4, 1, 2, 3]
+
+**Identique a notre `TO_DELTA`.** Les constantes du port sont donc justes,
+et le build DAD porte les memes valeurs de tables que le listing — malgre la
+disposition du code qui, elle, differe (Phase 31). Les donnees n'ont pas ete
+reordonnees ; seul le code l'a ete.
+
+Ce qui confirme du meme coup la Phase 33 : notre table n'etait pas cassee, et
+c'etait mon decodage a la main qui l'etait.
+
+#### 3. `_opposite` retrouve, et valide tout seul
+
+`_opposite` est a `A4+$83BA`, soit `$62` octets avant `_to_offset` :
+
+.. code-block:: none
+
+    offset fichier 0x14754 : [4, 5, 6, 7, 0, 1, 2, 3]
+
+On n'a pas eu besoin de la deviner : la contrainte « une direction opposee
+inverse le deplacement » suffit a la valider seule.
+
+.. code-block:: none
+
+    d=0 N (+0,-1) -> d=4 S (+0,+1)   inverse
+    d=1 NE       -> d=5 SO             inverse
+    d=2 E        -> d=6 O              inverse
+    d=3 SE       -> d=7 NO             inverse
+    (et les quatre dans l'autre sens)
+
+Ajoute a `constants.py` sous le nom `OPPOSITE`.
+
+#### 4. L'« incoherence » de la Phase 33 etait mon erreur
+
+J'ecrivais que `_to_delta[3] = 0` alors que `(dx=0, dy=-1)` est le nord, et
+que cela coincait avec le centre. Il n'y avait pas de coincidence : c'etait
+mon **erreur d'arithmetique** sur la decomposition d'un offset.
+
+Le controle, en forward (inverser un indice conient des divisions entieres
+sur des negatifs, et j'en ai ete la premiere victime) :
+
+.. code-block:: none
+
+     dx   dy   i   _to_delta[i]  obtenu  attendu
+    -1   -1   0        7          NO     NO     OK
+    -1   +0   1        6           O      O     OK
+    -1   +1   2        5          SO     SO     OK
+    +0   -1   3        0           N      N     OK
+    +0   +0   4        0           N      N     OK   <- le centre
+    +0   +1   5        4           S      S     OK
+    +1   -1   6        1          NE     NE     OK
+    +1   +0   7        2           E      E     OK
+    +1   +1   8        3          SE     SE     OK
+                                            9/9
+
+Donc l'ordre des directions est bien **N, NE, E, SE, S, SO, O, NO**, l'indice
+va de 0 a 8, et **le centre vaut N** — le defaut quand le gradient est nul.
+Ce n'est pas une erreur du jeu : c'est « si je ne sais pas ou aller, vas-y
+au nord ».
+
+#### Ce qui est acquis pour ecrire le code
+
+* `A4 = $493EE` pour le build du listing ;
+* `TO_DELTA`, `TO_OFFSET`, `OPPOSITE` : relus dans les octets, valides ;
+* `i = (dx+1)*3 + dy + 1`, dans `0..8`, centre a 4 ;
+* l'ordre des directions et la regle de l'oppose ;
+* le mecanisme de valid_move, le filtre `$35`, l'echappatoire des huit
+  directions et la saturation a `$03E7`.
+
+Plus aucune inconnue bloquante. La transcription s'ecrit.
+
 ### Reste a faire
 ### Reste a faire
 
