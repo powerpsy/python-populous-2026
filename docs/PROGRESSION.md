@@ -655,6 +655,84 @@ La seule transcription d'IA qui soit rentable est **le jeu de decisions
 complet** (`devil_effect` + `_one_block_flat`), pas une routine isolee. C'est
 le prochain gros chantier, et il est plus gros que tout ce qui precede.
 
+### Phase 13 - Piège de structure : la fiche `_stats` est **transposée**
+
+Avant de transcrire l'IA, il fallait lever un doute. Les ecritures de la barre
+d'icones dans le listing sont sans ambiguite :
+
+| icone | asm | ecrit |
+|---|---|---|
+| (0,0) poser un peuple | L1729-1733 | `stats+0 = $0E`, `stats+1 = valeur`, `stats+2 = $07` |
+| (1,1) poser un peuple | L1795-1797 | `stats+0 = $0E`, `stats+2 = $08` |
+| (1,3) volcan | L1803-1805 | `stats+0 = $0E`, `stats+2 = $06` |
+| (2,2) abaisser | L1820-1822 | `stats+0 = $0E`, `stats+2 = $02` |
+
+Donc, dans la fiche de 46 octets, base `(_stats,A4)` = A4+$82b6 :
+
+* **offset +0 = le MASQUE de pouvoirs** (toujours `$0E` sur cette barre) ;
+* **offset +2 = le CODE D ACTION** (7, 8, 6, 2).
+
+Or notre :class:`~populous.sim.Tribe` declare l'inverse : `.act` a l'offset
+**+0** et `.p2` a l'offset **+2**. Les deux champs sont donc **transposes**.
+
+**Pourquoi ce n'est pas un bug fonctionnel.** Le code est auto-coherent :
+`PowerEngine.dispatch` lit `st.act` comme code d'action, et la barre ecrit
+`st.act, st.p1, st.tend = 7, d0, 0x0E` — les trois valeurs attendues au bon
+endroit *pour nous*. Les 68/68 passent, les cinq pouvoirs fonctionnent, et le
+rendu est correct.
+
+**Pourquoi c'est un piege.** Toute transcription future de `devil_effect` ou
+`_one_block_flat`-ecrit dans `stats+0` et `stats+2` etserait silencieusement
+fausse. La correspondance a respecter est :
+
+.. code-block:: none
+
+    asm stats+0  (masque)   ->  notre Tribe.tend / .power_mask
+    asm stats+1  (valeur x) ->  notre Tribe.p1                 (juste)
+    asm stats+2  (action)   ->  nousrangeons l'action dans .act (offset 0)
+    asm stats+8  (queued)   ->  notre Tribe.queued             (juste)
+
+Deux options pour la suite, et c'est un choix :
+
+1. **renommer** `Tribe.act` / `Tribe.p2` pour que les noms collent a l'offset
+   reels — un renommage pur, sans changement de comportement, mais qui touche
+   `game.py`, `powers.py` et `sim.py` ;
+2. **transposer reellement** les champs pour que l'offset corresponde a l'asm
+   — plus risque, mais le code deviendrait directement comparable au listing.
+
+#### La structure de l'IA, pour la suite
+
+Le portillon, dans `_move_peeps` (L3252-3273) :
+
+.. code-block:: none
+
+    for t in (0, 1):
+        if stats[t].queued == 0: _set_devil_magnet(t)      # LAB_516AC = +8
+        if stats[t].queued == 0: _devil_effect(t)
+
+L'IA ne decide donc que lorsque la tribu **n'a aucune action en file** — ce
+qui est notre `Tribe.queued` a l'offset +8, correct.
+
+`_devil_effect` (L9300-9601, **301 lignes**) est une cascade de priorites sur
+les bits du masque, toutes de la meme forme :
+
+* bit 0 du masque, si `mana > LAB_51894 + $3E7` et si la tribu est plus
+  peuplee que l'adversaire → `stats+0 = $0E`, `stats+2 = $03` (seisme) ;
+* bit 15 du masque, si `mana > LAB_51890 + $7CF` → `stats+2 = $04` (deluge) ;
+* bit 13 du masque, si un aimant existe → aimant ;
+* … puis, a defaut, `_one_block_flat` (L9148, **152 lignes**) qui place un
+  batiment : `stats+0 = 1` ou `2`, `stats+1 = x`, `stats+2 = y`,
+  `stats+8 = 1`, en testant la moyenne d'altitude sur 4 cases et le reste
+  modulo 4.
+
+Les deux bits testes par `BTST #7,(-5,A5)` et `BTST #5,(-5,A5)` sont les bits
+**15** et **13** du mot, car `-5(A5)` est l'octet haut de celui stocke en
+`-6(A5)` — un piege de lecture du listing.
+
+Le chantier est donc : la porte (`queued`), puis la cascade
+`devil_effect`, puis `_one_block_flat`. Dans cet ordre, et apres avoir tranche
+la question des champs ci-dessus.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
