@@ -2405,6 +2405,92 @@ par recherche, l offset voisin relu dans les octets, la contrainte
 semantique « une direction opposee inverse le deplacement ». L erreur
 d arithmetique meurt contre une mesure ; elle survit contre une relecture.
 
+### Phase 37 - `move_magnet_peeps` : transcrit, et l audit du metric
+
+Deux choses dans cette phase, dont une qui rend les chiffres honnetes.
+
+#### 1. L audit : 31 % devenaient 22 %
+
+Le seau « citation de nom » gonflait le taux, pour deux raisons :
+
+* un **mot** ne prouve rien — `_Open` passait pour couvert parce que Python a
+  un `open()`, et `_A4` parce que nos docstrings parlent d'`A4` à chaque
+  ligne (adressage relatif) ;
+* un nom **sans renvoi au listing** ne prouve rien non plus.
+
+Deux corrections dans `tools/coverage.py` : exiger le nom **complet avec son
+souligné** (nos docstrings écrivent bien `_move_peeps`, `_do_battle`), et
+exiger qu'il apparaisse à moins de trois lignes d'un renvoi `L####` /
+`$4268A` / `asm 24269`. Nouveau seau `COLLISIONS`, explicitement hors
+couverture.
+
+.. code-block:: none
+
+    COUVERTURE REELLE      : 124 / 564  (22.0%)
+      par alias declare    : 14   (fiable)
+      par citation reperee : 110
+      COLLISIONS de nom    : 94   (hors couverture)
+
+La tête de liste est devenue propre : `_PlayMeas`, `_PlaySound`, `___divs`,
+`_a_putpixel`, `_battle_over` — de vraies routines, réellement transcrites. Le
+bruit de la bibliothèque C a disparu.
+
+#### 2. `move_magnet_peeps` (L4905-5465), transcrit
+
+Le mécanisme, rappelé parce qu'il n'est pas évident : la routine ne calcule
+**pas** un vecteur. Elle prend le gradient en `sign`, l'indexe dans une grille
+3x3, et **sélectionne une direction dans une table**.
+
+.. code-block:: none
+
+    i = (dx + 1) * 3 + dy + 1        ->  0..8
+    delta = TO_DELTA[i]
+    off   = TO_OFFSET[delta]         <- _to_offset est indexe par le DELTA
+
+Le centre `i = 4` vaut le delta 0, c'est-à-dire **N** : quand le gradient est
+nul, on va au nord.
+
+Trois points que la transcription a fait apparaître :
+
+**Le garde « ne pas répéter » est bien plus étroit que son nom.** `p[0x15]`
+vaut 0 ou `0xFF`, donc `-1` ou 0 après `EXT.W`, tandis que `_to_offset` vaut
+`-65..65`. Seul `-1` peut matcher, c'est-à-dire **la seule direction O**. Le
+contrôle existe mais ne fait presque rien.
+
+**Le `$35` est lu hors carte.** À L5336, juste après un `valid_move` non
+nul, la case voisine peut être hors de la carte ; sur le 68000 la lecture
+déborde simplement sur la table suivante. `Game._blk_at` rend 0
+hors-tableau, ce qui est le comportement dominant pour une table de ce type —
+et c'est le seul écart assumé de la routine.
+
+**La guerre rend un rocher franchissable** (L5264-5274), et l'échappatoire
+sature à `$03E7` si aucune des huit directions ne passe.
+
+*Vérifié* : **3000 états random identiques** à une réécriture indépendante,
+dont **669 saturations** — l'échappatoire est réellement exercée. 68/68 sur 7
+graines, `check_render` OK, `check_assets` OK, `smoke_sim` OK, `stress` 5/5.
+
+#### Trois erreurs de harnais de test, et une de code
+
+En confrontant, j'ai fait **trois fois** la même faute : comparer après que la
+transcription ait **muté l'entrée**. La référence tournait sur un état déjà
+modifié — `get_heading` réécrit `target`, la conversion réécrit `tribe`,
+`act`/`queued`/`face` sont écrits aussi. La correction est de sauvegarder
+*tous* les champs écrits, pas seulement ceux dont je pensais.
+
+Les vraies erreurs de code, elles, étaient deux etEEP :
+
+* `d4` doit être testé **en signe** (L5391 `BGE`) ; mon `& 0xFFFF` le rendait
+  positif, donc `idx = 0` partait en `0` au lieu de `7` ;
+* ma garde sur la comparaison « ne pas répéter » était une invention.
+
+#### Reste
+
+`move_magnet_peeps` n'est pas encore **branché** : `_move_peeps` ne l'appelle
+pas. Il faut lire où le listing l'appelle (L3245-4904) et le câbler. En
+attendant, `get_heading` reste donc injoignable — ce que `coverage.py`
+signale honnêtement.
+
 ### Reste a faire
 ### Reste a faire
 

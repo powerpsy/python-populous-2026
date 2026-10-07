@@ -33,6 +33,7 @@ from .constants import (
     N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR, ST_DROWNING,
     offset_to_dx,
     ST_EXPLORER, ST_VILLAGER, ST_ANIM, ST_BATTLE,
+    OPPOSITE, TO_DELTA, TO_OFFSET,
 )
 from .land import LandTables, load_land
 from .map import GameMap
@@ -701,6 +702,170 @@ class Game:
             if d < best:                             # L5523 CMP.W / BGE
                 best = d
                 p.target = j                         # L5527
+
+    def _blk_at(self, block: int) -> int:
+        """``_map_blk[block]`` comme le 68000 le lit, hors-tableau compris.
+
+        Le listing indexe ``_map_blk`` avec un mot 16 bits et **sans
+        garantie** : a L5336, juste apres un ``valid_move`` non nul, la case
+        voisine peut etre hors de la carte. Sur le materiel, la lecture
+        deborde simplement sur la table suivante — ``_map_bk2`` dans notre
+        disposition, qui commence par des zeros.
+
+        On rend donc 0 hors-tableau, ce qui est le comportement dominant du
+        materiel pour une table de ce type, et on le note plutot que de
+        faire planter le port.
+        """
+        blk = self.map.blk
+        return blk[block] if 0 <= block < len(blk) else 0
+
+    def move_magnet_peeps(self, i: int, arg2: int) -> int:
+        """``_move_magnet_peeps`` (L4905-5465) : un pas de magnetisme.
+
+        **Transcription integrale.** Le mecanisme n'est pas un vecteur : la
+        routine calcule un gradient en ``sign``, l'indexe dans une grille
+        3x3, et **selectionne une direction dans une table**.
+
+        .. code-block:: none
+
+            L5220: MOVE.W (-6,A5),D0      dx = sign(cible_x - moi_x)
+            L5221: ADDQ.W #1,D0
+            L5222: MULS   #$0003,D0
+            L5223: ADD.W  (-8,A5),D0     + dy = sign(cible_y - moi_y)
+            L5224: ADDQ.W #1,D0         i = (dx+1)*3 + dy + 1  -> 0..8
+            L5227: LEA    (_to_delta,A4) / MOVE.W -> le DELTA
+            L5232: LEA    (_to_offset,A4) / _to_offset est indexe par le delta
+
+        Les trois tables sont relues dans les **octets** du DAD et
+        concordent avec le listing : ``TO_DELTA`` (9 mots), ``TO_OFFSET``
+        (8, dans l'ordre N NE E SE S SO O NO) et ``OPPOSITE``. Le centre
+        ``i = 4`` vaut le delta 0, c'est-a-dire **N** : quand le gradient
+        est nul, on va au nord.
+
+        Renvoie l'offset du pas effectue, ``$03E7`` (999) si aucune des huit
+        directions ne passe, et 0 dans les cas de sortie directe.
+        """
+        p = self.peeps[i]
+        tribe = p.tribe
+        pl = self.players[tribe]
+        st = self.stats[tribe]
+
+        # ---- L4912 : y a-t-il une cible designee ? -------------------------
+        if p.target != -1:                                  # TST.L ($E,A2)
+            j = p.target
+            tgt = self.peeps[j] if 0 <= j < MAX_PEEPS else None
+            if tgt is not None and tgt.block != p.block:     # L4916 CMP / BEQ
+                # L4919-4929 : trois conditions pour NE PAS rechercher
+                if not (tgt.life > 0
+                        and tgt.tribe != tribe
+                        and not (tgt.state & 0x80)):
+                    self.get_heading(i)                      # LAB_41A26
+            else:
+                self.get_heading(i)                          # LAB_41A26
+            if tgt is None:
+                return 0
+            vers = tgt.block                                  # L4936 (8,A0)
+
+        # ---- LAB_41A9E : pas de cible, on suit l'aimant -----------------
+        else:
+            if pl.magnet != 0:                                # L4987 / BNE
+                # LAB_41B9C : le magnet designe-t-il un peep ?
+                j = pl.magnet - 1
+                if j != arg2:                                 # L5087 / BNE
+                    # LAB_41C5E : vers la case du peep vise par le magnet
+                    if not (0 <= j < MAX_PEEPS):
+                        return 0
+                    vers = self.peeps[j].block                # LAB_5301C
+                else:
+                    vers = pl.magnet_to                       # LAB_52DE6
+            else:
+                # LAB_41AF4 : vers la case visee par l'aimant du joueur
+                if pl.magnet_to == p.block:                   # L4994 / BNE
+                    # le peep vient d arriver : il est converti
+                    pl.magnet = arg2 + 1                      # L5000-5002
+                    if getattr(self, "view_who", 0) == 0:     # L5003-5007
+                        self.view_who = arg2 + 1
+                    p.tribe = 0xFF if (tribe & 0x80) else 0  # L5009
+                vers = pl.magnet_to                           # L5011
+
+        # ---- L4935-4980 / L5011-5218 : le gradient en sign ---------------
+        dx = (1 if (vers & 0x3F) - (p.block & 0x3F) > 0 else 0) - \
+             (1 if (vers & 0x3F) - (p.block & 0x3F) < 0 else 0)
+        dy = (1 if (vers >> 6) - (p.block >> 6) > 0 else 0) - \
+             (1 if (vers >> 6) - (p.block >> 6) < 0 else 0)
+
+        # ---- LAB_41CF6 : la grille 3x3, puis la table --------------------
+        idx = (dx + 1) * 3 + dy + 1                           # L5219-5224
+        delta = TO_DELTA[idx]                                 # L5228
+        off = TO_OFFSET[delta]                                # L5233
+        r = self.map.valid_move(p.block, off)                 # L5235
+
+        if r == 0:
+            # L5239-5249 : avec une cible, la case voisine ne doit pas etre
+            # du type $35 -- certaines cases interdisent le pas meme quand
+            # valid_move dit oui.
+            if p.target != -1 and \
+                    self._blk_at(p.block + off) == 0x35:
+                r = 0x35                                      # force LAB_41D7A
+            else:
+                p.face = 0xFF if (off & 0xFFFF) & 0x8000 else 0x00   # L5256
+                return off
+
+        # ---- LAB_41D7A -----------------------------------------------------
+        if r == 2 and self.war:                              # L5264-5266
+            p.face = 0xFF if (off & 0xFFFF) & 0x8000 else 0x00        # L5274
+            return off
+
+        # LAB_41DA2 : la ia demande a creuser, si elle y est autorisee
+        if st.can_build == 1 or self.war:                     # L5283-5286
+            if not (self.flags & 0x04 and self.war):         # L5288-5291
+                if r == 3:                                   # L5293
+                    st.act = 1                                # L5300
+                    st.p1 = p.block & 0x3F                    # L5301-5310
+                    st.p2 = p.block >> 6                      # L5311-5320
+                    st.queued = 1                             # L5326
+                elif self._blk_at(p.block + off) == 0x35 \
+                        and not (self.flags & 0x08) \
+                        and not self.war:                    # L5336-5341
+                    st.act = 1
+                    cible = (p.block + off) & 0xFFFF
+                    st.p1 = cible & 0x3F                      # L5354-5362
+                    st.p2 = cible >> 6                        # L5369-5377
+                    st.queued = 1                             # L5383
+
+        # ---- LAB_41F06 : echappatoire, on essaie les huit directions ------
+        d4 = m68k.s16(idx - 1)                                # L5385-5386, en signe
+        trouve = 0
+        while trouve < 8:                                    # L5449-5450
+            if d4 < 0:
+                d4 = 7                                       # L5391-5392
+            elif d4 > 7:
+                d4 = 0                                       # L5394-5396
+            o = TO_OFFSET[d4]
+            if self.map.valid_move(p.block, o) == 0:          # L5404-5407
+                # L5408-5416 : on ne repete pas. `p.face` relu par `EXT.W`
+                # vaut 0 ou -1, et `_to_offset` vaut -65..65 : seul -1, la
+                # direction O, peut matcher. Le controle est bien plus
+                # etroit que son nom ne le dit.
+                if m68k.s16(p.face) == (o & 0xFFFF):
+                    trouve += 1
+                    d4 += 1
+                    continue
+                if p.target != -1 and \
+                        self._blk_at(p.block + o) == 0x35:
+                    trouve += 1
+                    d4 += 1
+                    continue
+                # LAB_41F7A
+                p.face = 0xFF if (TO_OFFSET[OPPOSITE[d4]] & 0xFFFF) & 0x8000 \
+                    else 0x00                                # L5437
+                return TO_OFFSET[d4]                         # L5443
+            trouve += 1                                      # L5446-5447
+            d4 += 1
+
+        # LAB_41FE2 : aucune direction ne passe
+        p.face = 0xFF if (TO_OFFSET[OPPOSITE[d4 & 7]] & 0xFFFF) & 0x8000 else 0
+        return 0x03E7                                        # L5462
 
     def move_peeps(self) -> None:
         """Un tour de simulation (asm $4059A)."""

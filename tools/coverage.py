@@ -58,6 +58,7 @@ ALIAS: dict[str, str] = {
     "_grow_peep": "Game.grow_peep",
     "_move_sprite": "Game.move_peeps",
     "_get_heading": "Game.get_heading",     # Phase 36 : transcrit et verifie
+    "_move_magnet_peeps": "Game.move_magnet_peeps",   # Phase 37 : verifie
     "_newrand": "Rng.raw",
     "_divs": "m68k.divs_word",
     "_mulu": "m68k.mulu_word",
@@ -73,9 +74,9 @@ PLANIFIE: set[str] = {
     "_devil_effect",          # Phase 26 : lu, structure relue, code mort trouve
     "_set_devil_magnet",      # Phase 26 : depends de _devil_effect
     "_do_computer_effect",    # Phase 26 : appele par _devil_effect, pas encore lu
-    # Phase 28-36 : lu integralement, tables verifiees dans les octets.
-    # Le mecanisme est entierement connu ; reste a ecrire les ~1500 lignes.
-    "_move_magnet_peeps",
+    # Phase 28-37 : lu integralement, tables verifiees dans les octets, puis
+    # transcrit et verifie sur 3000 etats. Il reste a le brancher sur
+    # `_move_peeps`, qui ne l appelle pas encore.
 }
 
 RE_FONCTION = re.compile(r"^(_[A-Za-z0-9_]+):\s*$")
