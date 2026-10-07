@@ -17,3 +17,6 @@ venv/
 # Sorties de debogage / apercus regenerables
 /tmp/
 *.out
+# captures produites par tools\autopilot.py et check_render.py :
+# des artefacts de test, regeneres a chaque execution. Sans valeur dans l'historique.
+out_png/
