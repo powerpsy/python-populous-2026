@@ -216,7 +216,24 @@ def main() -> int:
 
         # 1. recherche globale
         coups = trouver(data, sig)
-        # 2. si elle est ambigue, on restreint a la fenetre predicted
+        # 2. si elle est ambigue, on allonge la signature pour chaque candidat
+        if len(coups) > 1:
+            survivants = list(coups)
+            for largeur in (6, 10, 16, 24):
+                if len(survivants) <= 1:
+                    break
+                long_sig, _ = octets_de_la_routine(lignes, i, fin,
+                                                   largeur, False)
+                if len(long_sig) <= len(sig):
+                    break
+                survivants = [c for c in survivants
+                              if data[c:c + len(long_sig)] == long_sig]
+            if len(survivants) == 1:
+                uniques[nom] = survivants[0]
+                resolus.append(nom)
+                continue
+            coups = survivants if len(survivants) > 1 else coups
+        # 3. si elle est ambigue, on restreint a la fenetre predicted
         if len(coups) > 1 and args.fenetre > 0:
             adresse = ADRESSE_L[0].get(nom)
             if adresse is None:
@@ -254,6 +271,7 @@ def main() -> int:
     print("SIGNATURES UNIQUES    : %d  (%.1f%%)"
           % (len(uniques), 100.0 * len(uniques) / n))
     print("  -> exploitables pour un interpreteur")
+    print("  dont resolues par allongement : %d" % len(resolus))
     print("ambiguës (multiples)  : %d" % len(ambigues))
     print("absentes (0 hit)      : %d" % len(absents))
     print("sans aucun encodage   : %d" % len(sans_sig))

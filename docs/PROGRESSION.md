@@ -2930,6 +2930,84 @@ effectivement.
 *Suite* : 68/68 sur 7 graines, `check_render` OK, `check_assets` OK,
 `smoke_sim` OK, `stress` 5/5.
 
+### Phase 44 - Cloture de la session : le bilan chiffre
+
+Toutes les pieces sont en place. Ce que la session a produit, et ce qu'il
+reste reellement.
+
+#### 1. La mesure etait fausse trois fois, toujours dans le meme sens
+
+| ce qu on annoncait | ce qu il etait | pourquoi |
+|---|---|---|
+| 31 % de couverture | **33,3 %** des routines qui ont du code | le denominateur 564 comptait 171 symboles de **donnees** |
+| 161 routines couvertes par citation | **111** | collisions de nom : `_Open` couvert parce que Python a un `open()` |
+| 98 signatures uniques | **118** | les 44 ambiguës se résolvent en allongeant la signature |
+
+Toujours dans le sens qui **flatte**. C'est le seul reproche qu'on puisse
+adresser a la methode, et il tient a un seul fait : un chiffre flatteur
+n'est pas une mesure, c'est une impression.
+
+#### 2. L'inventaire, chiffre
+
+.. code-block:: none
+
+    etiquettes _xxx:            564
+      routines AVEC code        393
+      symboles de DONNEES       171
+
+    COUVERTURE                  131 / 393  (33.3 %)
+      alias declares             20   (fiable)
+      citation reperee          111
+      collisions                 91   (hors couverture)
+      PLANIFIE                    0   <-- le retard d'analyse est a zero
+
+    tableau de signatures      118 / 393  (30.0 %)
+      ambigues                   32
+      absentes                  199
+
+``PLANIFIE = 0`` veut dire une chose simple : **tout ce qui a ete lu a ete
+transcrit**. Le port n'a plus de lecture en cours.
+
+#### 3. Ce qui a ete transcrit dans cette session
+
+| routine | lignes asm | verification |
+|---|---|---|
+| `_get_heading` | 71 | 3 000 etats identiques |
+| `_move_magnet_peeps` | 560 | 3 000 etats, dont 669 saturations |
+| `_devil_effect` | 223 | analyse complete, 3 blocs morts demontres |
+| `_do_computer_effect` | 72 | transcrit |
+| `_set_devil_magnet` | 90 | transcrit — et **code mort**, demontre |
+
+Soit **1 016 lignes de listing** portees, contre zero au debut de la session.
+
+#### 4. Ce qui reste, et ce que ca coute
+
+* **342 routines non couvertes.** Les plus grosses sont `_do_action` (640 l.),
+  `_two_players` (621), `_game_options` (540), `_show_world` (517),
+  `_save_load` (490), `_animate` (475). Ce sont les boucles principales et
+  l'interface — pas du jeu.
+* **L'oracle** : 118 uniques sur 393. La route ne suffira pas seule ; il
+  faut soit les octets du build tetracorp, soit FS-UAE sur l'ADF.
+* **La verification** reste la confrontation a une reecriture independante.
+  Elle ne verifie pas contre la machine — mais contre une **deuxieme lecture
+  du meme texte**, ce qui a suffi a prendre trois fois de vraies fautes
+  cette session : une table inversee, un ``done`` mal lu, un ``&&`` qui
+  inverse un comportement.
+
+#### 5. Ce qui a ete le plus utile, en fait
+
+Pas les transcriptions. Ce sont les **trois blocs morts** demontres par
+ecriture exhaustive :
+
+* ``act = 4`` dans `_do_battle` — l'IA ne releve jamais le terrain ;
+* les tests ``t12``/``th84``/bit 12 de `_devil_effect` — ils ne filtrent rien ;
+* `_set_devil_magnet` entierement — `command` n'est ecrit qu'une fois.
+
+Chacun etait un parametre que le port aurait faithfully applique, et chacun
+fait partie de ces gens qui **simplifient** au lieu d'obliger. Les trouver
+vaut mieux que de transcrire dix routines : ces trois-la changeaient le
+comportement du jeu.
+
 ### Reste a faire
 ### Reste a faire
 
