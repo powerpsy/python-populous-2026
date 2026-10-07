@@ -561,12 +561,19 @@ class PowerEngine:
 
         Apres transcription, sur 9 000 tours : 161 398 / 207 643 / 184 298.
 
-        ``_set_devil_magnet`` est appele **puis** inutil : L1065 ecrit
-        ``command = 1`` pour les deux tribus et c'est la **seule** ecriture
-        de ce champ dans tout le listing ; or la routine exige
-        ``command == 0`` (L9633). Elle est donc du code mort, comme le bloc
-        ``act = 4`` de `_do_battle`. On l'appelle quand meme — elle rend la
-        main sans ecrire, et la留着 evite d'inventer une condition.
+        ``_set_devil_magnet`` est appele **et n'est pas du code mort** — une
+        premiere version de ce fichier le disait, sur la foi d'une recherche
+        qui n'avait trouve qu'une seule ecriture de ``Player.command``. C'etait
+        faux : il y en a **deux**, L1065 (initialisation) et **L18402**, dans
+        ``_do_action`` — le handler du clic sur la barre d'outils, qui ecrit
+        ``command[tribu] = arg2``. La recherche avait rate L18402 parce que
+        son motif exigeait une source sans virgule, or l'operande source est
+        ``($A,A5)``.
+
+        Donc la routine se declenche bien des que la tribe a ``command = 0``,
+        et le portillon du meme nom dans ``move_explorer`` peut se lever.
+        Reste a transcrire ``_do_action`` pour que le joueur — et l'IA, si elle
+        clique ses propres outils — pose ce champ.
         """
         sim = self.g.sim
         st = sim.stats[tribe]

@@ -3008,6 +3008,69 @@ fait partie de ces gens qui **simplifient** au lieu d'obliger. Les trouver
 vaut mieux que de transcrire dix routines : ces trois-la changeaient le
 comportement du jeu.
 
+### Phase 45 - Correction : `_set_devil_magnet` n'est PAS du code mort
+
+La Phase 43 a conclu que `Player.command` n'etait ecrit qu'une fois, donc que
+`_set_devil_magnet` — qui exige `command == 0` — etait **du code mort**.
+
+**C'etait faux.** Il y a **deux** ecritures :
+
+.. code-block:: none
+
+    L1065:  MOVE.W #$0001,(0,A0,D0.L)     initialisation
+    L18402: MOVE.W  ($A,A5),(0,A0,D0.L)    <-- dans _do_action
+
+avec `A0 = LAB_52DE8 + tribu*16` dans les deux cas.
+
+#### Pourquoi la recherche l avait manquee
+
+Le motif employait :
+
+.. code-block:: none
+
+    MOVE\.[WL]\s+([^,]+),\((0,\s?A[0-9],D0\.L|...)\)
+
+`[^,]+` exige une source **sans virgule**. Or l'operande source de L18402 est
+``($A,A5)`` — qui **contient** une virgule. La ligne ne matchait donc pas, et
+la Phase 43 a conclu a partir d'un resultat partiel.
+
+Ce n'est pas une faute d'interpretation du listing : c'est la meme famille
+d'erreur que les cinq precedents — une **mesure** mal realisee. Mais ici elle
+a produit une conclusion Categorique (« du code mort ») alors qu'elle n.etait
+pas etablie. C'est le pire des cas : une mesure erronee qui **simplifie**,
+donc qui-flatte le port en le declarant plus simple qu'il n'est.
+
+Ce que cela change :
+
+* ``_set_devil_magnet`` **n'est pas** du code mort : il se declenche des que
+  ``command = 0`` ;
+* le portillon ``command == 0`` de ``move_explorer`` **peut** se lever ;
+* le champ est ecrit par ``_do_action`` (L18402), c'est-a-dire par le handler
+  du clic sur la barre d'outils, qui recopie ``arg2`` dedans.
+
+Ce qui reste vrai de la Phase 43 : la transcription des trois routines est
+juste, `mana = 399` reste la valeur du listing, et l'IA du listing donne
+161 398 / 207 643 / 184 298 de population contre 917 / 425 / 0 pour
+l'heuristique inventee. Ces resultats ne dependent pas de la question
+`command`.
+
+#### La lecon, qui est la meme depuis quarante phases
+
+Une recherche negative — « je ne trouve rien » — n'a jamais valu une preuve
+d'absence. Il faut l'**absence d'echec** :ici, le motif `[^,]+`, ou une
+ecriture `(?1,A5)` qui ne peut pas matcher. J'ai conclu « il n'existe pas »
+sur un resultat que je n'avais pas verifie.
+
+Les cinq erreurs precedentes etaient des **calculs**. Celle-ci etait une
+**recherche**. Meme famille, consequence plus grave parce qu'un calcul faux
+se rattrape a la confrontation, tandis qu'une recherche fausse separe par un
+resultat vide — donc par une **absence**, c'est-a-dire par la forme meme des
+preuves dont on ne doute pas.
+
+Concretement pour la suite : tout « je n'ai trouve qu'une seule ecriture »
+doit etre accompagne du motif employe, et lu avant d'en tirer une
+conclusion. C'est note dans le code, au-dessus du point concerne.
+
 ### Reste a faire
 ### Reste a faire
 
