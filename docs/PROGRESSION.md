@@ -2718,6 +2718,73 @@ toucher a l'equilibrage, puisque c'est elle qui le decale.
 
 *Suite* : 68/68 sur 7 graines, `stress` 5/5.
 
+### Phase 41 - `mana = 399` : essaye, mesure, et couple a l'IA
+
+L1070 ecrit `mana[tribu] = $18F = 399` a l'initialisation. Nous partions de 0.
+La regle du projet est que le listing fait foi et que l'equilibrage se regle
+apres — donc on applique, **avec** la mesure.
+
+#### Premier resultat : la population s'effondre
+
+Graine 1 : population J de ~23 000 (Phase 22) a **6 755**. Avec mana des le
+premier tour, quelque chose se declenche massivement.
+
+#### La cause, et elle est laide
+
+`ai_choose` — l'heuristique **inventee** — devient payable. Neutralisation
+propre, en patchant la classe que `game.py` detient reellement :
+
+.. code-block:: none
+
+    SANS l IA inventee          AVEC l IA inventee
+    graine 1  pop A = 10 064     pop A =    917
+    graine 59 pop A = 10 045     pop A =    425
+    graine 314 pop A = 10 612    pop A =      0
+
+    mana IA   1399 / 4629 / 1399      devient 8 / 2 / 869
+
+L'IA consomme **toute** sa mana et sa population chute de 9 147 points. Sur
+la graine 314 elle **s'annihile completement** (pop A = 0).
+
+Donc la valeur fidele `mana = 399` n'est pas un simple decalage d'equilibrage :
+elle **active un code invente qui detruit sa propre tribu**.
+
+#### Deux erreurs de test, au passage
+
+Elles se ressemblent, et elles sont de la meme famille que celles de la
+Phase 33 :
+
+* un A/B dont le patch ne portait pas sur la classe utilisee
+  (`importlib.reload` cree une classe **nouvelle**, alors que `game.py`
+  garde l'ancienne) : le resultat disait « l'IA n'a aucun effet » — faux,
+  et c'etait la conclusion que j'etais alle chercher ;
+* un `'%-6d sans -> %-6d avec'` : deux marqueurs pour trois arguments.
+
+La premiere m'a fait conclure que l'IA ne servait a rien. Le resultat etait
+inverse de la realite. Cela tient a un point general : **un test qui ne
+modifie pas ce qu il croit modifier ne teste rien**, et son resultat est
+independant du code.
+
+#### Decision : on n'applique pas 399, et on sait pourquoi
+
+`mana = 399` et l'IA sont **couples**. Les deux doivent aller ensemble :
+
+1. transcrire `_devil_effect` (L9300) + `_do_computer_effect` (L9526) +
+   `_set_devil_magnet` (L9601) — l'analyse est deja faite (Phase 26) ;
+2. puis poser `mana = 399`, qui sera alors la valeur **utile** et non la
+   valeur qui arme une bombe.
+
+C'est la seule entree qui reste reellement inventee dans le port. Tout le
+reste est transcrit ou assume.
+
+#### Ce que la mesure dit de l'IA
+
+L'IA n'est pas « approximative » : elle est **nuisible**. Une approximation
+qui fait perdre 9 000 points de population et quiBVient a zero sur une
+graine sur trois ne vaut pas mieux que pas d'IA du tout. C'est la premiere
+mesure qui attribue un **cout** a du code invente, et non une simple
+difference de style.
+
 ### Reste a faire
 ### Reste a faire
 
