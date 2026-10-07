@@ -117,17 +117,16 @@ class Player:
         self.command = 1        # +4  outil courant (LAB_52DE8, init L1065)
         self.town_count = 0     # +6  compteur « town » (remis à 0 par tour)
         self.pop = 0            # +8  somme des vies
-        # L1070 ecrit bien `mana = $18F = 399` a l'initialisation, et nous partons
-        # de 0. L'ecart est reel et **couple** a l'IA : avec 399 de mana des
-        # le premier tour, l'heuristique inventee de `ai_choose` devient
-        # payable, et elle detruit sa propre tribu (mesure en Phase 41 :
-        # population A de 10 064 a 917 sur graine 1, et 0 sur graine 314).
+        # L1070 ecrit `mana = $18F = 399` a l'initialisation. La Phase 41 avait
+        # montre qu'appliquer 399 **avant** d'avoir transcrit l'IA armait
+        # l'heuristique inventee, qui detruisait sa propre tribu (population
+        # A de 10 064 a 917, et 0 sur la graine 314).
         #
-        # Appliquer la valeur fidele avant d'avoir transcrit l'IA rendrait le
-        # port **moins** jouable, non plus fidele. Les deux doivent aller
-        # ensemble : `_devil_effect` + `_do_computer_effect` +
-        # `_set_devil_magnet` d'abord, puis 399.
-        self.mana = 0           # +12 réserve de mana
+        # L'IA est desormais transcrite (Phase 42), et la mesure change de
+        # sens : sur 9 000 tours, population A de 161 398 / 207 643 /
+        # 184 298 avec l'IA du listing, contre 917 / 425 / 0 avec
+        # l'heuristique. Les deux valeurs fideles vont donc ensemble.
+        self.mana = 399         # +12 réserve de mana (L1070 : $18F)
 
 
 # ------------------------------------------------------------------- la partie

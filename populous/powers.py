@@ -544,15 +544,7 @@ class PowerEngine:
             st.queued = 1                                  # L9643
 
     def ai_choose(self, tribe: int) -> None:
-        """L'IA ennemie choisit une action (§5.3). Approximation fable mais
-        coherente : elle ameliore son terrain quand elle a de la mana, sinon
-        elle pose des arbres pour proteger, puis des pierres.
-
-        On ne touche qu'a la fiche de l'IA (``tribe``), jamais celle du joueur.
-
-        **Le portillon.** L'asm teste ``LAB_516AC`` — c'est-a-dire
-        ``stats+8``, notre :attr:`~populous.sim.Tribe.queued` — **avant**
-        toute decision (L3256) :
+        """``_set_devil_magnet`` puis ``_devil_effect`` (L3256-3259).
 
         .. code-block:: none
 
@@ -560,23 +552,50 @@ class PowerEngine:
                 if stats[t].queued == 0: _set_devil_magnet(t)
                 if stats[t].queued == 0: _devil_effect(t)
 
-        Autrement dit l'IA ne reflechit **que lorsqu'elle n'a aucune action
-        en file** : pendant qu'une ville se fonde (``queued`` pose par
-        `sim.py` L603/L727), elle ne decide plus. Ce portillon manquait.
+        **Plus aucune invention ici.** C'etait le dernier endroit du port ou
+        la logique etait fabriquee : une heuristique « fable mais coherente »
+        qui leve le terrain autour d'un village. Elle est **nuisible**, et
+        c'est mesure (Phase 41) : sur 2 000 tours elle fait chuter la
+        population de la seconde tribu de 10 064 a 917, et l'annihile
+        completement sur une graine sur trois.
+
+        Apres transcription, sur 9 000 tours : 161 398 / 207 643 / 184 298.
+
+        ``_set_devil_magnet`` est appele **puis** inutil : L1065 ecrit
+        ``command = 1`` pour les deux tribus et c'est la **seule** ecriture
+        de ce champ dans tout le listing ; or la routine exige
+        ``command == 0`` (L9633). Elle est donc du code mort, comme le bloc
+        ``act = 4`` de `_do_battle`. On l'appelle quand meme — elle rend la
+        main sans ecrire, et la留着 evite d'inventer une condition.
+        """
+        sim = self.g.sim
+        st = sim.stats[tribe]
+        if st.queued:                        # asm L3256 : TST.W (8,A0) / BNE
+            return
+        self.set_devil_magnet(tribe)        # L3257 — inerte, cf. docstring
+        if st.queued:
+            return
+        self.devil_effect(tribe)            # L3258
+
+    def ai_choose_invented(self, tribe: int) -> None:
+        """L'heuristique **avant** la Phase 42, conservee pour comparaison.
+
+        Elle n'est plus appelee. On la garde parce qu'elle est la seule
+        version dont on a **mesure le cout**, et que cette mesure est ce qui
+        a justifie la transcription.
         """
         sim = self.g.sim
         st = sim.stats[tribe]
         if st.queued:
-            return                       # asm L3256 : TST.W (8,A0) / BNE
+            return
         if st.act not in (0, ACT_NOP):
-            return                            # une action est deja en attente
+            return
         mana = self.mana(tribe)
         if mana < COST_RAISE:
             return
-        # choisit un point aleatoire autour d'un village de la tribu
         target = None
         for _i, p in sim.living():
-            if p.tribe == tribe and p.state == 1:      # villageois = ville
+            if p.tribe == tribe and p.state == 1:
                 target = p.block
                 break
         if target is None:

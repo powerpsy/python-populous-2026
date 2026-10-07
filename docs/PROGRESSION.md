@@ -2868,6 +2868,68 @@ fait le remarquer.
 *Suite* : 68/68 sur 7 graines, `stress` 5/5. Le port est inchange :
 `ai_choose` reste l'heuristique inventee, branchee comme avant.
 
+### Phase 43 - L'IA du listing remplace l'heuristique, et mana = 399
+
+Les deux verifications de la Phase 42 portaient du fruit. Cette phase
+applique, et le port ne contient plus **aucune logique inventee**.
+
+#### `command` n'est ecrit qu'une fois : `_set_devil_magnet` est mort
+
+Recherche exhaustive de toute ecriture via un `A0` issu de
+``LEA (LAB_52DE8,A4)``, indexee ou non : **aucune**. Le champ n'est donc
+ecrit qu'en L1065, a l'initialisation, a 1, pour les deux tribus.
+
+Or `_set_devil_magnet` exige ``command == 0`` (L9633 ``TST.W / BNE
+LAB_4518E``). Cette valeur n'est **atteignable par aucun code** : la routine
+est du code mort, comme le bloc ``act = 4`` de `_do_battle`.
+
+Deux consequences, et la seconde etait invisible :
+
+* on ne cherche plus a modeliser « l'etat d'interface par tribu » — il
+  n'existe pas ;
+* le portillon ``command == 0`` de ``move_explorer`` (Phase 40) **ne peut
+  jamais se declencher**. Le chemin de l'aimant n'est donc atteignable que
+  par ``p.target != -1`` ou ``war != 0``. La correction de la Phase 40 n'etait
+  pas seulement plausible : elle est structurellement la seule possible.
+
+#### Ce que la substitution change
+
+``ai_choose`` est desormais exactement L3256-3259 : le portillon ``queued``,
+puis ``set_devil_magnet``, puis ``devil_effect``. L'heuristique est conservee
+sous le nom ``ai_choose_invented``, **appellee par personne**, parce qu'elle
+est la seule version dont on a mesure le cout — et que cette mesure est ce
+qui justifie la transcription.
+
+Et ``mana = 399`` (L1070), que la Phase 41 avait refuse d'appliquer parce
+qu'elle armait cette heuristique.
+
+#### Mesure, 3 000 tours
+
+| graine | pop joueur | pop IA | mana IA |
+|---|---|---|---|
+| 1 | 30 502 | **31 648** | 1 899 |
+| 59 | 32 300 | **38 143** | 12 964 |
+| 314 | 13 751 | **35 048** | 1 899 |
+
+A comparer :
+
+* Phase 41, mana a 0 et heuristique inventee : pop A = 917 / 425 / **0** ;
+* Phase 42, mesure isolee sur 9 000 tours avec l'IA transcrite : 161 398 /
+  207 643 / 184 298.
+
+Les deux tribus sont desormais **equilibrees**, et la seconde ne s'eteint
+plus. C'etait le point ouvert le plus ancien du projet — la « note honnete
+sur l'equilibrage » signalait que « sur les cartes tres montagneuses la
+seconde tribu peut s'eteindre ».
+
+Sur 9 000 tours, la mana de l'IA atteint 38 089 au tour 6 000, donc les
+seuils `TH_ATTACK` (5 500) et `TH_VPC` (10 500) se franchissent vers les tours
+2 100 et 2 700 : les deux premiers pouvoirs de l'IA du listing s'executent
+effectivement.
+
+*Suite* : 68/68 sur 7 graines, `check_render` OK, `check_assets` OK,
+`smoke_sim` OK, `stress` 5/5.
+
 ### Reste a faire
 ### Reste a faire
 
