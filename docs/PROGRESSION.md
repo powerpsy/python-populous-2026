@@ -3380,7 +3380,110 @@ n'en a ete porte dans le code. Il reste a faire :
   (L622, entre `__clr_wsc` et la fenetre) ;
 
 et le cas `D4 == 0` lit `_mana_values[-1]`, c'est-a-dire **4 octets avant
-le tableau** — a confirmer plutot qu'a corriger.
+le tableau** - a confirmer plutot qu'a corriger.
+
+**Fait en Phase 49** : les deux lectures hors table ont ete relevees dans le
+listing, et `Game.move_mana()` est dans le code.
+
+### Phase 49 - `_move_mana` transcrit, et deux troncatures de 16 bits
+
+#### `_move_mana` (L3164-3241) est dans le code
+
+`render.py` ne contenait pas le mot « mana » : la jauge n'avait aucune
+contrepartie dans le port. Le curseur - une sprite `$45` - n'etait donc
+jamais dessine, sur aucune image.
+
+Appel **chaque image**, juste avant `__draw_it` (L622, entre `__clr_wsc` et
+la fenetre 8x8). Cable au meme endroit dans `Game.compose()`, entre le
+dessin de la mini-carte et `draw_window`.
+
+.. code-block:: none
+
+    D4 = 0
+    tant que mana > _mana_values[D4]: D4 += 1        ; LAB_404D6-404FA
+    CMP.W #$0009,D4 / BGT  ->  sprite fixe           ; LAB_4057A
+    sinon :
+        D0 = mana - v[D4-1]                          ; SUB.L
+        D0 = D0 << 3                                 ; ASL.L #3
+        D1 = v[D4] - v[D4-1]                         ; SUB.L
+        D0 = _divs(D0, D1)                           ; L40544
+        D5 = D0                                      ; MOVE.W D0,D5
+        y = (D4-1)*8  + D5 + 8                       ; mot, ASL.W #3
+        x = (D4-1)*16 + D5*2 + $A0                   ; mot, ASL.W #4
+        _draw_sprite(_w_screen, x, y, $45)
+
+`_mana_values` = 11 longs `$ffffff06 .. $001e847f` (L24287-24304), ce qui
+confirme `MANA_VALUES` valeur pour valeur.
+
+**Les deux lectures hors table**, relevees dans le listing et non devinees :
+
+* ``D4 == 0`` ne peut survenir que si `mana == -250` (le plancher exact de
+  `sim.py:594`, alors que `mana` demarre a 399). `SUBQ.W #1` donne l'indice
+  -1, soit **4 octets avant** la table : $51870 tombe dans `_big_city`
+  (`DC.W $0029` a $51872), valeur ``$00290029``. Le resultat est
+  `(160, 8, 0x45)`, **exactement** le point de `D4=1, D5=0` : le cran est
+  donc continu de part et d'autre.
+* ``D4 == 11`` (`mana > 2 000 063`) lirait `_prot_num2 = $E0ED80A7`, qui est
+  **negatif** : `mana > v[11]` serait vrai, D4 passerait a 12, puis 13... la
+  boucle partirait en fuite sur la memoire. On l'arrete a la fin de la
+  table. Ce n'est pas un raccourci : D4 ne fait qu'augmenter et la sortie
+  est ``D4 > 9``, donc des qu'il atteint 11 le branche est le meme.
+
+#### `m68k.to_long_word` n'est pas un masque 32 bits
+
+`to_long_word` n'est **pas** `v & 0xFFFFFFFF` : c'est un `EXT.L`, « un mot
+etendu **avec signe** » (`m68k.py:52`), c'est-a-dire `s16`. Je l'avais
+employe comme masque pour `ASL.L #3`, ce qui tronquait `numer` et `denom` a
+16 bits : 58 ecarts sur 665 essais. Corrige en `m68k.s32`.
+
+L'audit des 4 autres usages a montre que les3 restants sont justes (tous
+`to_long_word(to_word(...))` = `MOVE.W` puis `EXT.L` : `sim.py:1411`,
+`sim.py:1423`, `game.py:924`) — et il a fait apparaitre **deux vrais bugs**
+dans le bloc code 9/10 de `_do_action` (`LAB_4C0B8`, L18943-18959) :
+
+* `powers.py:619` faisait `m68k.divs_word(...)`. L'asm fait
+  `JSR (___divs,A4)`, et `___divs` est un `JMP _divs` (L24077) : la division
+  **longue** de L23385, pas `DIVS.W`. `divs_word` lisait `mana` comme un
+  **mot** — `200 000 / 2` donnait `17 232`.
+* `powers.py:622` faisait `to_long_word(pl.mana) * 2 + 0x1F4`. L'asm fait
+  `ASL.L #1` puis `ADD.L #$000001F4`, tous les deux sur **32 bits**.
+  `to_long_word` = `s16` ecrasait donc le mana en -32768..32767 avant de le
+  doubler — `32 768` donnait `4 294 902 260` au lieu de `66 036`.
+
+L'alias `ALIAS["_divs"] = "m68k.divs_word"` portait la **meme** confusion de
+largeur ; il pointe desormais sur `m68k.divs_long`.
+
+Ni `autopilot` ni `check_render` n'exercaient ce bloc : `do_action` n'est
+appele nulle part dans la suite de controle. `check_mana.py` le couvre
+desormais (section 5), et rien d'autre.
+
+#### Verification
+
+.. code-block:: none
+
+    check_mana        665/665 essais de la jauge, 0 ecart
+                      (bornes de MANA_VALUES -1/+1, 600 valeurs aleatoires,
+                       reference reecrite depuis le listing avec une
+                       definition DIFFERENTE de la troncature : int(a/b))
+    check_mana         56/56 essais do_action 9/10
+    discriminant prouve : l'ancien code en aurait echoue 26/56
+    check_mana         le curseur est VISIBLE : 105 px changent avec/sans
+                      apres tout le rendu — draw_window ne le recouvre pas
+    68/68 controles   sur les graines 1, 7, 42, 59, 99, 200, 314
+    check_render      OK
+    check_assets      OK
+    smoke_sim         OK
+    stress 2000 x 8   OK : 8/8
+    couverture        138 / 393 (35,1 %) — 22 alias fiables (21 -> 22)
+
+#### Ce qui n'a pas ete fait
+
+* Les handlers `2`, `7`, `8` de `_do_action` restent bloques sur le meme
+  mur : le lien serie + les options (`_options` 327 l., `_game_options`
+  540 l., `_write_serial`, `_read_serial`, `_serial_message`...).
+* Le controle de rendu ne couvre toujours que la fenetre 8x8 : ni les
+  sprites de l'ecusson (Phase 48), ni la jauge. `check_mana` compense pour
+  la jauge, pas pour le reste.
 
 ### Reste a faire
 ### Reste a faire

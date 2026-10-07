@@ -164,6 +164,35 @@ def divs_word(a: int, b: int) -> int:
     return -q if (s16(a) < 0) != (s16(b) < 0) else q
 
 
+def divs_long(a: int, b: int) -> int:
+    """``_divs`` (L23385-23395) : quotient signe **long**, tronque vers zero.
+
+    .. code-block:: none
+
+        CLR.L  D4
+        TST.L  D0 / BPL      ; si D0 < 0 : NEG.L D0, D4 |= 1
+        TST.L  D1 / BPL      ; si D1 < 0 : NEG.L D1, D4 ^= 1
+        BSR.S  SUB_50EEE     ; division NON SIGNEE de |D0| par |D1|
+        TST.W  D4 / BEQ      ; D4 != 0 -> NEG.L D0
+        TST.L  D0 / RTS      ; les ports sont les flags de D0
+
+    On normalise les deux signes, on divise en **valeur absolue**, puis on
+    re-rend le signe : c'est exactement la troncature vers zero de C, et non
+    ``a // b`` de Python (qui tronque vers moins l'infini).
+
+    Le resultat reste **signe** (l'asm laisse un long dans D0) ; c'est
+    ``_move_mana`` qui en prend le mot bas via ``MOVE.W D0,D5``.
+    """
+    a = s32(a)
+    b = s32(b)
+    if b == 0:
+        raise ZeroDivisionError("_divs par zero — l'asm leve une exception")
+    q = abs(a) // abs(b)
+    if (a < 0) != (b < 0):
+        q = -q
+    return s32(q)                   # D0 reste signe pour l'appelant
+
+
 def asr_word(v: int, n: int) -> int:
     """``ASR.W`` : decalage arithmetique a droite, en signee."""
     return to_word(s16(v) >> n)

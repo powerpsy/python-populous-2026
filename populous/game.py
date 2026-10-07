@@ -55,7 +55,7 @@ from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_LOWER, ACT_RAISE, ACT_TREE,  # noqa: E402
-                                BLK_FLAT, ST_VILLAGER)
+                                BLK_FLAT, MANA_VALUES, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
 from populous.render import (SCREEN_H, SCREEN_W, Renderer,  # noqa: E402
                              clamp_off, map_colours)
@@ -441,6 +441,8 @@ class Game:
 
         1. fond = qaz.pic, avec la mini-carte ecrite **en place** dans
            ``_back_scr`` (elle y reste d'une image a l'autre) ;
+        1bis. ``_move_mana`` (L622) — appele entre ``__clr_wsc`` et
+           ``__draw_it`` ;
         2. ``_draw_it`` : les 3 passes de la fenetre 8x8 ;
         3. la file ``_sprite[]`` remplie par ``_move_sprite`` ;
         4. le curseur de ``_sculpt`` (sprite 0x54, dessine par la fonte
@@ -451,6 +453,7 @@ class Game:
         self.frame.blit(self.backdrop, (0, 0))
         self._apply_icon_toggles()          # etat persistant des icones (_back_scr)
         self.ren.draw_minimap(self.frame, self.terrain, colours=self.colours)
+        self.move_mana()                    # L622 : avant __draw_it
         self.ren.draw_window(self.frame, self.terrain, self.xoff, self.yoff)
         self.ren.draw_peeps(self.frame, self.terrain, self.xoff, self.yoff,
                             self.sim)
@@ -543,6 +546,71 @@ class Game:
 
         # ---- L2965 : villageois -------------------------------------------
         self._bars_for(p.life)
+
+    def move_mana(self) -> None:
+        """``_move_mana`` (L3164-3241) — le curseur de la jauge de mana.
+
+        Appele **chaque image**, juste avant `__draw_it` (L622 : entre
+        `__clr_wsc` et la fenetre 8x8). `render.py` n'en contient aucune
+        trace : la jauge n'existait pas dans le port.
+
+        .. code-block:: none
+
+            D4 = 0
+            LAB_404DA : D2 = mana ; D1 = _mana_values[D4]      ; longs
+                        BGT -> D4 += 1  (tant que mana > v[D4])
+            CMP.W #9,D4 / BGT -> sprite fixe
+            sinon :
+                D0 = mana - v[D4-1]                            ; SUB.L
+                D0 = D0 << 3  (* 8)                            ; ASL.L #3
+                D1 = v[D4] - v[D4-1]                           ; SUB.L
+                D0 = _divs(D0, D1)                             ; L40544
+                D5 = D0                                        ; MOVE.W D0,D5
+                y = (D4-1)*8  + D5 + 8                         ; mot, ASL.W #3
+                x = (D4-1)*16 + D5*2 + $A0                     ; mot, ASL.W #4
+                _draw_sprite(_w_screen, x, y, $45)
+
+        **Les deux lectures hors table**, les deux relevees dans le listing
+        plutot que devinees :
+
+        * ``D4 == 0`` (jamais atteint : `mana` est plancher a -250 par
+          `sim.py:594` et demarre a 399, donc il faudrait `mana == -250`)
+          fait ``SUBQ.W #1`` -> indice -1, soit **4 octets avant** la table :
+          adresse $51870, qui tombe dans `_big_city` (`DC.W $0029` a $51872).
+          Les 4 octets valent donc ``$00290029``.
+        * ``D4 == 11`` (`mana > 2 000 063`) lirait `_prot_num2 = $E0ED80A7`,
+          qui est **negatif** : `mana > v[11]` serait vrai, D4 vaudrait 12,
+          puis 13... la boucle partirait en fuite sur la memoire. On
+          l'arrete a la fin de la table. C'est **observ equivalent**, pas un
+          raccourci : D4 ne fait qu'augmenter et la sortie est ``D4 > 9``,
+          donc des que D4 atteint 11 le resultat est le meme, branche
+          « sprite fixe » dans les deux cas.
+        """
+        sim = self.sim
+        mana = sim.players[sim.player].mana
+
+        d4 = 0
+        while d4 < len(MANA_VALUES) and mana > MANA_VALUES[d4]:
+            d4 += 1
+        if d4 > 9:                                   # L404FA-404FE
+            self._draw_sprite_at(0x137, 0x57, 0x45)  # L4057A-4058E
+            return
+
+        # `SUBQ.W #1` puis `EXT.L` : l'indice est signe, donc -1 pour D4=0.
+        prev = 0x00290029 if d4 == 0 else MANA_VALUES[d4 - 1]
+        cur = MANA_VALUES[d4]
+
+        # `ASL.L #3` : ecrasement sur 32 bits (le debordement ne pose que le
+        # flag V, ignore ici). `s32` masque sur 32 bits puis rend le signe.
+        # Attention, `m68k.to_long_word` NE LE FAIT PAS : c'est un `EXT.L`
+        # (mot signe etendu), et l'employer ici tronque tout a 16 bits.
+        numer = m68k.s32((mana - prev) << 3)
+        denom = m68k.s32(cur - prev)
+        d5 = m68k.to_word(m68k.divs_long(numer, denom))   # MOVE.W D0,D5
+
+        y = ((d4 - 1) * 8 + d5 + 8) & 0xFFFF              # L4054E-40556
+        x = ((d4 - 1) * 16 + (d5 << 1) + 0xA0) & 0xFFFF   # L4055A-40566
+        self._draw_sprite_at(x, y, 0x45)
 
     def _draw_sprite_at(self, x: int, y: int, sprite: int) -> None:
         """``_draw_sprite(ecran, x, y, sprite)`` — **x et y sont en pixels**.

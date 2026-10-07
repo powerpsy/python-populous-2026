@@ -65,8 +65,13 @@ ALIAS: dict[str, str] = {
     "_set_devil_magnet": "PowerEngine.set_devil_magnet",
     "_where_do_i_go": "Game.where_do_i_go",          # appele par _move_explorer
     "_rotate_all_map": "Terrain.rotate_all_map",      # Phase 47 : verifie 400 essais
+    "_move_mana": "Game.move_mana",                   # Phase 49 : verifie 665 essais
     "_newrand": "Rng.raw",
-    "_divs": "m68k.divs_word",
+    # `_divs` (L23385) est la division **longue** signee ; `___divs` n'est
+    # qu'un `JMP _divs` (L24077). Cet alias pointait sur `m68k.divs_word`
+    # (`DIVS.W`, 16 bits) — la meme confusion de largeur que celle qui
+    # tronquait `pl.mana` dans powers.py:619.
+    "_divs": "m68k.divs_long",
     "_mulu": "m68k.mulu_word",
 }
 

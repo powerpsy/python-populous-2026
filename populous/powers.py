@@ -616,10 +616,19 @@ class PowerEngine:
             # `LAB_52E00` = joueur 1. **Ce n'est pas indexe par la tribu.**
             pl = sim.players[0 if code == 9 else 1]
             if arg2:                                # L18944-18949
-                pl.mana = m68k.divs_word(m68k.s32(pl.mana), 2)
+                # `MOVEQ #2,D1 / MOVE.L (mana),D0 / JSR ___divs /
+                # MOVE.L D0,(mana)`. `___divs` est un `JMP _divs` (L24077),
+                # c'est-à-dire la division **longue** signee de L23385 — et
+                # non `DIVS.W`, qui aurait lu le mana comme un mot et l'aurait
+                # tronque au dela de 32767.
+                pl.mana = m68k.divs_long(pl.mana, 2)
             elif m68k.s32(pl.mana) < 0x186A0:      # 100 000
-                # L18954-18957 : `mana * 2 + $1F4` (500)
-                pl.mana = (m68k.to_long_word(pl.mana) * 2 + 0x1F4) & 0xFFFFFFFF
+                # L18951-18953 : `MOVE.L (mana),D0 / ASL.L #1,D0 /
+                # ADD.L #$000001F4,D0 / MOVE.L D0,(mana)` — **32 bits**.
+                # `m68k.to_long_word` est un `EXT.L` (mot etendu en signe) :
+                # l'employer ici ecrasait le mana a 16 bits avant de le
+                # doubler, donc tronquait des que `mana > 32767`.
+                pl.mana = m68k.add_long(m68k.s32(pl.mana << 1), 0x1F4)
             return
 
         if code == 11:                            # LAB_4C11E
