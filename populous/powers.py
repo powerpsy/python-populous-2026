@@ -1,4 +1,4 @@
-"""Mana, pouvoirs et IA — canal de commandes de Populous.
+﻿"""Mana, pouvoirs et IA — canal de commandes de Populous.
 
 Tout transcrit de ``docs/game_logic.md`` §4 (relire l'asm, pas le divulguer) :
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 
+from . import m68k  # noqa: E402
 from .constants import (
     ACT_ACTION, ACT_LOWER, ACT_MAGNET, ACT_NOP, ACT_QUAKE, ACT_RAISE,
     ACT_SWAMP, ACT_TREE, ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2,
@@ -543,6 +544,96 @@ class PowerEngine:
             st.p1 = 1 + sim.rng.below(3)                   # L9637-9642
             st.queued = 1                                  # L9643
 
+    def do_action(self, tribe: int, arg2: int, code: int) -> None:
+        """``_do_action`` (L18376-19004), **par morceaux**.
+
+        `_do_action` fait 640 lignes mais n'est pas un monolithe : c'est une
+        **table de saut de 16 codes** vers 14 handlers (L19007-19023), et la
+        plupart sont independants. On les transcrit donc separement.
+
+        .. code-block:: none
+
+            CMP.L #$10,D0 / BCC LAB_4C168      ; code >= 16 -> defaut
+            ASL.L #1,D0
+            MOVE.W (LAB_4C16A,PC,D0.W),D0      ; table de 16 mots
+            JMP (LAB_4C198+2,PC,D0.W)
+
+        Voici la decomposition, avec la taille de chaque handler :
+
+        ==========  =========================  ==============================
+        code         handler                    etat ici
+        ==========  =========================  ==============================
+        0 et 14      defaut (renvoie 0)         fait
+        1           `LAB_4B9EE` (23 l.)        **fait** — ecrit ``command``
+        2           `LAB_4BA34` (172 l.)       non lu (messages serie)
+        3           `_do_war` (5 l.)           appel fait, routine non lue
+        4           `do_flood` (5 l.)          idem
+        5           `_do_knight` (5 l.)        idem
+        6           `LAB_4BC62` (16 l.)        **fait** — le bouton pause
+        7           `LAB_4BC94` (122 l.)       non lu
+        8           `LAB_4BE12` (214 l.)       non lu
+        9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
+        10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
+        11          `_rotate_all_map` (3 l.)  appel fait, routine non lue
+        12          `_clear_all_map` (3 l.)   idem
+        13          `_load_ground` (17 l.)     idem
+        15          `LAB_4C15C` (5 l.)         **fait** — le tricheur
+        ==========  =========================  ==============================
+
+        Six des quatorze sont ici, dont les deux qui ecrivent l'etat de la
+        commande. Les autres **lèvent** au lieu de retomber sur le defaut :
+        un code non transcrite ne doit surtout pas passer pour un no-op, ce
+        qui est exactement l'erreur que la Phase 22 a reprochee.
+        """
+        sim = self.g.sim
+
+        if code in (0, 14):                       # LAB_4C168 : defaut
+            return
+        if not 0 <= code <= 15:
+            return
+
+        if code == 1:                             # LAB_4B9EE
+            # L18382-18401 : si c'est la tribu du joueur, on recale les
+            # icones du bandeau ; puis, **pour toute tribu** :
+            if tribe == sim.player:
+                x = TEND_X[arg2] if 0 <= arg2 < len(TEND_X) else 0
+                y = TEND_Y[arg2] if 0 <= arg2 < len(TEND_Y) else 0
+                self.g.set_tend_icons(x, y)
+            # L18426-18428 : `command[tribu] = arg2`. C'est la **seconde**
+            # ecriture de ce champ dans le listing, avec L1065.
+            sim.players[tribe].command = arg2
+            return
+
+        if code == 6:                             # LAB_4BC62
+            # icone puis **bascule de la pause**, et on efface `_toggle`
+            self.g.toggle_icon(1, 3, 0x17E4)
+            sim.pause = 0 if sim.pause else 1       # L18598-18603
+            sim.toggle = 0                       # L18605
+            return
+
+        if code in (9, 10):                       # LAB_4C0B8 / LAB_4C0EC
+            # Le code 9 agit sur `LAB_52DF0` = joueur 0, le 10 sur
+            # `LAB_52E00` = joueur 1. **Ce n'est pas indexe par la tribu.**
+            pl = sim.players[0 if code == 9 else 1]
+            if arg2:                                # L18944-18949
+                pl.mana = m68k.divs_word(m68k.s32(pl.mana), 2)
+            elif m68k.s32(pl.mana) < 0x186A0:      # 100 000
+                # L18954-18957 : `mana * 2 + $1F4` (500)
+                pl.mana = (m68k.to_long_word(pl.mana) * 2 + 0x1F4) & 0xFFFFFFFF
+            return
+
+        if code == 15:                            # LAB_4C15C
+            sim.cheat = arg2 + 1                   # L19001-19002
+            return
+
+        non_transcrit = {
+            3: "_do_war", 4: "do_flood", 5: "_do_knight",
+            7: "LAB_4BC94", 8: "LAB_4BE12", 2: "LAB_4BA34",
+            11: "_rotate_all_map", 12: "_clear_all_map", 13: "_load_ground",
+        }
+        raise NotImplementedError(
+            "_do_action code %d : handler %s non transcrit" % (code, non_transcrit[code]))
+
     def ai_choose(self, tribe: int) -> None:
         """``_set_devil_magnet`` puis ``_devil_effect`` (L3256-3259).
 
@@ -643,3 +734,4 @@ class PowerEngine:
             st.act = 12                        # rocher
         st.p1 = dx
         st.p2 = dy
+

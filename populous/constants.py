@@ -129,6 +129,13 @@ SUB_WAR = 3
 SUB_FLOOD = 4
 SUB_KNIGHT = 5
 SUB_PAUSE = 6
+
+# _tend_x / _tend_y, $51670 / $51678 (asm 24245-24248) : 4 mots chacune,
+# lus big-endian comme le 68000. Position des icones du bandeau pour les
+# quatre outils — c'est ce que `_do_action` code 1 (L18400, L18406) recale
+# quand la tribu est celle du joueur.
+TEND_X = [0x0004, 0x0003, 0x0004, 0x0005]
+TEND_Y = [0x0003, 0x0003, 0x0004, 0x0003]
 SUB_CROSS = 7
 SUB_UNK8 = 8
 SUB_HALVE0 = 9
