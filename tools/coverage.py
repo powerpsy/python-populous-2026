@@ -66,6 +66,9 @@ ALIAS: dict[str, str] = {
     "_where_do_i_go": "Game.where_do_i_go",          # appele par _move_explorer
     "_rotate_all_map": "Terrain.rotate_all_map",      # Phase 47 : verifie 400 essais
     "_move_mana": "Game.move_mana",                   # Phase 49 : verifie 665 essais
+    # Phase 51 : 11 des 16 codes transcrits et verifies (check_dispatch) ;
+    # les codes 2, 7, 8, 12, 13 LEVENT `NotImplementedError` par regle.
+    "_do_action": "PowerEngine.do_action",
     "_newrand": "Rng.raw",
     # `_divs` (L23385) est la division **longue** signee ; `___divs` n'est
     # qu'un `JMP _divs` (L24077). Cet alias pointait sur `m68k.divs_word`

@@ -22,8 +22,8 @@ from .constants import (
     ACT_SWAMP, ACT_TREE, ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2,
     BLK_ROCK3, BLK_SWAMP, BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
     COST_FLOOD, COST_KNIGHT, COST_MAGNET, COST_QUAKE, COST_RAISE, COST_SWAMP,
-    COST_VOLCANO, COST_WAR, MAP_CELLS, MAX_PEEPS, SUB_CLEAR, SUB_FLOOD,
-    SUB_KNIGHT, SUB_WAR,
+    COST_VOLCANO, COST_WAR, MAX_PEEPS, SUB_FLOOD,
+    SUB_KNIGHT, SUB_WAR, TEND_X, TEND_Y,
 )
 
 MAX_OFF = 0x38                       # _xoff/_yoff bornes a 56
@@ -293,7 +293,13 @@ class PowerEngine:
             self._remove(x, y)
             ok = True
         elif act == ACT_ACTION:
-            self._sub_action(tribe, x, y)
+            # `_do_action` est appele par `_get_message` code 14 (L18185-18193),
+            # avec `(_stats+1, _stats+2)` = `(_stats.p1, _stats.p2)` — donc
+            # exactement `(x, y)` ici. C'est `do_action`, la transcription de
+            # Phase 46/47/49, qui tourne : `_sub_action` (ecrit a la main)
+            # a ete supprime en Phase 51, il s'ecartait du listing sur trois
+            # points (voir PROGRESSION).
+            self.do_action(tribe, x, y)
             ok = True
         # 7..10 : placer un peuple (place_people) — gere dans game.py
 
@@ -314,27 +320,26 @@ class PowerEngine:
             sim.zero_population(sim.map.who[b] - 1)
             sim.map.who[b] = 0
 
-    def _sub_action(self, tribe: int, p1: int, p2: int) -> None:
-        """Sous-commandes de ``_do_action`` (§4.4)."""
-        sim = self.g.sim
-        if p2 == SUB_WAR:
-            self.do_war(tribe)
-        elif p2 == SUB_FLOOD:
-            self.do_flood(tribe)
-        elif p2 == SUB_KNIGHT:
-            self.do_knight(tribe, 0, 0)
-        elif p2 == 9:                         # demi-mana joueur 0
-            pl = sim.players[0]
-            pl.mana = (pl.mana // 2) if p1 else min(pl.mana * 2 + 500, 100000)
-        elif p2 == 10:                        # demi-mana joueur 1
-            pl = sim.players[1]
-            pl.mana = (pl.mana // 2) if p1 else min(pl.mana * 2 + 500, 100000)
-        elif p2 == SUB_CLEAR:
-            for i in range(MAP_CELLS):
-                sim.map.blk[i] = BLK_WATER
-                sim.map.bk2[i] = 0
-                sim.map.who[i] = 0
-        # 11 (rotate) et 13 (ground) traites ailleurs ; 12/14/15 no-op ou cheat
+    # `_sub_action` vivait ici : la version ecrite a la main des
+    # sous-commandes de `_do_action`. Supprime en Phase 51 au profit de
+    # `do_action`, la transcription du listing. Il s'en ecartait en trois
+    # points, tous mesurables :
+    #
+    #   * codes 9/10 : `min(pl.mana * 2 + 500, 100000)` — le `min` n'existe
+    #     pas dans le listing, qui fait `CMPI.L #$186A0 / BGE` : au-dela de
+    #     100 000 la valeur est laissee telle quelle. 60 000 devait donner
+    #     120 500, l'ecrit a la main donnait 100 000 ;
+    #   * codes 9/10 : `// 2` tronque vers -inf sur un entier Python, la ou
+    #     l'asm appelle `___divs`, qui est un `JMP _divs` (L24077), la
+    #     division LONGUE signee de L23385 ;
+    #   * code 12 : une boucle `blk = BLK_WATER` qui n'a aucun rapport avec
+    #     `_clear_all_map` (L6926), lequel vide `alt`/`who`/`bk2`/`blk` en
+    #     **0**, tue tous les peeps par `_zero_population` puis razie
+    #     `_no_peeps`.
+    #
+    # Il retombait en no-op silencieux sur 1, 6, 11 et 15, la ou
+    # `do_action` les traite — contraire a la regle de Phase 22 (un code
+    # non transcrit doit lever, pas passer pour un no-op).
 
     # ------------------------------------------------------------------- IA
     # ------------------------------------------------ seuils de _devil_effect
@@ -566,24 +571,29 @@ class PowerEngine:
         0 et 14      defaut (renvoie 0)         fait
         1           `LAB_4B9EE` (23 l.)        **fait** — ecrit ``command``
         2           `LAB_4BA34` (172 l.)       non lu (messages serie)
-        3           `_do_war` (5 l.)           appel fait, routine non lue
-        4           `do_flood` (5 l.)          idem
-        5           `_do_knight` (5 l.)        idem
+        3           `LAB_4BC38` -> `_do_war`   **fait** — appelle `do_war`
+        4           `LAB_4BC46` -> `_do_flood` **fait** — appelle `do_flood`
+        5           `LAB_4BC54` -> `_do_knight` **fait** — appelle `do_knight`
         6           `LAB_4BC62` (16 l.)        **fait** — le bouton pause
         7           `LAB_4BC94` (122 l.)       non lu
         8           `LAB_4BE12` (214 l.)       non lu
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
         11          `_rotate_all_map` (99 l.)   **fait** — pli max + arbres
-        12          `_clear_all_map` (3 l.)   appel fait, routine non lue
-        13          `_load_ground` (17 l.)     idem
+        12          `LAB_4C124` -> `_clear_all_map`  non lu
+        13          `LAB_4C12A` -> `_load_ground`     non lu
         15          `LAB_4C15C` (5 l.)         **fait** — le tricheur
         ==========  =========================  ==============================
 
-        Six des quatorze sont ici, dont les deux qui ecrivent l'etat de la
-        commande. Les autres **lèvent** au lieu de retomber sur le defaut :
-        un code non transcrite ne doit surtout pas passer pour un no-op, ce
-        qui est exactement l'erreur que la Phase 22 a reprochee.
+        Onze des seize codes sont ici (le defaut partage par 0 et 14
+        compris) ; cinq — `2`, `7`, `8`, `12`, `13` — **lèvent** au lieu de
+        retomber sur le defaut : un code non transcrit ne doit surtout pas
+        passer pour un no-op, ce qui est exactement l'erreur que la Phase 22
+        a reprochee. Le cas 12 est a noter : `_sub_action` (supprime en
+        Phase 51) y mettait une boucle `blk = BLK_WATER` de son cru, alors
+        que `_clear_all_map` (L6926) vide `alt`/`who`/`bk2`/`blk` en **0**,
+        tue les peeps par `_zero_population` puis razie `_no_peeps`. Mieux
+        valait le lever que laisser tourner une invention.
         """
         sim = self.g.sim
 
@@ -629,6 +639,24 @@ class PowerEngine:
                 # l'employer ici ecrasait le mana a 16 bits avant de le
                 # doubler, donc tronquait des que `mana > 32767`.
                 pl.mana = m68k.add_long(m68k.s32(pl.mana << 1), 0x1F4)
+            return
+
+        if code == SUB_WAR:                       # LAB_4BC38
+            # L18577-18580 : `MOVE.W (8,A5),-(A7) / JSR _do_war` — un seul
+            # argument, la tribu.
+            self.do_war(tribe)
+            return
+
+        if code == SUB_FLOOD:                     # LAB_4BC46
+            # L18582-18585 : `JSR ___do_flood`, meme frame qu'au dessus.
+            self.do_flood(tribe)
+            return
+
+        if code == SUB_KNIGHT:                    # LAB_4BC54
+            # L18587-18590 : `JSR _do_knight`, la encore **un seul** argument
+            # empile. `do_knight` prend `(tribe, x, y)` par compatibilite avec
+            # l'autre chemin d'appel ; le corps n'en lit que le premier.
+            self.do_knight(tribe, 0, 0)
             return
 
         if code == 11:                            # LAB_4C11E

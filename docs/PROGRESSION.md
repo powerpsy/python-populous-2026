@@ -3485,6 +3485,180 @@ desormais (section 5), et rien d'autre.
   sprites de l'ecusson (Phase 48), ni la jauge. `check_mana` compense pour
   la jauge, pas pour le reste.
 
+### Phase 50 - `_do_action` est orphelin : c'est mesure
+
+Rien n'etait casse. On voulait simplement savoir si la transcription des
+codes 9/10 (Phase 49) pouvait etre exercée autrement que par
+`tools/check_mana.py`. La reponse est **non**, et la mesure va plus loin.
+Nouvel outil : `tools/probe_dispatch.py`.
+
+#### 1. `PowerEngine.do_action` n'a aucun appelant
+
+`grep do_action` sur tout le depot ne renvoie que la definition, sa
+docstring, et `check_mana.py`. Aucun appel depuis le jeu.
+
+L'equivalent cible est `PowerEngine._sub_action` (`powers.py:317`),
+atteint par `dispatch()` quand `act == ACT_ACTION (14)`. **Deux
+implementations de la meme routine coexistent** : la fidele (Phases
+46/47/49), et celle ecrite a la main avant elle, qui s'en ecarte en trois
+points nommables :
+
+* `min(pl.mana * 2 + 500, 100000)` : le `min` est une **invention**. Le
+  listing fait `CMPI.L #$186A0 / BGE` : au-dela de 100 000 la valeur est
+  **laissee telle quelle**, elle n'est pas bornee. `mana = 60 000` doit
+  donner `120 500`, et non `100 000`.
+* `// 2` tronque vers moins l'infini sur un entier Python ; l'asm appelle
+  `___divs`, qui est un `JMP _divs` (L24077), la division **longue**.
+* les sous-codes `1`, `6`, `11`, `15` n'y figurent pas du tout : ils
+  retomberaient en no-op silencieux, la ou `do_action` les traite
+  (commande + icones, pause, rotation, triche).
+
+Or la politique du projet est explicite (Phase 22) : *un code non transcrit
+doit **lever**, pas passer pour un no-op*. Les deux implementations sont
+donc en contradiction, et c'est la seconde qui tourne.
+
+#### 2. Aucune des deux n'est jamais atteinte
+
+`probe_dispatch.py` espionne `dispatch`, `_sub_action`, `do_action`,
+`ai_choose`, `_devil_effect`, `grow_peep` et `battle_over`, et pilote la
+vraie boucle d'image (`Game.image()`, 4000 tours, graines 59 et 112) :
+
+.. code-block:: none
+
+    appels de dispatch()             : 8000    (2 par tour, via do_queued)
+       act=15 (ACT_NOP)              : 7998
+       act=0                         :    2
+    act == 14 (sous-commandes)       :    0
+    _sub_action appele               :    0
+    do_action appele                 :    0
+    ai_choose appele                 : 4000
+      dont _devil_effect             : 4000
+      dont il a change st.act        :    0
+
+`smoke_sim` ne voit rien de tout cela : il ne pilote que `sim`, jamais
+`Game.image()`, donc jamais `_run_commands -> do_queued -> dispatch`.
+
+#### 3. Le mana ne depasse jamais le premier seuil
+
+.. code-block:: none
+
+    tour   mana J  mana A  peeps  habite
+        50      424     424      2       2
+       200      499     499      2       2
+      1000      899     899     19       8
+      3000     1899    1899    208      13
+      4000     2399    2399    208      13
+
+    grow_peep appele            : 62924 fois
+    ages observes (frame-0x20)  : {1: 8019, 2: 19803, 3: 35102}
+    mana_add                    : [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 20]
+    mana apporte par grow_peep  : 0
+    battle_over appele          : 0
+    399 + 4000 x 0.5 = 2399  <- exactement le mana final
+
+Le mana final est **exactement** le rythme de base (`L3308`, `+1` un tour
+sur deux) : ni `grow_peep` ni `battle_over` n'a rien apporte.
+
+* `grow_peep` est appele 62 924 fois, mais `age = p.frame - FRAME_AGE` ne
+  depasse jamais **3**, parce que `p.frame = 0x20 + score*10 // 0x131`
+  (`sim.py:985`) avec `score = check_life(...)` qui plafonne vers 93..123
+  sur cette carte ; et les **quatre premiers crans de `mana_add` valent 0**.
+* sur la carte **plate** de `smoke_sim`, au contraire, tous les peeps sont
+  en `FRAME_TOWN` (42), soit `age = 10` et `mana_add[10] = 20` — d'ou la
+  trajectoire 524 / 979 / 4759 / 15759 de cet outil, qui n'a donc jamais
+  ete comparable a celle-ci.
+
+Le seuil le plus bas de `_devil_effect` est `TH_PC = 2 500 + 500 = 3 000`.
+Au rythme de base il faudrait `(3000-399)/0.5 = 5202 tours`, et
+`check_life` n'ajoute rien ici. D'ou le fait mesure : **sur les deux
+graines, a 4 000 tours, aucun pouvoir n'est jamais lance.**
+
+#### Ce que cette mesure ne dit pas
+
+Elle ne dit **pas** que `check_life` est faux : une carte d'origine est
+rugged, `check_life` y est raisonnablement plus faible que sur un plateau
+artificiel, et les zeros de `mana_add` viennent du fichier `land` lui-meme
+(la declaration est `DS.L 5 / DS.W 1`, une reserve remplie au chargement,
+donc le listing ne donne pas les valeurs). Ce qui est un fait, c'est la
+consequence mesurée ci-dessus. Trancher s'il en serait autrement dans
+l'original demande l'oracle 68000, qui est **ferme** (118/393).
+
+### Phase 51 - `_sub_action` supprime, `do_action` cabling — et son `NameError`
+
+La Phase 50 a montre que la transcription fidele de `_do_action` n'avait
+aucun appelant. On la branche, et on met un controle devant : nouvel
+outil `tools/check_dispatch.py`.
+
+#### Ce qui a change
+
+* `dispatch(tribe, ACT_ACTION, p1, p2)` appelle desormais `do_action`,
+  et non plus `_sub_action` (supprime). L'ordre est celui du point d'appel
+  `LAB_4B7FA` (L18185-18193) : `8(A5)=tribe`, `$A(A5)=p1=_stats+1`,
+  `$C(A5)=p2=_stats+2` — et c'est bien `p2`, le **troisieme** argument,
+  qui porte le commutateur (L18378).
+* les codes **3, 4, 5** entrent dans `do_action`. La table de la Phase 46
+  les donnait pour « appel fait, routine non lue » : en fait
+  `LAB_4BC38/4BC46/4BC54` ne sont que trois wrappers d'un seul argument
+  (`MOVE.W (8,A5),-(A7) / JSR ...`) qui appellent `do_war`, `do_flood` et
+  `do_knight` — tous trois deja presents dans le port.
+* `SUB_CLEAR` et `MAP_CELLS` sortent de l'import de `powers.py` : plus
+  aucun utilisateur une fois `_sub_action` parti.
+* `ALIAS["_do_action"] = "PowerEngine.do_action"` — 11 des 16 codes
+  transcrits et verifies, les 5 autres levent.
+
+#### Le `NameError` que personne n'avait vu
+
+Premier tir de `check_dispatch.py` :
+
+.. code-block:: none
+
+    routage 3/4/5 -> do_war/do_flood/do_knight : 0 ecart(s)
+    NameError: name 'TEND_X' is not defined
+      powers.py, line 609, dans do_action
+
+`do_action` code 1 reference `TEND_X` / `TEND_Y` depuis la Phase 46 —
+constantes bien la, `constants.py:137-138`, mais **jamais importees** dans
+`powers.py`. Un `NameError` et non un `AttributeError` : aucune des
+verifications existantes ne pouvait le declencher, parce qu'`autopilot`
+ne fait jamais `dispatch(..., 14, ...)` (mesure en Phase 50 : 0 occurrence
+sur 4000 tours).
+
+C'est la deuxieme manifestation d'un meme defaut, apres le
+`to_long_word` mal employe de la Phase 49 : **un code sans appelant ne
+peut pas echouer**, donc il ne peut pas non plus etre corrige par
+l'execution. D'ou `check_dispatch.py`.
+
+#### Verification
+
+.. code-block:: none
+
+    check_dispatch    routage 3/4/5 -> do_war/do_flood/do_knight : 0 ecart
+                      routage 1/6/11/15 sans lever              : 0 levage
+                      codes 2/7/8/12/13 levent                  : 5/5
+                      codes 9/10 via dispatch : 56 essais, 0 ecart
+                      code 1 ecrit players[].command            : OK
+                      => TOUS LES CONTROLES DE ROUTAGE SONT VERTS
+    check_mana        665/665 + 56/56, 0 ecart
+    68/68 controles   graine 59
+    check_render      OK
+    check_assets      OK
+    smoke_sim         OK
+    stress 2000 x 8   OK : 8/8
+    couverture        144 / 393 (36,6 %) — 23 alias fiables (22 -> 23)
+
+#### Ce qui n'a pas ete fait
+
+* Le routage est mesure, mais **jamais parcouru en jeu** : la Phase 50 a
+  montre que `_devil_effect` n'ecrit `st.act` 0 fois sur 4000 tours, donc
+  `dispatch(..., 14, ...)` reste inatteint dans une vraie partie.
+  `check_dispatch` l'exerce artificiellement — c'est volontaire, mais ce
+  n'est pas la meme chose, et il faut le lire comme tel.
+* `2`, `7`, `8`, `12`, `13` leverent toujours. `12` est le plus dommage :
+  `_clear_all_map` (L6926) est un corps reel d'une cinquantaine de lignes
+  (vide `alt`/`who`/`bk2`/`blk` en **0**, tue les peeps par
+  `_zero_population`, puis razie `_no_peeps`), pas les « 3 l. » que la
+  table de la Phase 46 annoncait.
+
 ### Reste a faire
 ### Reste a faire
 
