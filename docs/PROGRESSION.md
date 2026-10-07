@@ -3071,6 +3071,168 @@ Concretement pour la suite : tout « je n'ai trouve qu'une seule ecriture »
 doit etre accompagne du motif employe, et lu avant d'en tirer une
 conclusion. C'est note dans le code, au-dessus du point concerne.
 
+### Phase 47 - `_rotate_all_map`, et une fausse alerte evitee
+
+On continue a decouper `_do_action`. Le code 11 (`LAB_4C11E`, 3 lignes)
+appelle `_rotate_all_map` : 99 lignes de transformation pure, donc
+verifiable par confrontation a une reecriture independante. C'est la bonne
+unite.
+
+#### 1. Ce que la routine revele sur `_alt`
+
+Trois blocs, dans cet ordre (L6824-6921) :
+
+.. code-block:: none
+
+    1. _alt        L6830-6868   paires (i, $1080-i)
+    2. _map_bk2    L6874-6904   propagation des tuiles d'arbre $32..$37
+    3. _make_map(0,0,$3F,$3F)   les blocs sont RECALCULES depuis _alt
+
+Point 1 : `$1080 = 4224`, et pour une grille 65x65 le jumeau d'un sommet
+k = y*65+x sous une rotation 180 degres est `4224 - k` exactement. La boucle
+va de `i = 0` a `i < $1080 >> 1`, soit 2112 iterations : elle couvre **tous**
+les indices sauf le centre 2112. C'est une rotation 180 degres **parfaite**.
+
+Et la taille tombe juste :
+`_alt: DS.L $840` + `DS.W 1` = 8448 + 2 = **8450 octets = 4225 mots**.
+
+Le deuxieme bloc confirme par un chemin different : `_one_block_flat` indexe
+`_alt` avec `MULS #$0041` (= 65) et des offsets `k`, `k+1`, `k+$41`, `k+$42`
+— les quatre coins d'une case. Ce sont des **sommets**, pas des cases.
+
+Donc, et c'est la reponse a la question ouverte posee dans `terrain.py:78`
+(« 4225 sommets ? 4096 cases ? ») :
+
+.. code-block:: none
+
+    _alt      4225 mots    65 x 65 sommets    = terrain.alt      (notre port)
+    _map_alt  4096 octets  64 x 64 cases      = terrain.disp_alt / map.alt
+
+Deux tables distinctes, meme racine de nom. Notre port avait **deja** la
+bonne taille : `terrain.alt = [0] * N_VERTS` avec `N_VERTS = ALT_W*ALT_W`
+et `ALT_W = 65`, et la docstring de `terrain.py:21-23` l'ecrit deja.
+
+#### 2. La fausse alerte que je n'ai pas signalee
+
+En cherchant « avons-nous `_alt` ? », j'ai tape `\balt\b` et obtenu :
+
+.. code-block:: python
+
+    map.py:33    __slots__ = ("blk", "alt", "bk2", "steps", "who")
+    terrain.py:65    self.disp_alt = bytearray(N_CELLS)      # 4096 !
+
+`map.alt` fait 4096 octets, et `terrain.py:78` posait la question avec un
+point d'interrogation. J'ai failli ecrire un rapport de bug : « notre grille
+de sommets n'a que 4096 entrees au lieu de 4225, donc `_one_block_flat`
+rend 0 sur tout le bord bas-droite ».
+
+**C'etait faux.** `map.alt` est `_map_alt` (4096 cases), pas `_alt` (4225
+sommets). La bonne ligne etait `terrain.py:63`, deux lignes au-dessus de
+celle que j'avais lue : `self.alt = [0] * N_VERTS`.
+
+Ce qui a evite l'erreur : j'ai lu le fichier **entier** au lieu d'une
+extrait de grep. La deuxieme erreur de la session aurait ete le miroir
+exact de la premiere — Phase 45 : une recherche qui ne trouve rien et qu'on
+prend pour une preuve d'absence. Ici : **une recherche qui trouve un
+symbole homonyme et qu'on prend pour le bon**. Meme famille, meme garde-fou :
+lire la source, pas le resultat de la recherche.
+
+#### 3. Deux ecarts assumes, ecrits dans le code
+
+**L'ecart 1 : le bloc `_alt` n'est pas un echange.**
+
+.. code-block:: none
+
+    42ff0  MOVE.W (0,A0,D0.L),D2       ; D2  = alt[i]
+    42ff4  CMP.W  (0,A1,D1.L),D2       ; alt[i] - alt[j]      (BGE, signe)
+    42ff8  BGE.S  43016                ; si alt[i] >= alt[j], on saute
+    43010  MOVE.W (A0,D0),(A1,D1)       ; alt[i] = alt[j]   (fall-through)
+    43016  MOVE.W (A0,D0),(A1,D1)       ; alt[j] = alt[i]   (inconditionnel)
+
+Un `swap` exigerait un registre ou une pile pour conserver la valeur
+**d'origine** de `alt[i]` — il n'y en a aucun dans le bloc. Les deux cases
+de la paire finissent donc egales au **maximum** des deux valeurs d'origine.
+On transcrit le pli max ; on ne « corrige » pas vers un echange, ce serait
+de la reconstruction.
+
+**L'ecart 2 : la boucle `_map_bk2` rate la paire centrale.**
+
+`i < $0FFF >> 1` donne `i < 2047`, donc dernier `i = 2046` : les cases
+2047 et 2048 ne sont jamais jumellees. La boucle `_alt`, elle, est juste
+(2112 iterations pour 4225 sommets, centre 2112 intact). L'off-by-one est
+donc reel, et **seulement** cote `bk2`.
+
+Ni l'un ni l'autre n'est signale comme erreur : ce sont des faits du
+listing, ecrits dans la docstring.
+
+#### 4. Verification
+
+Confrontation a une reecriture independante, ecrite directement depuis le
+listing avec la semantique 68000 explicite : `s16()` pour les mots, `BGE`
+**signe**, `BCS`/`BHI` **non signes**. Les altitudes tirees dans `[-3, +8]`
+pour exercer le cas signe, les octets `bk2` sur 0..255 pour exercer les
+bornes `32..37`.
+
+.. code-block:: none
+
+    essais                : 400
+    ECARTS                : 0   (alt, bk2, blk, disp_alt, steps)
+
+    paires (i,4224-i) au max          : 2112 / 2112
+    sommet central 2112 inchange      : True
+    derniers i parcourus              : alt=2111  bk2=2046
+
+Le `_draw_map(0,0,$3F,$3F)` final n'est pas rappelle : dans notre port la
+mini-carte est repeinte **chaque image** depuis `terr.blk` (`Game.compose`,
+L453), donc l'effet est identique.
+
+#### 5. Le chiffre de couverture, et ce qu'il ne dit pas
+
+.. code-block:: none
+
+    AVANT  (HEAD)      : 134 / 393  (34.1%)   alias 20   cite 114   collision 91
+    APRES  (ce qui suit): 136 / 393  (34.6%)   alias 21   cite 115   collision 92
+
+Attention : **seul +1 est une vraie transcription** (`_rotate_all_map` passe
+en alias). Les 4 autres proviennent des docstrings de la Phase 46, qui
+citent des noms avec un renvoi `L####` — l'outil les compte en « citation
+reperee », qui n'est **pas** « alias declare (fiable) ». C'est pour cela que
+les deux colonnes sont separees depuis le debut.
+
+Le chiffre honnete a annoncer reste **21 alias fiables** ; le taux
+global 34.6 % est un plafond, pas un acquis.
+
+#### 6. Ou bloque `_do_action`
+
+Il reste trois handlers : 2 (`LAB_4BA34`, 172 l.), 7 (`LAB_4BC94`, 122 l.)
+et 8 (`LAB_4BE12`, 214 l.). Tous les trois relevent d'un **meme mur**, ce
+qu'on ne voyait pas quand ils etaient un bloc de 640 lignes :
+
+.. code-block:: none
+
+    2  : echange d'options par lien serie
+    7  : echange d'options par lien serie
+    8  : ecran _game_options + synchronisation serie
+
+Le mur partage est : `_options` (327 l.), `_game_options` (540 l.),
+`_write_serial`, `_read_serial`, `_serial_message`, `_do_message`,
+`_check_cancel`.
+
+Deux mesures sont resolues en chemin :
+
+* mes premieres mesures de taille disaient `_options` = 10 lignes et
+  `_game_options` = 18 lignes. **C'est faux** : ma boucle de fin s'arretait
+  au premier `LAB_`, qui est une etiquette. Les vrais corps font 327 et 540
+  lignes ;
+* `_read_serial` / `_write_serial` ne sont **pas** du materiel : c'est un
+  ring buffer logiciel de 120 octets (`_serial` = {head, tail, drapeau TX,
+  tampon[120]}), les octets entrant par l'interruption. `_write_serial`
+  pose les octets dans `SERDAT` en attendant que `_serial+4` retombe.
+
+Donc le decoupage de `_do_action` a rendu le vrai probleme visible : ce qui
+reste n'est pas « trop gros pour une session », c'est **un sous-systeme**
+(le lien serie et les menus d'options), avec un mur de dependances commun.
+
 ### Reste a faire
 ### Reste a faire
 

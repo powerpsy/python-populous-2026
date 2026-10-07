@@ -64,6 +64,7 @@ ALIAS: dict[str, str] = {
     "_do_computer_effect": "PowerEngine.do_computer_effect",
     "_set_devil_magnet": "PowerEngine.set_devil_magnet",
     "_where_do_i_go": "Game.where_do_i_go",          # appele par _move_explorer
+    "_rotate_all_map": "Terrain.rotate_all_map",      # Phase 47 : verifie 400 essais
     "_newrand": "Rng.raw",
     "_divs": "m68k.divs_word",
     "_mulu": "m68k.mulu_word",

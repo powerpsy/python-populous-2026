@@ -574,8 +574,8 @@ class PowerEngine:
         8           `LAB_4BE12` (214 l.)       non lu
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
-        11          `_rotate_all_map` (3 l.)  appel fait, routine non lue
-        12          `_clear_all_map` (3 l.)   idem
+        11          `_rotate_all_map` (99 l.)   **fait** — pli max + arbres
+        12          `_clear_all_map` (3 l.)   appel fait, routine non lue
         13          `_load_ground` (17 l.)     idem
         15          `LAB_4C15C` (5 l.)         **fait** — le tricheur
         ==========  =========================  ==============================
@@ -622,6 +622,12 @@ class PowerEngine:
                 pl.mana = (m68k.to_long_word(pl.mana) * 2 + 0x1F4) & 0xFFFFFFFF
             return
 
+        if code == 11:                            # LAB_4C11E
+            # `_rotate_all_map(0,0,63,63)` — un seul appel, sans argument
+            # pertinent pour nous : `arg2` n'est pas lu dans ce handler.
+            self.g.terrain.rotate_all_map()
+            return
+
         if code == 15:                            # LAB_4C15C
             sim.cheat = arg2 + 1                   # L19001-19002
             return
@@ -629,7 +635,7 @@ class PowerEngine:
         non_transcrit = {
             3: "_do_war", 4: "do_flood", 5: "_do_knight",
             7: "LAB_4BC94", 8: "LAB_4BE12", 2: "LAB_4BA34",
-            11: "_rotate_all_map", 12: "_clear_all_map", 13: "_load_ground",
+            12: "_clear_all_map", 13: "_load_ground",
         }
         raise NotImplementedError(
             "_do_action code %d : handler %s non transcrit" % (code, non_transcrit[code]))

@@ -313,6 +313,74 @@ class Terrain:
                 blk[idx] = mask if blk[idx] != BLK_PROTECT else BLK_PROTECT
                 steps[idx] = 0
 
+    # ------------------------------------------------------- _rotate_all_map
+    def rotate_all_map(self) -> None:
+        """``_rotate_all_map`` (L6824-6921) — **transcrit tel quel**.
+
+        Trois blocs, dans cet ordre :
+
+        1. **``_alt``** (L6830-6868) : les paires ``(i, 0x1080-i)`` sont les
+           partenaires d'une rotation 180° de la grille 65×65 de sommets
+           (``0x1080 = 4224``, et ``k' = 4224 - k`` pour ``(x,y) -> (64-x,64-y)``).
+           La boucle va de ``i = 0`` à ``i < 0x1080 >> 1``, soit ``2112``
+           itérations : elle couvre **tous** les indices sauf le centre 2112.
+        2. **``_map_bk2``** (L6874-6904) : les tuiles d'arbre (``$32..$37``)
+           sont propagées vers leur partenaire ``(i, 0xFFF-i)``.
+        3. ``_make_map(0,0,$3F,$3F)`` — les blocs sont **recalculés** depuis
+           ``_alt``, donc la forme du terrain vient entièrement de l'étape 1.
+
+        **L'écart assumé.** L'étape 1 n'est **pas un échange** : il n'existe
+        aucune variable temporaire nulle part dans le bloc, et l'ordre des deux
+        écritures fait que chaque paire finit avec les **deux** cases égales au
+        **maximum** des deux valeurs d'origine :
+
+        .. code-block:: none
+
+            42ff0  MOVE.W (0,A0,D0.L),D2       ; D2  = alt[i]
+            42ff4  CMP.W  (0,A1,D1.L),D2       ; D2  = alt[i] - alt[j]
+            42ff8  BGE.S  43016                ; si alt[i] >= alt[j], on saute
+            43010  MOVE.W (A0,D0),(A1,D1)       ; alt[i] = alt[j]   (fall-through)
+            43016  MOVE.W (A0,D0),(A1,D1)       ; alt[j] = alt[i]   (inconditionnel)
+
+        Un ``swap`` aurait besoin d'un registre ou d'une pile pour garder la
+        valeur **d'origine** de ``alt[i]`` ; il n'y en a aucun. On transcrit
+        donc le pli max, et l'on ne « corrige » pas vers un échange : ce serait
+        de la reconstruction, pas de la transcription.
+
+        **Le second écart** : la boucle ``_map_bk2`` teste
+        ``i < 0xFFF >> 1``, soit ``i < 2047`` — elle rate donc la paire centrale
+        ``(2047, 2048)``. La boucle ``_alt``, elle, est juste (``2112`` pairs
+        pour 4225 sommets). L'off-by-one est donc réel et côté ``bk2`` seul.
+
+        Le ``_draw_map(0,0,$3F,$3F)`` final (L6918) n'est pas rappelé ici :
+        dans notre port la mini-carte est repeinte **chaque image** depuis
+        ``terr.blk`` (``Game.compose``, L453), donc l'effet est identique.
+        """
+        alt = self.alt
+        d5 = 0x1080
+        d4 = 0
+        while d4 < (d5 >> 1):
+            i = d4
+            j = d5 - d4
+            if alt[i] < alt[j]:            # L6846-6850, BGE → signe
+                alt[i] = alt[j]            # L6846-6850
+            alt[j] = alt[i]                # L6856-6861, inconditionnel
+            d4 += 1
+
+        bk2 = self.bk2
+        d5 = 0x0FFF
+        d4 = 0
+        while d4 < (d5 >> 1):              # i < 2047 : rate (2047, 2048)
+            j = d5 - d4
+            v = bk2[d4]
+            if 0x32 <= v <= 0x37:          # L6876-6884, BCS/BHI = non signé
+                bk2[j] = v                 # L6884-6888
+            elif 0x32 <= bk2[j] <= 0x37:   # L6890-6898
+                bk2[d4] = bk2[j]           # L6904
+            d4 += 1
+
+        self.make_map(0, 0, 0x3F, 0x3F)    # L6906-6915
+
     # ------------------------------------------------------ _make_woods_rocks
     def make_woods_rocks(self, rng: Rng) -> None:
         """``_make_woods_rocks`` (L8535) : 7 amas de rochers + 15 d'arbres."""
