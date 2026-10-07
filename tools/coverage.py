@@ -59,6 +59,11 @@ ALIAS: dict[str, str] = {
     "_move_sprite": "Game.move_peeps",
     "_get_heading": "Game.get_heading",     # Phase 36 : transcrit et verifie
     "_move_magnet_peeps": "Game.move_magnet_peeps",   # Phase 37 : verifie
+    "_move_explorer": "Game.move_explorer",          # Phase 40 : dispatch cable
+    "_devil_effect": "PowerEngine.devil_effect",     # Phase 42-43
+    "_do_computer_effect": "PowerEngine.do_computer_effect",
+    "_set_devil_magnet": "PowerEngine.set_devil_magnet",
+    "_where_do_i_go": "Game.where_do_i_go",          # appele par _move_explorer
     "_newrand": "Rng.raw",
     "_divs": "m68k.divs_word",
     "_mulu": "m68k.mulu_word",
@@ -71,12 +76,10 @@ ALIAS: dict[str, str] = {
 #: alias declare vers un symbole inexistant signale une regression ; une
 #: entree ici signale du travail **a faire**.
 PLANIFIE: set[str] = {
-    "_devil_effect",          # Phase 26 : lu, structure relue, code mort trouve
-    "_set_devil_magnet",      # Phase 26 : depends de _devil_effect
-    "_do_computer_effect",    # Phase 26 : appele par _devil_effect, pas encore lu
-    # Phase 28-37 : lu integralement, tables verifiees dans les octets, puis
-    # transcrit et verifie sur 3000 etats. Il reste a le brancher sur
-    # `_move_peeps`, qui ne l appelle pas encore.
+    # Phase 43 : les trois routines de l IA sont transcrites et cablees.
+    #   `_set_devil_magnet` est du CODE MORT (L1065 est la seule ecriture de
+    #   `command`, et la routine exige `command == 0`) — mais elle est
+    #   appelee quand meme, comme le fait le listing.
 }
 
 RE_FONCTION = re.compile(r"^(_[A-Za-z0-9_]+):\s*$")
@@ -219,15 +222,23 @@ def main() -> int:
         par_etat.setdefault(etat, []).append(r)
 
     n_total = len(rs)
+    n_code = sum(1 for r in rs if r["code"] > 0)
+    n_donnees = n_total - n_code
     n_reel = len(par_etat.get("alias", [])) + len(par_etat.get("cite", []))
     pct = 100.0 * n_reel / n_total if n_total else 0.0
+    pct_code = 100.0 * n_reel / n_code if n_code else 0.0
 
     print("lignes du listing      : %d" % (len(lignes) - 1))
-    print("routines _xxx:         : %d" % n_total)
-    print("  dont lignes de code  : %d"
-          % sum(r["code"] for r in rs))
+    print("etiquettes _xxx:       : %d" % n_total)
+    print("  routines AVEC code   : %d" % n_code)
+    print("  symboles de DONNEES  : %d   (`_peeps`, `_alt`, `_to_delta`...)"
+          % n_donnees)
+    print("  lignes de code       : %d" % sum(r["code"] for r in rs))
     print()
-    print("COUVERTURE REELLE      : %d / %d  (%.1f%%)" % (n_reel, n_total, pct))
+    print("COUVERTURE REELLE      : %d / %d  (%.1f%%)"
+          % (n_reel, n_total, pct))
+    print("  sur les routines seulement : %d / %d  (%.1f%%)"
+          % (n_reel, n_code, pct_code))
     print("  par alias declare    : %d  (fiable)"
           % len(par_etat.get("alias", [])))
     print("  par citation reperee : %d  (nom + renvoi asm)"
