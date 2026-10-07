@@ -2582,6 +2582,76 @@ verifie pas la transcription contre la machine — mais verifie la transcription
 contre **une deuxieme lecture du meme texte**, ce qui est deja mieux que
 rien.
 
+### Phase 39 - Brancher `move_magnet_peeps` : tentative, mesuree, annulee
+
+`move_magnet_peeps` etait transcrit et verifie mais **jamais appele**. Un
+`Select-String` sur son nom donne le verdict en une ligne : un seul appelant,
+et ce n'est pas `_move_peeps`.
+
+.. code-block:: none
+
+    4415: JSR (_move_magnet_peeps,PC)   ->  dans _move_explorer
+
+`_move_explorer` (L4398-4621, 224 lignes) contient le dispatch :
+
+.. code-block:: none
+
+    L4404: LEA   (LAB_52DE8,A4)          ; Player + 4
+    L4405: TST.W (0,A0,D0.L) / BEQ -> LAB_413F4   (l'aimant)
+    L4408: TST.L ($E,A0)     / BNE -> LAB_413F4   (cible designee)
+    L4410: TST.W (_war,A4)   / BEQ -> LAB_41408   (destination directe)
+
+et, si le retour vaut `$03E7` (aucun des huit passages ne meninge) :
+
+.. code-block:: none
+
+    L4429: BSET #6,(A0)        ; state |= $40
+    L4431: MOVE.W #$0007,(6,A0) ; w6 = 7
+
+#### Pourquoi le branchement a ete annule
+
+`LAB_52DE8` est notre `Player.command`. Les **17 sites** du listing qui le
+mentionnent sont tous des **lectures** — `TST.W` et `CMPI.W` — faites pour
+choisir l icone a dessiner :
+
+.. code-block:: none
+
+    L2461: TST.W  (0,A0,D0.L)   ; _player*16
+    L2475: CMPI.W #$0001,(0,A0,D0.L)
+
+C'est donc un etat d'**interface**, pose par les clics de la barre d'outils,
+et non transcrit chez nous. Il reste donc a 0, et la premiere condition du
+dispatch est toujours vraie.
+
+Mesure, avant de conclure : sur 1200 tours,
+
+| graine | chemin aimant | chemin direct |
+|---|---|---|
+| 1 | 688 | **0** |
+| 59 | 718 | **0** |
+| 314 | 432 | **0** |
+
+Brancher tel quel enverrait **tous** les explorateurs a l'aimant, au lieu de
+les laisser aller a leur destination. Ce serait **moins** fidele, pas plus :
+la regle « le listing fait foi » veut dire aussi « on ne cable pas une
+condition dont une moitie des termes n'est pas portee ».
+
+Le traitement de `$03E7` est en revanche **laisse en place** : il est correct
+independantement du chemin, et il sera immediatement actif quand le
+branchement se fera.
+
+#### Ce qu il faut transcrire pour brancher
+
+1. l'etat de la barre d'outils — ce qui ecrit `Player.command` (0, 1, 3) ;
+2. `where_do_i_go`, qui n'est cite par aucun de nos modules non plus.
+
+C est une dependance explicite et nommee, pas une approximation. Elle est
+inscrite dans le code, au-dessus du `where_do_i_go` actuel, pour que le
+prochain ne la redécouvre pas.
+
+*Suite* : 68/68 sur 7 graines, `check_render` OK, `smoke_sim` OK, `stress` 5/5.
+Le port est inchange — c est le but.
+
 ### Reste a faire
 ### Reste a faire
 

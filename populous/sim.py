@@ -1128,7 +1128,35 @@ class Game:
         * sinon (delta nul et pas de cible) ⇒ **il fonde le village** :
           ``state = 1``, ``w6 = game_turn``, ``set_frame``, ``set_town(0)``.
         """
+        # L4401-4411 : le listing choisit entre l'aimant et la destination
+        # directe, et **ne le fait pas** chez nous. En effet :
+        #
+        #     L4404: LEA    (LAB_52DE8,A4)   ; Player + 4
+        #     L4405: TST.W  (0,A0,D0.L) / BEQ -> LAB_413F4  (l'aimant)
+        #     L4408: TST.L  ($E,A0)    / BNE -> LAB_413F4  (cible designee)
+        #     L4410: TST.W  (_war,A4)  / BEQ -> LAB_41408  (destination)
+        #
+        # `LAB_52DE8` est notre `Player.command`. Or les 17 sites du listing
+        # qui le mentionnent sont tous des **lectures** (`TST.W`, `CMPI.W`),
+        # faites pour choisir l icone a dessiner : c est un etat
+        # d'**interface**, pose par les clics de la barre d'outils, et donc
+        # non transcrit chez nous.
+        #
+        # Consequence : `command` reste a 0, et la premiere condition est
+        # toujours vraie. Brancher tel quel enverrait **tous** les
+        # explorateurs a l'aimant, au lieu de les laisser aller a leur
+        # destination — ce qui serait moins fidele, pas plus.
+        #
+        # Il faut donc transcrire l'interface avant de brancher. C'est une
+        # dependance explicite, pas une approximation.
         delta = self.where_do_i_go(i, p)
+
+        # L4426-4431 : le retour $03E7 (aucun des huit passages ne meninge)
+        # est traite des que `move_magnet_peeps` sera branche.
+        if delta == 0x03E7:
+            p.state |= 0x40
+            p.w6 = 7
+            return
 
         # Un peep ne doit jamais s'arreter sur un rocher ni sur l'eau : la cible
         # de `where_do_i_go` est un sommet du terrain, pas une case, donc le
