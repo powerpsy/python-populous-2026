@@ -2491,6 +2491,97 @@ pas. Il faut lire où le listing l'appelle (L3245-4904) et le câbler. En
 attendant, `get_heading` reste donc injoignable — ce que `coverage.py`
 signale honnêtement.
 
+### Phase 38 - L oracle : mesure jusqu au bout, et route fermee
+
+On a mesure la voie « tableau de signatures » plutot que de la supposer
+fiable. Elle est **partiellement** efficace et **insuffisante**. Voici les
+chiffres, y compris ce qui a ete refute en chemin.
+
+#### Ce qui marche : un decalage constant sur les DONNEES
+
+.. code-block:: none
+
+    symbole      adresse listing   offset fichier   decalage
+    _opposite    $517A8           $14754          -249940
+    _to_delta    $517F8           $147A4          -249940
+    _to_offset   $5180A           $147B6          -249940
+
+Trois symboles, trois fois le meme nombre : les **donnees** sont a la meme
+place dans les deux builds. C etait previsible — la Phase 31 concluait que
+seul le code differe — mais ca ne se measurait pas.
+
+#### Ce qui ne marche pas : prevoir la position du CODE
+
+L'intuition etait de borner la recherche autour de la position predite.
+Elle partait d'une erreur d'arithmetique — j'avais annonce « +/-200 octets »
+alors que les decalages reels sont :
+
+.. code-block:: none
+
+    _newrand   -256070    ecart au modele des donnees : -6130
+    _divs      -254596                                  -4656
+    _mulu      -253582                                  -3642
+
+Ecart de **3 642 a 6 130 octets**, pas 200. Avec une fenetre a +/-8000 :
+
+| fenetre | uniques | ambigues | absentes |
+|---|---|---|---|
+| desactivee | 98 | 52 | 199 |
+| +/-2000 | 101 | 49 | 199 |
+| **+/-8000** | **106** | **44** | 199 |
+| +/-20000 | 103 | 47 | 199 |
+
+Donc la fenetre rapporte 8 routines, et **les absentes ne bougent jamais** :
+leur code differe reellement. Les absentes commencent par `_mid`, `_end`,
+`_start`, `_con_text`, `_g_text`, `_PortName` — du runtime C.
+
+#### Ce qui est refute : retirer les adresses absolues
+
+C'etait l'intuition evidente, les deux builds n'ayant pas les memes
+adresses. **Faux** : les uniques tombent de 98 a 55 et les ambiguites
+triplent. On retire justement ce qui rend la signature specifique. Le mode
+est garde pour documenter l experience.
+
+#### Decision : la route est fermee
+
+Aucun des deux ADF du depot ne contient le build du listing. La sequence
+exacte de `_newrand` — ``3039 0005 2dd0`` puis ``c0fc24a1 064024df`` — est
+**absente des deux images** :
+
+.. code-block:: none
+
+    Populous.adf (racine)                   ABSENTE
+    reference/original/game/populous.adf    ABSENTE
+
+Le DAD extrait a bien `_newrand`, mais avec `_seed` a `$74528` la ou le
+listing dit `$52DD0`. Ce sont **deux binaires differents**, pas deux
+dispositions d'un meme binaire.
+
+Ce que la voie produit donc : **106 uniques sur 564 (18,8 %)**, 44
+ambiguës, 199 absentes. C'est un bel outil de diagnostic — il localise ou
+on veut — mais ce n'est pas un oracle.
+
+#### Ce qu il reste, et c'est net
+
+Trois pistes, dans l'ordre de rapport :
+
+1. **Obtenir les octets du build tetracorp.** C'est le seul moyen d'avoir un
+   oracle a 100 % : les adresses correspondraient, le tableau serait complet,
+   et l interpretour n'aurait plus qu'a parler. La question est a qui
+   appartient le binaire d'ou vient le listing.
+2. **FS-UAE sur l'ADF.** C'est le jeu canonique, donc l'oracle le plus
+   juste — et un automate peut injecter des evenements et lire la RAM. Mais
+   c'est un projet, pas un outil.
+3. **Lever les 44 ambiguites** par plus de contexte. Utile meme sans oracle :
+   c'est un meilleur diagnostic du port.
+
+En attendant, la verification reste la confrontation a une reecriture
+independante, qui a valable pour `check_life` (3000 cas), `do_battle` (3000),
+`_sculpt` (4000), `_one_block_flat` (3000) et `get_heading` (3000). Elle ne
+verifie pas la transcription contre la machine — mais verifie la transcription
+contre **une deuxieme lecture du meme texte**, ce qui est deja mieux que
+rien.
+
 ### Reste a faire
 ### Reste a faire
 

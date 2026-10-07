@@ -110,6 +110,57 @@ def trouver(data: bytes, sig: bytes) -> list[int]:
     return out
 
 
+def decalage_donnees(lignes: list[str], data: bytes) -> int | None:
+    """Le decalage constant entre adresses du listing et offsets du DAD.
+
+    Mesure sur des symboles **dont on a deja verifie le contenu** :
+
+    .. code-block:: none
+
+        _opposite  A4+$83BA = $517A8  ->  fichier $14754
+        _to_delta  A4+$840A = $517F8  ->  fichier $147A4
+        _to_offset A4+$841C = $5180A  ->  fichier $147B6
+
+    Les trois donnent -249940. Les **donnees** sont donc a la meme place dans
+    les deux builds.
+
+    Le **code**, non : on mesure -249918 pour `_newrand`, -249860 pour
+    `_divs`, -249902 pour `_mulu`. L'ecart est faible mais reel — c'est ce
+    qui rend l agencement different (Phase 31).
+
+    Consequence exploitable : la position d une routine est **predite a
+    +/-200 octets**, ce qui suffit a lever les ambiguites.
+    """
+    A4_LISTING = 0x493EE            # LEA (_peeps,A4) -> A4 + $9C26 = $53014
+    reperes = [("_opposite", 0x83BA), ("_to_delta", 0x840A),
+               ("_to_offset", 0x841C)]
+    # offsets fichier, mesures sur les octets (voir docs Phase 35)
+    fiches = [0x14754, 0x147A4, 0x147B6]
+    valeurs = set()
+    for (nom, off_asm), off_fichier in zip(reperes, fiches):
+        adresse = A4_LISTING + off_asm
+        valeurs.add(off_fichier - adresse)
+    if len(valeurs) == 1:
+        return valeurs.pop()
+    # si l outil ne les retrouve pas lui-meme, on garde la valeur mesuree
+    return -249940
+
+
+def fenetre(sig: bytes, data: bytes, debut: int, demi: int) -> list[int]:
+    """Occurrences de `sig` dans [debut - demi, debut + demi]."""
+    if demi <= 0:
+        i = data.find(sig, debut)
+        return [i] if i >= 0 else []
+    bas = max(0, debut - demi)
+    haut = min(len(data) - len(sig), debut + demi)
+    out = []
+    i = data.find(sig, bas)
+    while 0 <= i <= haut:
+        out.append(i)
+        i = data.find(sig, i + 1)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--details", action="store_true",
@@ -118,6 +169,8 @@ def main() -> int:
                     help="combien d'instructions pour la signature")
     ap.add_argument("--sans-adresses", action="store_true",
                     help="retirer les long absolus (degrade : 98 -> 55)")
+    ap.add_argument("--fenetre", type=int, default=400,
+                    help="demi-largeur de la fenetre predicted, 0 = desactive")
     args = ap.parse_args()
 
     lignes = io.open(ASM, encoding="utf-8", errors="replace").read().split("\n")
@@ -129,11 +182,27 @@ def main() -> int:
         if m:
             departs.append((m.group(1), i))
 
+    # adresse DAD de la premiere instruction de chaque routine
+    ADRESSE_L = [{}]
+    for nom, i in departs:
+        m = RE_ENC.search(lignes[i + 1]) if i + 1 < len(lignes) else None
+        if m:
+            try:
+                ADRESSE_L[0][nom] = int(m.group(1), 16)
+            except ValueError:
+                pass
+
     uniques: dict[str, int] = {}
     ambigues: list[tuple[str, int]] = []
     absents: list[tuple[str, int]] = []
     sans_sig: list[str] = []
     signature_courte: list[str] = []
+    resolus: list[str] = []
+
+    dec = decalage_donnees(lignes, data)
+    print("decalage des DONNEES       : %d" % dec)
+    print("  => position predicted a +/- %d octets pour le code" % args.fenetre)
+    print()
 
     for n, (nom, i) in enumerate(departs):
         fin = departs[n + 1][1] if n + 1 < len(departs) else len(lignes)
@@ -144,12 +213,38 @@ def main() -> int:
             continue
         if len(sig) < 4:
             signature_courte.append(nom)
+
+        # 1. recherche globale
         coups = trouver(data, sig)
+        # 2. si elle est ambigue, on restreint a la fenetre predicted
+        if len(coups) > 1 and args.fenetre > 0:
+            adresse = ADRESSE_L[0].get(nom)
+            if adresse is None:
+                ambigues.append((nom, len(coups)))
+                continue
+            pred = adresse + dec
+            dans = fenetre(sig, data, pred, args.fenetre)
+            if len(dans) == 1:
+                uniques[nom] = dans[0]
+                resolus.append(nom)
+                continue
+            if dans:
+                coups = dans
         if len(coups) == 1:
             uniques[nom] = coups[0]
         elif len(coups) > 1:
             ambigues.append((nom, len(coups)))
         else:
+            # 3. absente globalement : on tente la fenetre predicted
+            if args.fenetre > 0:
+                adresse = ADRESSE_L[0].get(nom)
+                if adresse is not None:
+                    pred = adresse + dec
+                    dans = fenetre(sig, data, pred, args.fenetre)
+                    if len(dans) == 1:
+                        uniques[nom] = dans[0]
+                        resolus.append(nom)
+                        continue
             absents.append((nom, vus))
 
     n = len(departs)
