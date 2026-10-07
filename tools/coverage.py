@@ -81,6 +81,8 @@ PLANIFIE: set[str] = {
 RE_FONCTION = re.compile(r"^(_[A-Za-z0-9_]+):\s*$")
 RE_TROU = re.compile(r"^\s*;\s*lines cut", re.IGNORECASE)
 RE_APPEL = re.compile(r"\b(?:JSR|BSR)\w*\s+(_{1,3}[A-Za-z0-9_]+)")
+#: un renvoi au listing : ``L4905``, ``$4268A``, ``asm 24269``
+RE_REPERE = re.compile(r"L\d{3,6}|\$[0-9A-Fa-f]{4,8}\b|\basm\b")
 
 
 def lire_asm() -> list[str]:
@@ -118,11 +120,41 @@ def lire_py() -> str:
     return "\n".join(morceaux)
 
 
+def cite_solide(source: str, nom: str) -> bool:
+    """Le nom complet est-il cite **a cote d'un repere asm** ?
+
+    Un mot seul ne prouve rien : le Python a un ``open()``, et le listing a
+    un ``_Open`` de la bibliotheque C. Et nos docstrings parlent d'``A4`` a
+    chaque ligne — ce qui faisait passer ``_A4`` pour couvert.
+
+    Deux conditions, donc :
+
+    1. le nom **avec son souligne** doit apparaitre — nos docstrings ecrivent
+       bien ``_move_peeps``, ``_do_battle``, ``_sculpt``, et Python n'a
+       aucune raison d'ecrire ``_Open`` ;
+    2. a moins de trois lignes d'un renvoi au listing (``L4905``,
+       ``$4268A``, ``asm 24269``).
+    """
+    motif = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(nom))
+    lignes = source.split("\n")
+    for n, l in enumerate(lignes):
+        if not motif.search(l):
+            continue
+        for m in range(max(0, n - 3), min(len(lignes), n + 4)):
+            if RE_REPERE.search(lignes[m]):
+                return True
+    return False
+
+
 def classe(r: dict, source: str) -> tuple[str, str]:
     """-> (etat, detail).
 
-    Etats : ``alias`` (declare et present), ``cite`` (trouve par son nom),
-    ``planifie`` (analyse, pas encore code), ``absent`` (rien).
+    Etats : ``alias`` (declare et present), ``cite`` (nom cite a cote d un
+    repere asm), ``collision`` (le nom apparait mais sans repere : on ne
+    peut pas conclure), ``planifie``, ``absent``.
+
+    Le seau ``collision`` est **hors couverture** : c est lui qui gonflait
+    le taux a 31 % avec des routines de la bibliotheque C.
     """
     if r["nom"] in PLANIFIE:
         return "planifie", ""
@@ -135,8 +167,10 @@ def classe(r: dict, source: str) -> tuple[str, str]:
             return "alias", cible
         return "alias-absent", cible
     court = r["nom"].lstrip("_")
-    if court and re.search(r"\b%s\b" % re.escape(court), source):
+    if cite_solide(source, r["nom"]):
         return "cite", court
+    if court and re.search(r"\b%s\b" % re.escape(court), source):
+        return "collision", court
     return "absent", ""
 
 
@@ -184,8 +218,7 @@ def main() -> int:
         par_etat.setdefault(etat, []).append(r)
 
     n_total = len(rs)
-    n_couv = n_total - len(par_etat.get("absent", []))
-    n_reel = n_couv - len(par_etat.get("planifie", []))
+    n_reel = len(par_etat.get("alias", [])) + len(par_etat.get("cite", []))
     pct = 100.0 * n_reel / n_total if n_total else 0.0
 
     print("lignes du listing      : %d" % (len(lignes) - 1))
@@ -194,10 +227,16 @@ def main() -> int:
           % sum(r["code"] for r in rs))
     print()
     print("COUVERTURE REELLE      : %d / %d  (%.1f%%)" % (n_reel, n_total, pct))
-    print("  par alias declare    : %d" % len(par_etat.get("alias", [])))
-    print("  par citation de nom  : %d" % len(par_etat.get("cite", [])))
+    print("  par alias declare    : %d  (fiable)"
+          % len(par_etat.get("alias", [])))
+    print("  par citation reperee : %d  (nom + renvoi asm)"
+          % len(par_etat.get("cite", [])))
     print("  analysees, a coder   : %d" % len(par_etat.get("planifie", [])))
-    print("  NON couvertes        : %d" % len(par_etat.get("absent", [])))
+    print("  COLLISIONS de nom    : %d  (hors couverture)"
+          % len(par_etat.get("collision", [])))
+    print("  NON couvertes        : %d"
+          % (n_total - n_reel - len(par_etat.get("planifie", []))
+             - len(par_etat.get("collision", [])) - len(par_etat.get("alias-absent", []))))
     if par_etat.get("alias-absent"):
         print("  !! ALIAS CASSE        : %d  (le symbole Python a disparu)"
               % len(par_etat["alias-absent"]))
