@@ -114,7 +114,7 @@ class Player:
     def __init__(self) -> None:
         self.magnet = 0         # +0  index + 1 du peep aimanté (0 = aucun)
         self.magnet_to = 0x820  # +2  case visée par l'aimant (LAB_52DE6)
-        self.command = 0        # +4  commande en attente
+        self.command = 1        # +4  outil courant (LAB_52DE8, init L1065)
         self.town_count = 0     # +6  compteur « town » (remis à 0 par tour)
         self.pop = 0            # +8  somme des vies
         self.mana = 0           # +12 réserve de mana
@@ -1149,7 +1149,27 @@ class Game:
         #
         # Il faut donc transcrire l'interface avant de brancher. C'est une
         # dependance explicite, pas une approximation.
-        delta = self.where_do_i_go(i, p)
+        # L4401-4411 : le listing choisit entre l'aimant et la destination
+        # directe :
+        #
+        #     L4404: LEA   (LAB_52DE8,A4)   ; Player + 4 = `command`
+        #     L4405: TST.W (0,A0,D0.L) / BEQ -> LAB_413F4  (l'aimant)
+        #     L4408: TST.L ($E,A0)    / BNE -> LAB_413F4  (cible designee)
+        #     L4410: TST.W (_war,A4)  / BEQ -> LAB_41408  (destination)
+        #
+        # Trois conditions suffisent pour prendre l'aimant. Le point
+        # decisif est l'initialisation : L1065 ecrit `command = 1` a la
+        # creation d'une partie. Donc **par defaut on va a la destination**,
+        # et l'aimant ne sert que si le joueur choisit l'outil aimant
+        # (`command = 0`), s'il y a une cible designee, ou en guerre.
+        #
+        # Notre port mettait `command = 0`, ce qui inversait exactement le
+        # defaut et envoie tous les explorateurs a l'aimant.
+        pl = self.players[p.tribe]
+        if pl.command == 0 or p.target != -1 or self.war:
+            delta = self.move_magnet_peeps(i, i)
+        else:
+            delta = self.where_do_i_go(i, p)
 
         # L4426-4431 : le retour $03E7 (aucun des huit passages ne meninge)
         # est traite des que `move_magnet_peeps` sera branche.

@@ -2652,6 +2652,72 @@ prochain ne la redécouvre pas.
 *Suite* : 68/68 sur 7 graines, `check_render` OK, `smoke_sim` OK, `stress` 5/5.
 Le port est inchange — c est le but.
 
+### Phase 40 - Branche ! Le defaut etait inverse
+
+La Phase 39 bloquait sur `Player.command`, ecrit par l'interface. Cherche
+**les ecritures**, pas les `LEA`, sur toute la liste des sites :
+
+.. code-block:: none
+
+    1065: MOVE.W #$0001,(0,A0,D0.L)   base = LAB_52DE8
+
+**Une seule ecriture dans tout le listing.** Et elle est dans une boucle
+d'initialisation sur les deux tribus (L1059-1082) :
+
+.. code-block:: none
+
+    LAB_3ED06:                      ; D4 = index de tribu
+      command[tribu]   = 1         ; L1065
+      mana[tribu]      = $18F = 399 ; L1070
+      magnet_to[tribu] = $0820     ; L1075
+      _devil_magnet    = $0820     ; L1076
+      _god_magnet      = $0820     ; L1077
+      magnet[tribu]    = 0         ; L1082
+      battle_won[tribu]= 0         ; L1087
+
+Donc `command` vaut **1**, pas 0. Et le dispatch est
+``command == 0 -> l'aimant``. Consequence :
+
+* dans l'original, **par defaut un explorateur va a sa destination** ;
+* l'aimant ne sert que si le joueur choisit l'outil aimant, s'il y a une
+  cible designee, ou en guerre ;
+* notre port mettait `command = 0`, ce qui **inversait exactement le
+  defaut** et renvoyait tous les explorateurs a l'aimant.
+
+La Phase 39 l'avait mesure — 688/718/432 vers l'aimant, 0 vers la
+destination. Ce n'etait pas un detail d'initialisation : c'etait
+l'inversion du comportement par defaut.
+
+#### Apres correction
+
+| graine | aimant | destination |
+|---|---|---|
+| 1 | 0 | 6 866 |
+| 59 | 0 | 6 456 |
+| 314 | 0 | 4 456 |
+
+Le defaut est la destination, comme dans l'original.
+`move_magnet_peeps` est desormais **cable et dormant** : il ne s'active que
+si `command == 0`, si `p.target != -1`, ou en guerre. Aucune de ces trois
+conditions n'est remplie dans une partie sans joueur — donc il ne fait
+rien, **pour la bonne raison**.
+
+C'est la difference entre du code mort et du code conditionnel : le premier
+est un oubli, le second est le jeu.
+
+#### Reste note : `mana` commence a 399
+
+L1070 ecrit `mana[tribu] = 399` a l'initialisation. Notre port part de 0.
+C'est une difference reelle et elle decale **tous** les seuils de pouvoirs
+(tremblement a 80 999, inondation a 41 999...). Elle n'est pas appliquee
+ici : elle merite d'etre mesuree sur la longueur d'une partie avant de
+toucher a l'equilibrage, puisque c'est elle qui le decale.
+
+`magnet_to = 2080` et `devil_magnet = 2080` sont deja corrects chez nous
+(`0x820`), ce que la Phase 35 avait etabli par les octets.
+
+*Suite* : 68/68 sur 7 graines, `stress` 5/5.
+
 ### Reste a faire
 ### Reste a faire
 
