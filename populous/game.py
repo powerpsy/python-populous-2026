@@ -55,7 +55,7 @@ from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_LOWER, ACT_RAISE, ACT_TREE,  # noqa: E402
-                                BLK_FLAT)
+                                BLK_FLAT, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
 from populous.render import (SCREEN_H, SCREEN_W, Renderer,  # noqa: E402
                              clamp_off, map_colours)
@@ -515,11 +515,25 @@ class Game:
             self._bars_for(p.life)
             return
 
-        # ---- L2888 : ennemi ----------------------------------------------
-        if p.tribe == 1:
-            # L2891 : x = (tribu << 1) + _toggle + 0x40 (animation de l'eau)
-            x = ((p.tribe << 1) + self.ren.toggle + 0x40) & 0xFFFF
-            self._draw_sprite_at(0x10C + x, 0x16, 0)
+        # ---- L2889 : villageois (`CMPI.B #$01,(A2)`) ----------------------
+        # Le test porte sur **byte 0 = `state`**, pas sur `tribe`. Trois
+        # lectures de bytes sur A2 le confirment, et les trois cadrent avec
+        # nos constantes :
+        #     BTST  #3,(A2)      -> ST_BATTLE  = 0x08   (notre `state & 0x08`)
+        #     CMPI.B #$01,(A2)   -> ST_VILLAGER= 0x01   <-- ce branchement
+        #     MOVE.B (3,A2),D1   -> `weapons`  (compare a _weapons_order)
+        # Le code testait `p.tribe == 1` : les villageois de la tribu 0
+        # n'avaient donc jamais leur ligne, et tous les peeps de la tribu 1
+        # l'avaient, quelle que soit leur etat.
+        if p.state == ST_VILLAGER:
+            # L2891 : sprite = (tribe << 1) + _toggle + $40 (animation eau)
+            sprite = ((p.tribe << 1) + self.ren.toggle + 0x40) & 0xFFFF
+            # L2888-2894 : l'ordre de push est sprite, y, x, ecran, donc
+            # `_draw_sprite(_w_screen, $10C, $16, sprite)` -- **sprite est le
+            # quatrieme argument**, pas une composante de x. Le code faisait
+            # `0x10C + x` avec sprite 0 : x valait 334 (hors des 320 px) et
+            # on dessinait le mauvais sprite.
+            self._draw_sprite_at(0x10C, 0x16, sprite)
             # L2906 : la vie Â« reelle Â» (_check_life) et non la valeur stockee
             vie = sim.check_life(p.tribe, p.block)
             if vie <= 0:
@@ -531,11 +545,36 @@ class Game:
         self._bars_for(p.life)
 
     def _draw_sprite_at(self, x: int, y: int, sprite: int) -> None:
-        """``_draw_sprite(ecran, x, y, sprite)`` avec x en unites de 16 px."""
+        """``_draw_sprite(ecran, x, y, sprite)`` — **x et y sont en pixels**.
+
+        L'asm (L19283) lit ses arguments ainsi : ``(8,A5)`` = ecran,
+        ``($C,A5)`` = x, ``($E,A5)`` = y, ``($10,A5)`` = sprite, et l'ordre
+        de push des appelants confirme ``(ecran, x, y, sprite)``.
+
+        Ce que fait ``_draw_sprite`` de x (L19306-19311) :
+
+        .. code-block:: none
+
+            MOVE.W #$000f,D3 / CMP.W #$00b8,D1 / BLE   ; y > 184 -> clip bas
+            MOVE.L #$00000026,D7 / CMP.W #$0130,D0      ; x > 304 -> 40 o/ligne
+            MOVE.W D0,D6 / MULU #$0028,D1               ; D1 = y * 40 (ligne)
+            LSR.W #4,D6 / LSL.W #1,D6 / ADDA.L D6,A0    ; offset = (x/16)*2 o
+
+        Les bornes $B8 = 184 et $C8 = 200 donnent la **hauteur 200**, et
+        $0028 = 40 octets par ligne donnent la **largeur 320** : c'est bien
+        un ecran 320x200, et x est un **coordonnee pixel** (40 o x 8 px/o
+        = 320).
+
+        Cette fonction faisait autrefois ``x * 16``, ce qui mettait le sprite
+        a ``272 * 16 = 4352`` hors d'un frame de 320 px : pygame le
+        decoupait silencieusement et **aucun sprite n'apparaissait**.
+        Le test qui l'a revelé : frame (320,200), sprite 0x110 (16,16),
+        destination (4352, 22) -> ``4352 >= 320``.
+        """
         sp = self.ren.sprites
         if not sp:
             return
-        self.frame.blit(sp[sprite % len(sp)], ((x * 16) & ~1, y & ~1))
+        self.frame.blit(sp[sprite % len(sp)], (x, y))
 
     def _bars_for(self, valeur: int) -> None:
         """Les deux barres de l'ecusson (L2871 et L2879, puis L3042/L3053).

@@ -3233,6 +3233,155 @@ Donc le decoupage de `_do_action` a rendu le vrai probleme visible : ce qui
 reste n'est pas « trop gros pour une session », c'est **un sous-systeme**
 (le lien serie et les menus d'options), avec un mur de dependances commun.
 
+### Phase 48 - Trois bugs de rendu trouves en cherchant autre chose
+
+Je voulais transcrire `_move_mana` (L3164, 77 lignes). Je ne l'ai **pas**
+transcrit : l'analyse a bute sur l'unite de `x` dans `_draw_sprite`, et
+l'execution a montre que le port dessinait **aucun sprite**. Trois bugs.
+
+Le point de depart tient en une ligne, dans `game.py` :
+
+.. code-block:: python
+
+    def _draw_sprite_at(self, x, y, sprite):
+        """``_draw_sprite(ecran, x, y, sprite)`` avec x en unites de 16 px."""
+        self.frame.blit(sp[sprite % len(sp)], ((x * 16) & ~1, y & ~1))
+
+et deux lignes plus haut, a cote d'un appel qui passe `0x110` :
+
+.. code-block:: python
+
+    # L2826 : le sprite de l'arme, a x=0x110 (272 px), y=0x16 (22)
+    self._draw_sprite_at(0x110, 0x16, p.frame)
+
+Le commentaire dit **272 px**. Le code calcule `272 * 16 = 4352`.
+
+#### Bug 1 — `x * 16` mettait tous les sprites hors champ
+
+Ce que fait `_draw_sprite` de lui-meme (L19306-19311) :
+
+.. code-block:: none
+
+    TST.W  D1 / BMI          ; y < 0 -> on n ecrit rien
+    MOVE.W #$000f,D3
+    CMP.W  #$00b8,D1 / BLE   ; y > 184 -> clip : D3 = $C8 - y  (200 - y)
+    MOVE.L #$00000026,D7
+    CMP.W  #$0130,D0 / BLE   ; x > 304 -> 40 octets/ligne sinon 38
+    MOVE.W D0,D6 / MULU #$0028,D1    ; D1 = y * 40  (offset de ligne)
+    LSR.W #4,D6 / LSL.W #1,D6        ; offset = (x / 16) * 2 octets
+
+`$C8 = 200` est la hauteur, `$0028 = 40` octets/ligne x 8 px/octet = 320
+large. **x est une coordonnee pixel**, pas un indice de mot.
+
+Mesure, sur notre propre port :
+
+.. code-block:: none
+
+    frame          : (320, 200)      <-- meme format que l'asm
+    sprite 0x110   : (16, 16)
+    destination    : (4352, 22)
+    4352 >= 320    : le sprite est DECOPE hors surface, sans erreur
+
+Pygame decoupe silencieusement : aucun message, aucun crash, aucune trace.
+Le test a decouvert le bug en comparant la destination a la largeur du
+frame — pas en regardant l'image.
+
+Apres correctif, mesure du rectangle reellement ecrit (fond sentinel
+`(1,2,3)`, puis boite englobante des pixels modifies) :
+
+.. code-block:: none
+
+    sprite 0x110 @ (272,22)  -> boite (272, 22, 287, 37)   <-- 16x16 exact
+    villageois  @ (268,22)   -> boite (273, 22, 283, 37)
+
+Avant : **aucun pixel**.
+
+#### Bug 2 — le sprite etait ajoute a la coordonnee x
+
+`_draw_sprite` lit ses arguments ainsi (L19287-19291) :
+
+.. code-block:: none
+
+    MOVEA.L (8,A5),A0     ; ecran
+    MOVE.W  ($C,A5),D0    ; x     <-- $C = 0x10C
+    MOVE.W  ($E,A5),D1    ; y     <-- $E = 0x16
+    MOVE.W  ($10,A5),D2   ; sprite<-- $10 = D0 de l appelant
+
+Donc la convention est **(ecran, x, y, sprite)**, ce que l'ordre de push
+des appelants confirme : ils poussent `sprite`, `y`, `x`, puis `ecran`.
+
+L'appelant de L2891 pousse `D0`, puis `$0016`, puis `$010c` :
+
+.. code-block:: none
+
+    D0 = (tribe << 1) + _toggle + $40      ; indice de sprite (64..67)
+    _draw_sprite(_w_screen, x=$010c, y=$0016, sprite=D0)
+
+Notre code faisait `_draw_sprite_at(0x10C + x, 0x16, 0)` : l'indice de
+sprite partait dans **x** (`268 + 66 = 334`, hors des 320 px) et on
+dessinait le sprite 0, qui n'est pas le bon.
+
+#### Bug 3 — le branchement testait `tribe` au lieu de `state`
+
+Le code disait « L2888 : ennemi », avec `if p.tribe == 1:`. Le listing
+dit (L2889) :
+
+.. code-block:: none
+
+    CMPI.B #$01,(A2)   ; 401ae
+    BNE.W  LAB_4029E
+
+Byte 0 de A2, valeur 1. Or nos propres constantes ferment la boucle :
+
+.. code-block:: none
+
+    BTST   #3,(A2)     -> ST_BATTLE   = 0x08   (notre `state & 0x08` y est deja)
+    CMPI.B #$01,(A2)   -> ST_VILLAGER = 0x01   <-- ce branchement
+    MOVE.B (3,A2),D1   -> `weapons`, compare a _weapons_order
+
+Trois lectures de bytes sur A2, et les trois cadrent avec nos noms de
+champs. Byte 0 est donc **`state`**, et `1` est `ST_VILLAGER` : le
+branchement est celui des **villageois**, pas celui de l'ennemi.
+
+Consequence mesuree : les villageois de la tribu 0 n'avaient jamais leur
+ligne, et **tous** les peeps de la tribu 1 l'avaient, quelle que soit leur
+etat. On a change la condition et le libelle, pas le calcul du sprite —
+`MOVE.B (1,A2),D0` = byte 1 = `tribe`, ce que le code avait deja juste.
+
+#### Verification
+
+.. code-block:: none
+
+    sprite 0x110 @ (272,22)  -> boite (272, 22, 287, 37)   exact
+    villageois  @ (268,22)   -> boite (273, 22, 283, 37)
+
+    68/68 controles    sur les graines 1, 7, 42, 59, 99, 200, 314
+    check_render       OK
+    check_assets       OK
+    smoke_sim          OK
+    stress 1500 x 5    OK : 5/5
+
+`check_render` ne voyait pas ces trois bugs : il compare deux rendus de la
+**fenetre 8x8** (`draw_window`), pas les sprites de l'ecusson. C'est pour
+ca qu'ils ont tenu aussi longtemps.
+
+#### Ce qui n'a pas ete fait
+
+**`_move_mana` n'est toujours pas transcrit.** On a analyse les 77 lignes
+— boucle sur `_mana_values` jusqu'au premier seuil `>= mana`, puis
+`DIVS` pour l'interposition dans le cran, puis `_draw_sprite` — mais rien
+n'en a ete porte dans le code. Il reste a faire :
+
+* la boucle : `while mana > _mana_values[D4]: D4 += 1` ;
+* `D4 > 9` -> sprite `$45` fixe en `(0x137, 0x57)`, sinon
+  `x = (D4-1)*16 + D5*2 + 0xA0`, `y = (D4-1)*8 + D5 + 8` ;
+* `D5 = ((mana - v[D4-1]) * 8) / (v[D4] - v[D4-1])` via `__divs` ;
+* l'appel est fait **chaque image**, juste avant `__draw_it`
+  (L622, entre `__clr_wsc` et la fenetre) ;
+
+et le cas `D4 == 0` lit `_mana_values[-1]`, c'est-a-dire **4 octets avant
+le tableau** — a confirmer plutot qu'a corriger.
+
 ### Reste a faire
 ### Reste a faire
 
