@@ -21,8 +21,8 @@ from .constants import (
     ACT_SWAMP, ACT_TREE, ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2,
     BLK_ROCK3, BLK_SWAMP, BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
     COST_FLOOD, COST_KNIGHT, COST_MAGNET, COST_QUAKE, COST_RAISE, COST_SWAMP,
-    COST_VOLCANO, COST_WAR, MAP_CELLS, SUB_CLEAR, SUB_FLOOD, SUB_KNIGHT,
-    SUB_WAR,
+    COST_VOLCANO, COST_WAR, MAP_CELLS, MAX_PEEPS, SUB_CLEAR, SUB_FLOOD,
+    SUB_KNIGHT, SUB_WAR,
 )
 
 MAX_OFF = 0x38                       # _xoff/_yoff bornes a 56
@@ -336,6 +336,213 @@ class PowerEngine:
         # 11 (rotate) et 13 (ground) traites ailleurs ; 12/14/15 no-op ou cheat
 
     # ------------------------------------------------------------------- IA
+    # ------------------------------------------------ seuils de _devil_effect
+    # Les six seuils sont des VARIABLES du listing, plus un delta fixe :
+    #
+    #     LAB_51894  80 000  + $3E7 = 80 999  tremblement
+    #     LAB_51890  40 000  + $7CF = 41 999  inondation
+    #     LAB_5188C  10 000  + $1F4 = 10 500  effet Vpc
+    #     LAB_51888   7 500  + $1F4 =  8 000  aimant
+    #     LAB_51880   5 000  + $1F4 =  5 500  attaque
+    #     LAB_51884   2 500  + $1F4 =  3 000  effet Pc
+    #
+    # Les valeurs initiales sont exactement les entrees 4, 3, 5, 6, 7 et 8
+    # de `_mana_values`. Les deltas sont separes : Conquest les modifie.
+    TH_QUAKE = 80_000 + 0x3E7
+    TH_FLOOD = 40_000 + 0x7CF
+    TH_VPC = 10_000 + 0x1F4
+    TH_MAGNET = 7_500 + 0x1F4
+    TH_ATTACK = 5_000 + 0x1F4
+    TH_PC = 2_500 + 0x1F4
+
+    def devil_effect(self, tribe: int) -> None:
+        """``_devil_effect`` (L9300-9522) : la decision majeure de l'IA.
+
+        **Transcription**, et non interpretation. Quatre intentions, dans
+        l'ordre exact du listing ; chacune rend la main si son seuil n'est
+        pas franchi.
+
+        ==============  ==========  =========================================
+        bit du masque   action      condition
+        ==============  ==========  =========================================
+        0               `p2 = 3`    mana > 80 999 **et** la tribu domine
+                                    `good_pop`
+        15              `p2 = 4`    mana > 41 999 (inondation)
+        13              `p2 = 5`    mana > 8 000 et la case visee par
+                                    l'aimant est habitée (`life > $0BB8`)
+        14              `act = 6`   mana > 10 500 et `p26 != 0`
+        11              `act = 3`   mana > 5 500 et `p26` designe la case 1
+        ==============  ==========  =========================================
+
+        Trois blocs du listing sont morts, et c'est **mesuré** :
+
+        * le bloc ``act = 4`` (L9476-9491) est inatteignable — les deux
+          variables qui devraient differer recoivent la meme valeur ;
+        * les tests ``t12`` contre ``t1a`` et ``t18`` (L9431-9441) ne filtrent
+          rien : les deux branches convergent sur ``LAB_44FCA`` ;
+        * le seuil ``$84`` et le bit 12 non plus : ``LAB_44FCA`` est atteint
+          par les deux issues.
+
+        Ils sont donc **absents** de cette transcription. Les remettre
+        reviendrait a inventer un filtre que le listing n'applique pas.
+        """
+        sim = self.g.sim
+        st = sim.stats[tribe]
+        if st.queued:                                    # L9308-9309
+            return
+        pl = sim.players[tribe]
+        mana = pl.mana
+        m = st.power_mask
+
+        # (1) BTST #0,(-6,A5) -> bit 0 du masque
+        if m & 0x0001:                                   # L9316-9347
+            if not mana > self.TH_QUAKE:
+                return
+            if not pl.pop > sim.players[sim.not_player].pop:
+                return
+            st.act = 0x0E
+            st.p2 = 0x03
+            st.queued = 1
+            return
+
+        # (2) BTST #7,(-5,A5) -> bit 15 du masque
+        if m & 0x8000:                                   # L9349-9363
+            if not mana > self.TH_FLOOD:
+                return
+            st.act = 0x0E
+            st.p2 = 0x04
+            st.queued = 1
+            return
+
+        # (3) BTST #5,(-5,A5) -> bit 13 du masque : l'aimant
+        if m & 0x2000:                                   # L9365-9396
+            j = pl.magnet - 1
+            if pl.magnet == 0 or not (0 <= j < MAX_PEEPS):
+                return
+            if sim.peeps[j].life <= 0x0BB8:              # CMPI.W #$0BB8
+                return
+            if mana > self.TH_MAGNET:                   # L9387-9394
+                st.act = 0x0E
+                st.p2 = 0x05
+                st.queued = 1
+            return
+
+        # (4) LAB_44E8C : les deux effets informatiques
+        if st.p26 == 0:                                  # L9398-9399
+            return
+        if mana > self.TH_VPC and (m & 0x4000):          # L9404-9418
+            st.act = 0x06
+            self.do_computer_effect(tribe, st)
+            st.queued = 1
+            st.t12 = 0
+            return
+        # LAB_44FCA
+        if mana > self.TH_ATTACK and (m & 0x0800):        # L9497-9506
+            # L9507-9512 : `t12 >= t1a` ET `(masque & $50) != 0` -> on s'arrete
+            if st.t12 >= st.t1a and (m & 0x0050):
+                return
+            st.act = 0x03                                # L9514
+            self.do_computer_effect(tribe, st)
+            st.queued = 1
+            st.t12 += 1                                  # L9520
+
+    def do_computer_effect(self, tribe: int, st) -> None:
+        """``_do_computer_effect`` (L9526-9597) : ou poser l'effet.
+
+        Deux chemins. Le rapide vise la case du **curseur du joueur**, et
+        seulement si elle est occupee par un peep d'une autre tribu :
+
+        .. code-block:: none
+
+            L9532: TST.W _magnet[tribu]        / BNE  -> chemin lent
+            L9538: D1 = magnet_to[tribu]
+            L9541: occ = map_who[D1]          / BEQ  -> chemin lent
+            L9551: si peeps[occ-1].tribe == tribu -> chemin lent
+            L9558: st.p1 = magnet_to[tribu] & $3F
+            L9566: st.p2 = magnet_to[tribu] >> 6
+
+        Le chemin lent (L9572-9597) vise la case du peep designe par ``p26``,
+        decalee de 3 en x et en y, et ramenee a zero si elle sort :
+
+        .. code-block:: none
+
+            L9576: x = (p26->block & $3F) - 3
+            L9582: y = (p26->block >> 6)   - 3
+            L9586: si x < 0 : x = 0
+            L9589: si y < 0 : y = 0
+
+        **Ecart assume** : ``p26`` est un *pointeur* dans l'asm, dont on lit
+        le premier octet. Notre ``Tribe.p26`` est un indice, pas un pointeur,
+        donc le test ``(p26)[0] == 1`` est rendu par ``p26 != 0``. C'est le
+        seul endroit du port ou la representation nous empeche de lire ce que
+        le listing lit.
+        """
+        sim = self.g.sim
+        pl = sim.players[tribe]
+
+        if pl.magnet == 0:                                # L9532-9533
+            lent = True
+        else:
+            occ = sim.map.who[pl.magnet_to] if 0 <= pl.magnet_to < len(sim.map.who) else 0
+            j = occ - 1
+            if occ == 0 or not (0 <= j < MAX_PEEPS) or sim.peeps[j].tribe == tribe:
+                lent = True                               # L9544 / L9552
+            else:
+                st.p1 = pl.magnet_to & 0x3F               # L9558-9560
+                st.p2 = (pl.magnet_to >> 6) & 0xFF        # L9566-9568
+                return
+        if not lent:
+            return
+        # LAB_450B8 : chemin lent. `($26,A2)` est le champ +0x26 de la fiche
+        # de tribu, donc `st.p26` -- et non celui du joueur.
+        cible = st.p26
+        bloc = sim.peeps[cible].block if 0 <= cible < MAX_PEEPS else 0
+        x = (bloc & 0x3F) - 3                             # L9576-9577
+        y = (bloc >> 6) - 3                               # L9582-9583
+        if x < 0:
+            x = 0                                         # L9586-9587
+        if y < 0:
+            y = 0                                         # L9589-9591
+        st.p1 = x                                         # L9594
+        st.p2 = y                                         # L9596
+
+    def set_devil_magnet(self, tribe: int) -> None:
+        """``_set_devil_magnet`` (L9601-9690) : le releve de terrain.
+
+        .. code-block:: none
+
+            D0 = stats->$16 (towns) + stats->$14 (castles)
+            D1 = stats->$0C (threshold) * 2 + $0F
+            si D0 >= D1 :
+                D0 = _game_turn / 90          (DIVU #$5A)
+                D1 = stats->$0C + $0A
+                si D0 >= D1 : -> LAB_45196
+        LAB_4515A:
+            si command[tribu] == 0 :
+                act = $0E ; p2 = 1 ; p1 = 1 + (newrand % 3) ; queued = 1
+
+        La seconde branche (LAB_4516 onward) fait bouger l'aimant ; elle est
+        la suite de la meme lecture, et n'est pas encore transcrite — d'ou le
+        `[APPROX]` qu'on laisse ici plutot que d'ecrire un chemin devine.
+        """
+        sim = self.g.sim
+        st = sim.stats[tribe]
+
+        total = st.towns + st.castles                      # L9611-9612
+        cible = st.threshold * 2 + 0x0F                   # L9613-9616
+        # L9617 : `CMP.W D1,D0 / BLT LAB_4515A` — c est donc quand
+        # total < cible qu on va droit a l'action, et non l'inverse.
+        if total >= cible:                                 # chemin des tours
+            tours = sim.game_turn // 0x5A                  # L9618-9623
+            if tours >= st.threshold + 0x0A:               # BCC LAB_45196
+                return                                     # LAB_45196, non lu
+        # LAB_4515A : le releve de terrain
+        if sim.players[tribe].command == 0:                # L9633-9634
+            st.act = 0x0E                                  # L9635
+            st.p2 = 0x01                                   # L9636
+            st.p1 = 1 + sim.rng.below(3)                   # L9637-9642
+            st.queued = 1                                  # L9643
+
     def ai_choose(self, tribe: int) -> None:
         """L'IA ennemie choisit une action (§5.3). Approximation fable mais
         coherente : elle ameliore son terrain quand elle a de la mana, sinon

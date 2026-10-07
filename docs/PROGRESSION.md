@@ -2785,6 +2785,89 @@ graine sur trois ne vaut pas mieux que pas d'IA du tout. C'est la premiere
 mesure qui attribue un **cout** a du code invente, et non une simple
 difference de style.
 
+### Phase 42 - Les trois routines de l'IA, transcrites
+
+`_devil_effect` (L9300-9522), `_do_computer_effect` (L9526-9597) et
+`_set_devil_magnet` (L9601) sont desormais codees. C'etait la derniere zone
+**inventee** du port.
+
+#### Les cinq seuils, enfin dans le code
+
+Ce sont des **variables** plus un delta, et non des constantes :
+
+.. code-block:: none
+
+    TH_QUAKE   = 80 000 + $3E7 =  80 999    LAB_51894
+    TH_FLOOD   = 40 000 + $7CF =  41 999    LAB_51890
+    TH_VPC     = 10 000 + $1F4 =  10 500    LAB_5188C
+    TH_MAGNET  =  7 500 + $1F4 =   8 000    LAB_51888
+    TH_ATTACK  =  5 000 + $1F4 =   5 500    LAB_51880
+    TH_PC      =  2 500 + $1F4 =   3 000    LAB_51884
+
+Les valeurs initiales sont exactement les entrees 4, 3, 6, 5, 4 et 3 de
+`_mana_values`. Les deltas sont separes parce que Conquest les modifie.
+
+#### Trois blocs morts, et cette fois ils ne sont pas ecrits
+
+La Phase 26 avait montre que le bloc `act = 4` (L9476-9491) est
+inatteignable. En transcrivant, deux autres apparaissent :
+
+* les tests ``t12`` contre ``t1a`` et ``t18`` (L9431-9441) ne filtrent rien :
+  les deux branches convergent sur ``LAB_44FCA`` ;
+* le seuil ``TH_PC`` et le bit 12 non plus : ``LAB_44FCA`` est atteint par
+  les deux issues.
+
+Ils sont donc **absents** de la transcription. Les remettre reviendrait a
+introduire un filtre que le listing n'applique pas — l'inverse exact de
+l'erreur de la Phase 33.
+
+Ce qui reste effectif tient en cinq lignes :
+
+| bit | action | condition |
+|---|---|---|
+| 0 | `p2 = 3` | mana > 80 999 **et** la tribu domine `good_pop` |
+| 15 | `p2 = 4` | mana > 41 999 |
+| 13 | `p2 = 5` | mana > 8 000 et la case visee est habitée (`life > $0BB8`) |
+| 14 | `act = 6` | mana > 10 500 |
+| 11 | `act = 3` | mana > 5 500 |
+
+#### L'etat du port : inerte, pour une raison nommee
+
+Mesure avec `mana = 399` : ``act=15 p1=0 p2=0 queued=0`` — l'IA transcrite ne
+fait rien, et la population A reste a 10 064 / 10 045 / 10 612, c'est-a-dire
+**exactement la valeur sans IA**.
+
+La raison est `Player.command`. L1065 ecrit `command = 1` pour **les deux**
+tribus, et `set_devil_magnet` exige `command == 0` :
+
+.. code-block:: none
+
+    L9633: TST.W (LAB_52DE8+t*16) / BNE LAB_4518E
+
+L'original ne peut pas avoir `command = 1` pour une tribu qui ne joue pas a
+la barre d'outils : l'IA simule son propre etat d'interface. Nous ne le
+faisons pas, donc la branche est toujours sautee.
+
+C'est une **dependance nommee** — l'etat d'interface par tribu — et non une
+erreur de transcription. Elle est inscrite dans le code.
+
+#### Ecart assume
+
+``($26,A2)`` est un **pointeur** dans l'asm, dont on lit le premier octet.
+Notre ``Tribe.p26`` est un indice. Le test ``(p26)[0] == 1`` est donc rendu
+par ``p26 != 0``. C'est le seul endroit du port ou la representation
+empêche de lire ce que le listing lit.
+
+#### Erreur de transcription, corrigee
+
+`L9617` est un ``BLT`` vers ``LAB_4515A`` : l'action a lieu quand
+``total < cible``, et non l'inverse. J'ai d'abord ecrit le contraire, ce qui
+rendait la routine completement inerte — et l'etat « inerte » a ete ce qui m'a
+fait le remarquer.
+
+*Suite* : 68/68 sur 7 graines, `stress` 5/5. Le port est inchange :
+`ai_choose` reste l'heuristique inventee, branchee comme avant.
+
 ### Reste a faire
 ### Reste a faire
 
