@@ -30,8 +30,8 @@ from .constants import (
     ACT_NONE, BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
     BLK_TRIBE0, BLK_WATER,
     FRAME_AGE, FRAME_TOWN, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
-    N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR, ST_DROWNING,
-    offset_to_dx,
+    BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
+    ST_DROWNING,
     ST_EXPLORER, ST_VILLAGER, ST_ANIM, ST_BATTLE,
     OPPOSITE, TO_DELTA, TO_OFFSET,
 )
@@ -436,7 +436,7 @@ class Game:
         p.block = block
         p.prev_block = 0
         p.state = ST_EXPLORER                           # 0x02
-        p.offspring = 0
+        p.offspring = 1                            # L7057 (`#$01`, fiche +0x02)
         p.weapons = 0
         p.target = -1
         p.frame = 0
@@ -1244,98 +1244,140 @@ class Game:
             self.set_frame(p)
             self.set_town(p, 0)
 
+
     # --------------------------------------------------------- _where_do_i_go
     def where_do_i_go(self, i: int, p: Peep) -> int:
-        """**[APPROX]** renvoie le décalage du prochain pas (0 = il s'installe).
+        """``_where_do_i_go`` (L4622-4901) - decalage du prochain pas.
 
-        ``_where_do_i_go`` (asm $416A0) évalue les 8 directions avec
-        ``_map_steps``, les cases libres et le champ de vision. Tant que la case
-        courante offre de la place (``_check_life`` non nul) il choisit 0 et
-        devient villageois ; sinon il part vers l'espace libre le plus proche.
+        **Transcription complete, ligne a ligne.** Neuf directions
+        (L4637-4853) et, pour chacune, ``offspring`` cellules de regard : la
+        boucle interieure tourne tant que ``offspring != d`` (L4844-4848), un
+        peep neuf n examine donc que sa propre case et ses huit voisines
+        (``_place_people`` ecrit ``1`` en +0x02, L7057).
+
+        Cinq criteres remplissent cinq cases (score + decalage), ``5`` valant
+        "jamais retenu" (valeur initiale, L4627-4635) :
+
+        ======  ===========  =================================================
+        slot    frame        critere
+        ======  ===========  =================================================
+        0       -22 / -32    ``_map_blk == $0F`` ; dehors ``check_life != 0``
+                             (L4695) ou aucune ville a distance 2 (L4734)
+        1       -20 / -30    occupant en bataille (``BTST #3``, L4765)
+        2       -18 / -28    occupant d une autre tribu (L4780)
+        3       -16 / -26    occupant explorateur (``BTST #1``, L4793)
+        4       -14 / -24    ``_map_steps`` le plus court (L4818-4840)
+        ======  ===========  =================================================
+
+        Retour ``999`` ($03E7, L4900) : aucun critere n a retenu autre chose.
+        L appelant (L4426-4431) met alors ``state |= 0x40`` et ``w6 = 7``, ce
+        que ``move_peeps`` traduit par une pause de huit tours.
         """
-        if (self.map.blk[p.block] == BLK_FLAT
-                and p.target < 0
-                and self.check_life(p.tribe, p.block) > 0):
-            return 0                      # il peut fonder ici : delta nul
+        off_vec = OFFSET_VECTOR
+        map_blk = self.map.blk
+        map_bk2 = self.map.bk2
+        map_who = self.map.who
+        map_steps = self.map.steps
+        valid_move = self.map.valid_move
 
-        # Sinon il cherche. Les 8 voisins directs sont testes, puis, si aucun
-        # n'est meilleur que la case courante, on fait un **court regard plus
-        # loin** (rayon 2 et 3) pour trouver de la plaine constructible : sans
-        # cela un explorateur peut tourner dans un coin sans jamais voir la
-        # moindre `$0F`, alors que la logique `_where_do_i_go` (asm 416A0)
-        # exige justement `$0F` pour s'installer.
-        best = 0
-        best_score = self._explore_score(p, 0, 0)
-        offs = OFFSET_VECTOR[1:9]
-        for off in offs:
-            nb = p.block + off
-            if not (0 <= nb < MAP_CELLS):
-                continue
-            v = self.map.valid_move(p.block, off)
-            if v != 0:
-                continue                  # hors carte, eau, rocher
-            if self.map.blk[nb] in (BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_WATER):
-                continue
-            # un voisin deja fort sillonne decourage le detour
-            score = self._explore_score(p, off, 0)
-            if score > best_score:
-                best_score, best = score, off
-        if best != 0:
-            return best
-        # aucun voisin immediat prometteur : on part vers la plaine la plus
-        # proche trouvee en rayon 2-3, en se dirigeant vers elle par le 1er pas
-        # du chemin (les deux diagonales disponibles).
-        target = self._find_flat_ahead(p)
-        if target is not None:
-            dx = (target & 63) - (p.block & 63)
-            dy = (target >> 6) - (p.block >> 6)
-            for off in offs:
-                ox, oy = offset_to_dx(off), off // 64
-                if ox == 0 and oy == 0:
-                    continue
-                if (dx == 0 or ox * dx > 0) and (dy == 0 or oy * dy > 0):
-                    nb = p.block + off
-                    if (0 <= nb < MAP_CELLS
-                            and self.map.valid_move(p.block, off) == 0
-                            and self.map.blk[nb] not in (BLK_ROCK, BLK_ROCK2,
-                                                         BLK_ROCK3, BLK_WATER)):
-                        return off
-        return 0
+        scores = [5, 5, 5, 5, 5]                 # (-22,A5) + 2*D5  L4627-4635
+        results = [0, 0, 0, 0, 0]                # (-32,A5) + 2*D5
+        best_steps = 0x270F                      # L4625 (-12,A5)
+        d5 = -1                                  # L4636
+        k = 0                                    # L4637
 
-    def _explore_score(self, p: Peep, off: int, depth: int) -> int:
-        """Note une case voisine pour l'explorateur (plus haut = mieux)."""
-        nb = p.block + off
-        score = -self.map.step(nb) * 4      # evite les zones deja sillonnees
-        if self.map.blk[nb] == BLK_FLAT:
-            score += 2000
-            if self.check_life(p.tribe, nb) > 0:
-                score += 8000              # il peut y fonder une ville
-        if depth:
-            score -= depth * 64
-        return score
+        while k != 9:                            # LAB_41944 (L4851)
+            # --- LAB_416D2 : direction suivante --------------------------
+            if d5 != 0 or k != 1:
+                d5 += 1                          # LAB_416EC (L4649)
+            else:
+                d5 = (self.rng.raw() & 7) + 1    # L4644-4647, tirage unique
+            if d5 == 9:
+                d5 = 0                           # wrap 9 -> 0 (L4652-4654)
+            block = p.block                      # L4657 (-10,A5)
+            d = 0                                # L4658 (D4)
 
-    def _find_flat_ahead(self, p: Peep, radius: int = 3) -> int | None:
-        """Cherche une case ``$0F`` constructible dans un rayon, et renvoie son
-        index (ou ``None``). Guide l'explorateur vers de la vraie plaine."""
-        best = None
-        best_d = radius + 1
-        bx, by = p.block & 63, p.block >> 6
-        for dy in range(-radius, radius + 1):
-            for dx in range(-radius, radius + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                xx, yy = bx + dx, by + dy
-                if not (0 <= xx < 64 and 0 <= yy < 64):
-                    continue
-                nb = (yy << 6) | xx
-                if self.map.blk[nb] != BLK_FLAT:
-                    continue
-                if self.check_life(p.tribe, nb) <= 0:
-                    continue
-                d = abs(dx) + abs(dy)
-                if d < best_d:
-                    best_d, best = d, nb
-        return best
+            while True:                          # LAB_41930 (L4843)
+                if d == p.offspring:             # L4844-4848
+                    break                        # -> LAB_41940
+                off = off_vec[d5]
+                if valid_move(block, off) != 0:
+                    break                        # L4667-4671 -> LAB_41940
+                block += off                     # L4677
+
+                settled = False
+                if map_blk[block] == BLK_FLAT and d < scores[0]:  # L4680-83
+                    if d5 == 0:
+                        # case courante : peut-on fonder ici ? (L4686-4697)
+                        if self.check_life(p.tribe, block) != 0:
+                            scores[0] = d
+                            results[0] = 0       # CLR.W (-32,A5)
+                            settled = True
+                    else:
+                        # aucun voisin a distance 2 n a de ville $21..$2C :
+                        # on s installe sur la case atteinte (L4700-4740)
+                        d6 = 9
+                        ville = False
+                        while True:              # LAB_41782 (L4702)
+                            o6 = off_vec[d6]
+                            if valid_move(block, o6) == 0:
+                                v = map_bk2[block + o6]
+                                if BK2_CITY[0] <= v <= BK2_CITY[1]:
+                                    ville = True
+                                    break        # LAB_417D6 (L4731)
+                            d6 += 1              # LAB_417CE (L4727)
+                            if d6 >= 17:
+                                break
+                        if not ville:            # D6 == 17 (L4732-4739)
+                            scores[0] = d
+                            results[0] = off
+                            settled = True
+
+                if not settled:
+                    # --- LAB_417F4 : qui occupe la case ? ----------------
+                    if d5 != 0:                  # L4742-4743
+                        taken = False
+                        w = map_who[block]
+                        if w != 0 and w - 1 != i:        # L4746-4754
+                            o = self.peeps[w - 1]        # (-6,A5) L4755-63
+                            if (o.state & ST_BATTLE) and d < scores[1]:
+                                scores[1] = d            # L4765-4774
+                                results[1] = off
+                                taken = True
+                            if (not taken and o.tribe != p.tribe
+                                    and d < scores[2]):
+                                scores[2] = d            # L4779-4789
+                                results[2] = off
+                                taken = True
+                            if (not taken and o.state & ST_EXPLORER
+                                    and d < scores[3]):
+                                scores[3] = d            # L4792-4802
+                                results[3] = off
+                                taken = True
+                        if not taken:
+                            # --- LAB_418BE : le chemin le plus court ------
+                            if off != p.prev_block:      # L4810-4812
+                                s = map_steps[block]     # L4813-4817
+                                if s < best_steps or (
+                                        s == best_steps and d < scores[4]):
+                                    best_steps = s        # L4834
+                                    scores[4] = d         # L4835
+                                    results[4] = off      # L4840
+
+                d += 1                          # LAB_4192E (L4841)
+            k += 1                              # LAB_41940 (L4849)
+
+        # --- selection finale (LAB_4195E-419C6) --------------------------
+        cmd = self.players[p.tribe].command     # LAB_52DE8 = joueur + 4
+        if cmd == 3 and scores[2] != 5:         # L4854-4862
+            return results[2]
+        if cmd == 2 and scores[3] != 5:         # L4868-4877
+            return results[3]
+        for slot in range(5):                   # LAB_419A0 (L4880)
+            if scores[slot] != 5:
+                return results[slot]
+        return 0x03E7                           # L4900
+
 
     def one_block_flat(self, tribe: int, block: int) -> None:
         """``_one_block_flat`` (L9148-9296) : l'IA-emet une action de terrain.

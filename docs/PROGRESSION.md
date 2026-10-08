@@ -4128,6 +4128,109 @@ Aucune logique de jeu n'a bouge : `coverage.py` est le seul fichier
 modifie. La suite complete (autopilot, check_render, check_assets,
 check_mana, check_dispatch, smoke_sim, stress) est retounee verte.
 
+### Phase 56 - suppression du `[APPROX]` de `_where_do_i_go`
+
+Il restait **deux** marqueurs `[APPROX]` dans `populous/`, plus une branche
+manquante documentee. Le premier tombe ici : `_where_do_i_go` (L4622-4901,
+280 lignes, 25 etiquettes `LAB_416xx`) est **transcrite ligne a ligne**, et
+l'heuristique inventee qui la remplaçait disparait avec les deux helpers
+qu'elle appelait.
+
+#### Le fonctionnement relu dans le listing
+
+La routine evalue **neuf directions** (L4637-4853) et, pour chacune,
+`offspring` cellules de regard : la boucle interieure tourne tant que
+`offspring != d` (L4844-4848), donc un peep n examine que sa propre case et
+ses huit voisines.
+
+Cinq criteres remplissent cinq cases (score + decalage), `5` valant
+« jamais retenu » (valeur initiale, L4627-4635) :
+
+| slot | frame | critere |
+|---|---|---|
+| 0 | -22 / -32 | `_map_blk == $0F` ; dehors `check_life != 0` (L4695) ou aucune ville a distance 2 (L4734) |
+| 1 | -20 / -30 | occupant en bataille (`BTST #3`, L4765) |
+| 2 | -18 / -28 | occupant d'une autre tribu (L4780) |
+| 3 | -16 / -26 | occupant explorateur (`BTST #1`, L4793) |
+| 4 | -14 / -24 | chemin le plus court sur `_map_steps` (L4818-4840) |
+
+Le « pas peut s installer ici » n'est donc **pas** un test special : c'est le
+slot 0 rempli sur la case courante (`d5 == 0`). La selection finale
+(L4854-4901) privilegie le slot 2 si `command == 3`, le slot 3 si
+`command == 2`, sinon le premier slot non vide, sinon `999` ($03E7) - que
+l'appelant (L4426-4431) traduit par `state |= 0x40` et `w6 = 7`, soit une
+pause de huit tours (`move_peeps`, bit `0x60`).
+
+Le tirage de direction (L4644) n a lieu qu une seule fois : `k == 1` **et**
+`d5 == 0`. Le reste est un balayage circulaire avec wrap `9 -> 0`.
+
+#### La decouverte qui bloquait : `offspring` vaut 1, pas 0
+
+La boucle interieure est bornee par `peep+0x02`. Le port initialisait ce
+champ a **0** dans `place_people` : avec la transcription litterale, chaque
+explorateur aurait regarde *rien*, renvoye `$03E7` dans les neuf directions,
+et serait entre en pause permanente de huit tours - la population aurait
+cease de s etendre.
+
+Le listing est formel. `_place_people` (L7057) ecrit `#$01` dans
+`LAB_53016`, soit `_peeps + 2` : la suite `LAB_53015` `LAB_53016`
+`LAB_53017` `LAB_53018` est contigue d un octet, `LAB_53015 = _peeps + 1 =
+tribe` est confirme par `docs/game_logic.md`, et les `LEA` du listing
+portent les displacements `9C27 9C28 9C29 9C2A` consecutifs. **Le port
+ecrivait 0 la ou l origine ecrit 1.** Corrige : `p.offspring = 1`.
+
+Trois autres ecarts de la meme routine ont ete **recenses, pas corriges**
+(arbitrage de portee, tranche en direct) :
+
+| champ | listing | port | statut |
+|---|---|---|---|
+| `weapons` `+0x03` | `#$01` (L7065) | `0` | ecart reel ; toucherait l equilibre des combats, aucun controle ne le verifie |
+| `frame` `+0x0C` | `#$00FF` (L7053) | `0` | ecart reel ; modifie le sprite avant le premier `set_frame`, et `check_render` ne couvre que le sol |
+| `target` `+0x0E` | `CLR.L` = 0 | `-1` | convention volontaire du port, deja documentee dans `Peep.target` |
+
+#### Les deux helpers inventes ont ete supprimes
+
+`_explore_score` et `_find_flat_ahead` (« regard plus loin » en rayon 2-3)
+nexistent pas dans le listing : ils compensaient exactement l absence de la
+transcription. Devenus morts, ils ont ete supprimes, et l import
+`offset_to_dx` avec eux.
+
+#### Ce que la comparaison par execution montre
+
+`smoke_sim`, meme graine, 5000 tours - avant puis apres :
+
+```
+                        avant          apres
+cases modifiees blk      50             90
+bk2                      18             36
+cases occupees            2              4
+vie des deux tribus   [3508, 3508]   [3484, 3466]
+```
+
+Le port explorait **moins** que l original, et ses deux tribus y etaient
+strictement identiques : l heuristique ne tirait aucun nombre. Apres la
+transcription elles divergent (tirage de L4644) et le terrain subit presque
+deux fois plus de modifications. La population est inchangee (4 peeps a
+3000 tours) : pas d effondrement.
+
+#### Verification
+
+```
+tools/autopilot.py 59 0 3   : 68/68 controles
+tools/check_render          : OK - 9 vrais ecarts (seuil 60)
+tools/check_assets          : OK
+tools/check_mana            : 0 ecart (56 essais do_action)
+tools/check_dispatch        : controles verts (codes 1, 12, 13)
+tools/smoke_sim             : 5000 tours, map_who sur peep mort = []
+tools/stress 2000 8         : 8/8 parties robustes
+tools/coverage.py           : 150/393 (38,2 %), 62 alias, 88 citations
+```
+
+`populous/sim.py` est le seul fichier de code modifie. La couverture ne bouge
+pas : `_where_do_i_go` etait deja comptee en citation, elle est desormais en
+alias (docstring cite `L4622-4901`).
+
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -4139,8 +4242,16 @@ check_mana, check_dispatch, smoke_sim, stress) est retounee verte.
 * **Samples d'origine** : la logique audio est complete et fidele (Phase 10),
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
-* **Marqueurs `[APPROX]`** : la revue des rares zones non transcrites
-  (l'IA, quelques regles de deplacement).
+* **Marqueurs `[APPROX]`** : il n en reste qu un, `_do_place_funny`
+  (voir ci-dessous), plus la branche `LAB_4516` de `_set_devil_magnet`
+  (`powers.py`). Tout le reste de `populous/` est transcrit, ou hors portee
+  de facon documentee (2441 lignes de liaison serie / options - codes
+  2, 7, 8).
+* **Trois ecarts de `_place_people`** (Phase 56) : `weapons = 1` (L7065) et
+  `frame = 0x00FF` (L7053) au lieu des valeurs du port, et `target = 0`
+  (L7069) au lieu de `-1` (convention du port, documentee). Les deux premiers
+  sont des ecarts reels : a corriger avec leurs propres controles, la portee
+  en ayant ete tranchee en Phase 56.
 * **Cadence de la partie** : toute la chaine de croissance est verifiee
   exacte (Phases 16-18). L'ecart restant tient probablement au nombre de
   tours par seconde â€” l'asm ne fixe aucun rythme et tourne librement. Decide
