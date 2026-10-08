@@ -51,6 +51,7 @@ desassemblage** du binaire original.
 python tools\autopilot.py 59 0 3   # 68 controles d'interaction
 python tools\check_render.py       # rendu et transparence
 python tools\check_assets.py       # decodage des assets
+python tools\check_funny.py        # _do_place_funny (Phase 56)
 python tools\smoke_sim.py          # 5000 tours de simulation
 python tools\stress.py 2000 8      # N graines x M tours, invariants
 ```

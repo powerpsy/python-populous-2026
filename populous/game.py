@@ -459,6 +459,10 @@ class Game:
         self.ren.draw_peeps(self.frame, self.terrain, self.xoff, self.yoff,
                             self.sim)
         self._draw_cursor()
+        if self.sim.game_turn == 0x1000:        # L752-753
+            # L755-757 : `_start_seed & 3`, un seul mot pousse ; ($A,A5)
+            # n'est pas fourni - decision de phase 56.
+            self.sim.do_place_funny(self.seed & 3, 0)
         self.show_the_shield()
         self.draw_pop_gauge()
         self.draw_conquest_dialog()

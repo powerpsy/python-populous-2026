@@ -4,9 +4,10 @@ Références : ``docs/game_logic.md`` (lecture intégrale du désassemblage) et
 ``reference/tetracorp/populous_prg.asm``. Les passages marqués **[APPROX]** ne
 sont plus « là où le désassemblage est coupé » — la Phase 12 a montré que le
 listing est complet — mais ceux qui n'ont pas encore été transcrits ligne à
-ligne : ce sont surtout des règles écrites de notre main — l'IA (dans
-``powers.py``) et la marche d'exploration — qui n'ont pas de transcription
-ASM équivalente.
+ligne : il n'en reste qu'un dans ``populous/`` — la branche `LAB_4516`
+de ``_set_devil_magnet`` (``powers.py``), non transcrite. La marche
+d'exploration et ``_do_place_funny`` ont ete transcrits ligne a ligne
+(Phase 56).
 
 Corrections apportées au document par relecture directe du code :
 
@@ -29,8 +30,8 @@ from . import m68k
 from .constants import (
     ACT_NONE, BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
     BLK_TRIBE0, BLK_WATER,
-    FRAME_AGE, FRAME_TOWN, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
-    BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
+    FRAME_AGE, FRAME_TOWN, FUNNY, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
+    PEEP_SLOTS, BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
     ST_DROWNING,
     ST_EXPLORER, ST_VILLAGER, ST_ANIM, ST_BATTLE,
     OPPOSITE, TO_DELTA, TO_OFFSET,
@@ -143,7 +144,12 @@ class Game:
         self.rng = Rng(seed)
         self.land = land if land is not None else load_land(0)
 
-        self.peeps: list[Peep] = [Peep() for _ in range(MAX_PEEPS)]
+        # `_peeps` compte **212** fiches : 5424C - 53014 = 4664 = 212 * 22,
+        # et `_no_peeps` suit immediatement (L25365-25392). MAX_PEEPS (208)
+        # reste la borne de simulation : `find_free_slot` et les boucles de
+        # `_move_peeps` n'atteignent jamais les fiches 208..211, ecrites par
+        # `_do_place_funny` (slots 0xD1/0xD2) et lues via `map_who`.
+        self.peeps: list[Peep] = [Peep() for _ in range(PEEP_SLOTS)]
         self.no_peeps = 0
         self.stats = [Tribe(), Tribe()]
         self.players = [Player(), Player()]
@@ -1109,9 +1115,10 @@ class Game:
                 if p.offspring < 4:
                     p.offspring += 1
             else:
-                if not self.funny_done:                # table pleine : moment « drôle »
+                if not self.funny_done:           # L3998-4006 : table pleine
                     self.funny_done = 1
-                    self.do_place_funny(1)
+                    # L4003 ne pousse qu'UN mot : ($A,A5) n'est pas fourni
+                    self.do_place_funny(1, 0)
 
         # L4014 : `ADD.W D1,(4,A0)` -- champ MOT, reboucle a 0x10000.
         # C'est ce qui borne la vie a 16 bits sur le materiel.
@@ -1128,9 +1135,78 @@ class Game:
             self.no_peeps = j + 1          # asm L3895‑3900
         return j
 
-    def do_place_funny(self, code: int) -> None:
-        """**[APPROX]** `_do_place_funny` — événement quand les 208 emplacements sont pris."""
-        self.effect = 0x50 + (code & 0x0F)
+    def do_place_funny(self, code: int, arg2: int) -> None:
+        """``_do_place_funny`` (L8862-9013) - le "peep drole" de la table.
+
+        Deux appels par partie :
+
+        * `_move_peeps` (L3998-4006), quand les 0xD0 emplacements sont tous
+          pris au moment ou un peep veut se scinder - une seule fois,
+          `funny_done` bannissant l'appel ensuite ;
+        * `_main` (L752-759), sur l'image ou ``game_turn == $1000``.
+
+        **Deux parametres, un seul argument.** ``(8,A5)`` = ``arg1`` et
+        ``($A,A5)`` = ``arg2`` : le cadre ``LINK A5,#-18`` reserve bien 18
+        octets de locaux (-18..-1), donc les deux mots positifs sont des
+        arguments. Or les deux appels ne poussent qu'**un seul mot** (L757
+        et L4003, nettoyes par ``ADDQ.W #2,A7``) : ``arg2`` lit un mot de
+        pile de l'appelant, de valeur indeterminee, qui choisit la branche
+        d'attribution de ``block`` (L8901-8970). Le port le rend
+        **explicite** et le passe a 0 (decision de phase 56) : le peep
+        tombe sur la derniere rangee.
+
+        ``(-6,A5)`` et ``(-10,A5)`` (L8870-8885) recopient l'adresse des
+        stats des deux joueurs - **jamais lus** ensuite (code mort).
+
+        La boucle part de l index ``0xD1`` et **retourne des la premiere
+        fiche vide remplie** (L9002) : un seul peep par appel. Borne haute
+        ``0xD3`` (L9010) - les fiches 209 et 210 des 212.
+        """
+        if code > 2:                                   # L8864-8868
+            return
+        idx = 0xD1                                     # L8886
+        while idx < 0xD3:                              # LAB_449BC L9009-9011
+            p = self.peeps[idx]                        # (-18,A5)
+            if p.life:                                 # L8895-8896
+                idx += 1                               # LAB_449B0 L9006-9008
+                continue
+            p.life = 1                                 # L8898
+            p.state = ST_EXPLORER                      # L8900 ($02)
+            if arg2 == 0:                              # L8901
+                # 4032 + ((newrand % 125) >> 1)  L8903-8912
+                reste = self.rng.below(125)            # EXT.L/DIVS/SWAP
+                p.block = m68k.to_word(0x0FC0 + m68k.asr_word(reste, 1))
+            elif arg2 == 1:                            # L8915
+                if self.rng.raw() & 1:                 # L8917-8919 BTST #0
+                    # ((newrand % 43) + 20) << 6 + 63   L8920-8930
+                    w = m68k.to_word(self.rng.below(43) + 0x0014)
+                    p.block = m68k.to_word(m68k.asl_word(w, 6) + 0x003F)
+                else:                                  # LAB_448C6 L8932
+                    # ((newrand % 43) + 20) << 6 + 4032 L8933-8943
+                    w = m68k.to_word(self.rng.below(43) + 0x0014)
+                    p.block = m68k.to_word(m68k.asl_word(w, 6) + 0x0FC0)
+            elif arg2 == 2:                            # L8947
+                if self.rng.raw() & 1:                 # L8949-8951
+                    # (newrand % 43) << 6               L8952-8960
+                    p.block = m68k.asl_word(self.rng.below(43), 6)
+                else:                                  # LAB_44918 L8962
+                    p.block = self.rng.below(43)       # L8963-8970
+            # arg2 ni 0, ni 1, ni 2 -> LAB_44930 : block non reassigne.
+            # LAB_44930 (L8971) : map_who[p.block] = idx + 1
+            # ECART : l'ecriture d'origine (L8977) n'a **aucune borne**.
+            # La branche arg2==1/bit0==0 produit un block jusqu'a 8000 et
+            # sortirait des 4096 cases ; elle est inatteignable (arg2 vaut
+            # 0) mais on empeche l'ecriture de sortir du tableau.
+            if 0 <= p.block < MAP_CELLS:
+                self.map.who[p.block] = idx + 1        # L8972-8977
+            prev, weapons, offspring = FUNNY[code]     # L8978-8992
+            p.prev_block = m68k.s16(prev)              # L8982 MOVE.W
+            p.offspring = offspring                    # L8987 octet +2
+            p.weapons = weapons                        # L8992 octet +3
+            p.face = 1                                 # L8994
+            p.w6 = weapons                             # L8996-8999
+            p.make_level_res = code & 0xFF             # L9001 (9,A5)
+            return                                     # L9002 -> LAB_449C6
 
     # ---------------------------------------------------------- explorateur
     def move_explorer(self, i: int, p: Peep) -> None:

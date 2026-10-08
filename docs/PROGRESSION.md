@@ -4231,6 +4231,143 @@ pas : `_where_do_i_go` etait deja comptee en citation, elle est desormais en
 alias (docstring cite `L4622-4901`).
 
 
+### Phase 56 (suite) - `_do_place_funny` transcrit, `_peeps` a 212 fiches
+
+Le second et dernier `[APPROX]` de `populous/` tombe : `_do_place_funny`
+(L8862-9013) est transcrit ligne a ligne. L'etape qui l'ecrivait faisait
+`self.effect = 0x50 + (code & 0x0F)` : le listing n'ecrit **aucun** effet
+sonore ici, il a ete supprime.
+
+#### Un deuxieme argument qui n'est jamais fourni
+
+La routine a deux parametres : `(8,A5)` = `arg1` et `($A,A5)` = `arg2`.
+Le cadre `LINK A5,#-18` reserve bien 18 octets de locaux (-18 a -1), et
+tous sont comptes (-18 ptr, -14 trou, -10 ptr, -6 ptr, -2 mot) : les deux
+mots positifs sont donc des arguments, pas des variables locales.
+
+Or **les deux appels ne poussent qu'un seul mot** :
+
+* L755-759 (`_main`, `game_turn == $1000`) : `MOVE.W D0,-(A7)` puis `JSR`,
+  nettoyage `ADDQ.W #2,A7` ;
+* L4003-4006 (`_move_peeps`, table pleine) : `MOVE.W #$0001,-(A7)`, meme
+  nettoyage.
+
+`arg2` lit donc un mot de pile du appelant, de valeur indeterminee : le
+listing ne le fixe pas. Il choisit l'une des quatre branches
+d'attribution du `block` (L8901-8970).
+
+Decision prise en dialogue, pas deduite : **les deux sites passent
+explicitement 0**, et les quatre branches sont transcrites. `arg2 == 0`
+donne `block = 4032 + ((newrand % 125) >> 1)`, c'est-a-dire la derniere
+rangee de la carte, toujours dans les bornes. La branche
+`arg2 == 1 / bit0 == 0` produit un `block` jusqu'a 8000 : elle est
+inatteignable, mais elle est transcrite, et l'ecriture `map_who[block]`
+(L8977) - sans **aucune borne** dans l'asm - est sautee si `block` sort
+des 4096 cases. C'est le seul ECART de cette transcription.
+
+#### Ce que la routine fait
+
+Boucle `idx = 0xD1 ; idx < 0xD3 ; idx++` - deux fiches, 209 et 210 :
+
+1. fiche deja prise (`life != 0`, L8895) : on avance ;
+2. fiche libre : `life = 1` (L8898), `state = 2` (L8900), `block` selon
+   `arg2`, `map_who[block] = idx + 1` (L8977) ;
+3. champs pris dans `_funny` (L8978-8992) : `prev_block` (mot, +0x0A),
+   `offspring` (octet +2), `weapons` (octet +3) ;
+4. `face = 1` (L8994), `w6 = weapons` (L8996-8999),
+   `make_level_res = arg1 & 0xFF` (L9001, `(9,A5)` = octet bas) ;
+5. **`BRA` de retour** (L9002) : la boucle s'arrete des la premiere fiche
+   remplie. Un seul peep par appel ; la suite n'est parcourue que si les
+   deux fiches etaient deja prises.
+
+`(-6,A5)` et `(-10,A5)` (L8870-8885) recopient l'adresse des stats des
+deux joueurs : ces deux mots ne sont **jamais lus** - code mort, note
+plutot que code.
+
+#### La table `_funny` : relue dans le binaire
+
+Le listing la donne en `DC.W` / `DC.L` melanges, avec un `DS.W 1` a $51682
+dont il n'ecrit pas le contenu. Il a ete lu dans l'executable
+`reference/original/extracted/DAD` (decalage $51680 - 249940) : les 36
+octets y correspondent **octet a octet** aux directives du listing, et le
+`DS.W` vaut `00 00`, donc `weapons` du record 0 = 0.
+
+.. code-block:: none
+
+    code   prev_block   weapons   offspring
+    0      $FFC0        $00       4
+    1      $FFBF        $05       8
+    2      $0041        $09       12
+
+`prev_block` est stocke **signe** dans le port (-64, -65, +65) :
+`map_who[p.block - p.prev_block]` (`render`, `_zero_population`) attend un
+delta, pas un mot non signe. Un `0xFFC0` non signe aurait fait sortir ce
+calcul de la table.
+
+#### La table `_peeps` a 212 fiches
+
+`_do_place_funny` ecrit `&_peeps[0xD1]` et `&_peeps[0xD2]`, au-dela des
+208 de `MAX_PEEPS`. Le listing tranche deja la question quand on regarde
+les adresses :
+
+.. code-block:: none
+
+    _peeps      $53014
+    _no_peeps   $5424C
+    ecart       $1238 = 4664 = 212 * 22
+
+`_no_peeps` suit **immediatement** la table. Le label intermediaire
+`LAB_5420A` vaut exactement `$53014 + 209 * 22` : c'est la continuation du
+tableau, pas une zone voisine. `_peeps` en compte donc 212.
+
+Le port alloue desormais 212 fiches (`PEEP_SLOTS`) ; `MAX_PEEPS` reste
+**208**, borne de simulation - `find_free_slot` et les boucles de
+`_move_peeps` n'atteignent jamais les fiches 208..211. Sans cet
+elargissement, `map_who` pouvant valoir 210/211, `peeps[w - 1]` (L4755)
+levait un `IndexError`.
+
+#### Le second site d'appel : `_main` a `game_turn == $1000`
+
+Transcrit dans `Game.compose()`, juste avant `show_the_shield()` - l'ordre
+exact de L752-761. `code = _start_seed & 3` : `self.seed` du port est bien
+`_start_seed` (ecrit L391-392 en mode conquest et L430 sinon, aux memes
+endroits que le port). `code > 2` - soit `seed & 3 == 3` - sort sans rien
+tirer. Ce site **ne touche pas** `funny_done` : seul L4006 l'ecrit, et
+L1057 le remet a zero au debut de partie.
+
+#### Verification
+
+Nouveau controle executable, `tools/check_funny.py` - 40 assertions dont
+une reference independamment recalculee pour chaque branche :
+
+.. code-block:: none
+
+    tools/check_funny.py        : 40/40 controles
+    tools/autopilot.py 59 0 3   : 68/68 controles
+    tools/check_render          : OK - 9 vrais ecarts (seuil 60)
+    tools/check_assets          : OK
+    tools/check_mana            : 0 ecart (56 essais do_action)
+    tools/check_dispatch        : controles verts (codes 1, 12, 13)
+    tools/smoke_sim             : 5000 tours, map_who sur peep mort = []
+    tools/stress 2000 8         : 8/8 parties robustes
+    tools/coverage.py           : 153/393 (38,9 %), 62 alias, 91 citations
+
+`check_funny.py` prouve aussi l'ECART par execution : sur 120 graines,
+60 tirages de la branche `arg2 == 1` tombent hors des 4096 cases, et une
+assertion verifie que **rien** n'a ete ecrit dans `map_who`.
+
+`smoke_sim` ne bouge **pas** (4 peeps, vie [3484, 3466], 90 cases de
+`blk`, 36 de `bk2`) : la routine ne se declenche que quand les 208
+emplacements sont pris, ou a la tour 4096 - et `smoke_sim` n'appelle pas
+`compose()`. C'est precisement pourquoi `check_funny.py` existe : sans lui,
+la transcription serait credible sans etre mesuree.
+
+Couverture : les **62 alias** (la seule mesure fiable) ne bougent pas. Les
+3 citations gagnees sont `_funny` et `_start_seed` - symboles de donnees,
+reellement refernces - plus `_main`, qui est **mentionnee** dans un
+docstring sans etre transcrite : c'est un plafond, pas une acquisition, et
+aucun alias n'a ete declare pour elle. `PLANIFIE` reste vide.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -4242,11 +4379,11 @@ alias (docstring cite `L4622-4901`).
 * **Samples d'origine** : la logique audio est complete et fidele (Phase 10),
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
-* **Marqueurs `[APPROX]`** : il n en reste qu un, `_do_place_funny`
-  (voir ci-dessous), plus la branche `LAB_4516` de `_set_devil_magnet`
-  (`powers.py`). Tout le reste de `populous/` est transcrit, ou hors portee
-  de facon documentee (2441 lignes de liaison serie / options - codes
-  2, 7, 8).
+* **Marqueurs `[APPROX]`** : il n en reste **qu'un**, la branche `LAB_4516`
+  de `_set_devil_magnet` (`powers.py`). `_do_place_funny` a ete transcrit
+  en Phase 56 (suite). Tout le reste de `populous/` est transcrit, ou hors
+  portee de facon documentee (2441 lignes de liaison serie / options -
+  codes 2, 7, 8).
 * **Trois ecarts de `_place_people`** (Phase 56) : `weapons = 1` (L7065) et
   `frame = 0x00FF` (L7053) au lieu des valeurs du port, et `target = 0`
   (L7069) au lieu de `-1` (convention du port, documentee). Les deux premiers
@@ -4256,10 +4393,6 @@ alias (docstring cite `L4622-4901`).
   exacte (Phases 16-18). L'ecart restant tient probablement au nombre de
   tours par seconde — l'asm ne fixe aucun rythme et tourne librement. Decide
   d'une cible de tours/s, puis verifiee par execution. **Non tranche.**
-* **`_do_place_funny`** (L8862) : ecrit dans `peeps[0xD1..0xD2]`, donc
-  **au-dela** de `MAX_PEEPS` (208) ; la table `_funny` n'est que
-  partiellement reconstruite dans ce listing. Demande d'etendre le tableau.
-
 ---
 
 ## Note honnête sur l'équilibrage

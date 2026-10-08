@@ -14,6 +14,18 @@ MAP_CELLS = MAP_W * MAP_H          # 4096
 
 MAX_PEEPS = 0xD0                   # 208 (L6984)
 PEEP_LIFE0 = 0x2D                  # 45 (L7026)
+PEEP_SLOTS = 0xD4                  # 212 - table `_peeps` (L25365-25392)
+
+# _funny (L24161-24169, $51680) : 3 fiches de 12 octets lues par
+# `_do_place_funny`. Par fiche : +0 MOT = prev_block, +2 MOT dont
+# l'octet +3 = weapons (LAB_51682), +4 MOT dont l'octet +5 =
+# offspring (LAB_51684) ; les octets +6..+11 ne sont pas lus.
+# Relus octet a octet dans le binaire original (DAD, $51680 - 249940).
+FUNNY = (
+    (0xFFC0, 0x00, 0x04),          # code 0
+    (0xFFBF, 0x05, 0x08),          # code 1
+    (0x0041, 0x09, 0x0C),          # code 2
+)
 
 # ---------------------------------------------------------------- tables voisins
 # _offset_vector, $0005181A (asm 24274-24278) : 25 mots
