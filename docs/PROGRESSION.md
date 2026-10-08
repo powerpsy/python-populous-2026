@@ -4010,6 +4010,124 @@ sur les cinq sols pour la Phase 53. **Aucune logique de jeu n'a bouge.**
   marge, pas des valeurs du listing : ce sont des parametres de controle,
   et ils sont tels que la suite reste verte sur les 25 fenetres connues.
 
+### Phase 55 - audit des routines « citees » : 37 etaient deja transcrites
+
+La Phase 50 avait pose le principe : seule la **declaration d'alias** est
+fiable, la citation n'est qu'un plafond. Mesure au depart
+(`tools/coverage.py`) : 150 routines sur 393 etaient « couvertes », dont
+**25 par un alias declare** — les 125 autres n'etaient que « citees »,
+c'est-a-dire *peut-etre* transcrites.
+
+L'audit consiste a trancher, une par une, ces citations. **Rien n'a ete
+transcrit de neuf : la couverture totale reste 150/393 (38,2 %). Ce qui
+a change, c'est la part fiable : 25 → 62 alias**, et le plafond des
+citations tombe de ~125 a 88.
+
+#### La regle appliquee
+
+Une `def` porte l'alias si, et seulement si :
+
+1. la `def` existe bien ;
+2. **et** sa docstring **nomme la routine du listing** (`_xxx`) **ou** cite
+   sa **ligne de depart** (`L14019`) **ou** son **adresse** (`$4059A`) —
+   c'est la regle que `cite_solide` appliquait au voisinage d'un repere
+   asm, mais appliquee a la `def` elle-meme ;
+3. **et** le corps reproduit les decisions de la routine : ni un simple
+   emprunt de gardes, ni un renvoi.
+
+Trois groupes, selon la nature de la preuve : **A** nom ou `L<debut>`
+dans la docstring (26 routines), **B** `$adresse` de depart (6),
+**C** transcrit **sous un autre nom** (5).
+
+#### Les 6 preuves par adresse (groupe B)
+
+La docstring de `move_peeps` dit `asm $4059A` : `$4059A` est bien la
+premiere adresse de `_move_peeps` (L3245). Meme chose pour
+`_set_frame` → `$422D2`, `_place_people` → `$43164`, `_set_battle` →
+`$42CBA`, `_zero_population` → `$421F4`, et `_join_forces` qui cite
+`ligne 5540`. Sans cette verification par adresse, ces six restaient
+dans le seau « citee » alors qu'aucune d'elles n'avait ete transcrite
+sous un autre nom.
+
+#### Les 5 routines transcrites sous un autre nom (groupe C)
+
+| listing | python | preuve dans la docstring |
+|---|---|---|
+| `_clear_map` L1023 | `Terrain.clear` | « ``_clear_map`` (L1023) » |
+| `_draw_it` L15794 | `Renderer.draw_window` | « ``_draw_it(xoff, yoff)`` » |
+| `_draw_map` L1543 | `Renderer.draw_minimap` | « ``_draw_map(0, 0, 0x3F, 0x3F)`` » |
+| `_text` L19973 | `Renderer.draw_text` | « ``_text(...)`` (asm L19973) » |
+| `_draw_sprite` L19283 | `Game._draw_sprite_at` | nom + « L'asm (L19283) » |
+
+C'est exactement ce qu'un compteur automatique ne pouvait pas voir :
+`classe()` cherche `def <nom sans le souligne>`, donc `draw_minimap`
+n'etait pas trouvable pour `_draw_map`. Or `_draw_map` est la mini-carte,
+transcrite depuis la Phase 52 — on la comptait en plafond alors qu'elle
+est en alias depuis longtemps.
+
+#### Ce qui n'a PAS ete declare, et pourquoi
+
+Quatre routines sont nommees dans une docstring sans pour autant etre
+transcrites. Les laisser en « citee » est le choix honnete :
+
+* **`_a_putpixel`** (L16758) — `sim.putpixel` ne fait que renvoyer vers
+  le callback `minimap_pixel` ; la logique pixel est dans
+  `draw_minimap`, deja aliasé pour `_draw_map`. Declarer l'un et pas
+  l'autre aurait double-compté le meme travail.
+* **`_won_conquest`** (L14460, 316 l.) — repartie sur `conquest_win`
+  (`nouveau_niveau` L14462-14495, `texte_fin` L14522-14589) et sur
+  `game._end_game` ; **aucune `def` unique ne la porte**, et le titre
+  du module annonce `L14460-14494` alors que l'etendue du listing va
+  jusqu'a L14776. Une declaration exigerait un choix arbitraire de
+  cible.
+* **`_mouse`** (L19522, 155 l.) — `Game._mouse` ne fait que diviser par
+  le zoom ; la routine d'origine lit les deltas `JOY0DAT`. Meme nom,
+  travail different.
+* **`_stats`** (L24171) — symbole de donnees : `terrain.stats` n'a
+  rien a voir avec lui. Homonymie pure.
+
+#### Ce qui reste vraiment absent
+
+Après l'audit, il ne reste que **34 routines encore « citees » ayant du
+code**, soit 1885 lignes — et dont beaucoup sont des symboles de
+donnees (`_peeps`, `_magnet`, `_mana_values`, `_con_text`, `_word_asc`).
+Les vraies absences de logique sont :
+
+```
+_show_world     L12190   517    l'ecran du monde / Book of Worlds
+_get_message    L17707   508    la boucle de messages (fin de tour)
+_won_conquest   L14460   316    voir ci-dessus (partiel)
+_load_sound     L20712   160    format de module ProTracker illisible
+_mouse          L19522   155    voir ci-dessus (partiel)
+_read_lord      L16631    29    discours — volontairement non porte
+_draw_mouth     L19894    29    idem
+_read_mouth     L16668    20    idem
+_a_putpixel     L16758    21    voir ci-dessus
+_set_temp_view   L3151     9    reduit a un champ, `sim._temp_view`
+_free_inter       L238    10    boucle d'attente, jamais appelee
+_waitfor        L15278    11    idem
+```
+
+`_get_message` (508 lignes) est la plus interessante des trois : c'est
+elle qui, en fin de tour, lit les fiches `_stats` et declenche le
+`dispatch`. `powers.py` la cite comme appelant de `_do_action` (code 14),
+mais aucune `def` ne la porte — notre `dispatch` n'en est que la
+moitée « declenchement », pas la boucle de lecture.
+
+#### Verification
+
+```
+tools/coverage.py  : COUVERTURE REELLE 150/393 (38,2 %)
+                     par alias declare    : 62 (fiable)   [etait 25]
+                     par citation reperee : 88 (plafond)  [etait ~125]
+                     alias-absent         : 0   (aucune cible morte)
+                     analysees a coder    : 0   (PLANIFIE reste vide)
+```
+
+Aucune logique de jeu n'a bouge : `coverage.py` est le seul fichier
+modifie. La suite complete (autopilot, check_render, check_assets,
+check_mana, check_dispatch, smoke_sim, stress) est retounee verte.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

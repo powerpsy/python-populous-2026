@@ -78,6 +78,47 @@ ALIAS: dict[str, str] = {
     # tronquait `pl.mana` dans powers.py:619.
     "_divs": "m68k.divs_long",
     "_mulu": "m68k.mulu_word",
+
+    # --- Phase 55 : audit des routines « citees ». Une entree par preuve
+    #     (la def nomme la routine, ou cite sa ligne / son adresse de
+    #     depart). Voir PROGRESSION 55 pour les cas non retenus.
+    "_zoom_map": "Game.zoom_map",   # Phase 55 : L1658 (game.py)
+    "_end_game": "Game._end_game",   # Phase 55 : L14019 (game.py)
+    "_show_the_shield": "Game.show_the_shield",   # Phase 55 : L2769 (game.py)
+    "_requester": "Game.requester",   # Phase 55 : L9901 (game.py)
+    "_set_tend_icons": "Game.set_tend_icons",   # Phase 55 : L2455 (game.py)
+    "_set_mode_icons": "Game.set_mode_icons",   # Phase 55 : L2526 (game.py)
+    "_interogate": "Game.interogate",   # Phase 55 : L2719 (game.py)
+    "_draw_sprite": "Game._draw_sprite_at",   # Phase 55 : L19283 (game.py)
+    "_raise_point": "Terrain.raise_point",   # Phase 55 : L1274 (terrain.py)
+    "_lower_point": "Terrain.lower_point",   # Phase 55 : L2571 (terrain.py)
+    "_make_map": "Terrain.make_map",   # Phase 55 : L1420 (terrain.py)
+    "_make_thing": "Terrain.make_thing",   # Phase 55 : L1208 (terrain.py)
+    "_mod_map": "Terrain.mod_map",   # Phase 55 : L1594 (terrain.py)
+    "_make_alt": "Terrain.make_alt",   # Phase 55 : L1189 (terrain.py)
+    "_make_woods_rocks": "Terrain.make_woods_rocks",   # Phase 55 : L8535 (terrain.py)
+    "_clear_map": "Terrain.clear",   # Phase 55 : L1023 (terrain.py)
+    "_draw_it": "Renderer.draw_window",   # Phase 55 : L15794 (render.py)
+    "_draw_map": "Renderer.draw_minimap",   # Phase 55 : L1543 (render.py)
+    "_text": "Renderer.draw_text",   # Phase 55 : L19973 (render.py)
+    "_drw_blk": "Renderer.blit_tile",   # Phase 55 : L15737/SUB_49938 (render.py)
+    "_draw_bar": "Renderer.draw_bar",   # Phase 55 : L19213 (render.py)
+    "_draw_icon": "Renderer.draw_icon",   # Phase 55 : L19184 (render.py)
+    "_toggle_icon": "Renderer.toggle_icon",   # Phase 55 : L19493 (render.py)
+    "_do_knight": "PowerEngine.do_knight",   # Phase 55 : L8392 (powers.py)
+    "_do_war": "PowerEngine.do_war",   # Phase 55 : L8482 (powers.py)
+    "_valid_move": "GameMap.valid_move",   # Phase 55 : L20912 (map.py)
+    "_kill_effect": "SoundEngine.kill_effect",   # Phase 55 : L20876 (sound.py)
+    "_check_effect": "SoundEngine.check_effect",   # Phase 55 : L20898 (sound.py)
+    "_PlaySound": "SoundEngine.play",   # Phase 55 : L20307 (sound.py)
+    "_PlayMeas": "SoundEngine.mesure",   # Phase 55 : L20433 (sound.py)
+    "___clear_all_map": "Game.clear_all_map",   # Phase 55 : L23947 (game.py)
+    "_move_peeps": "Game.move_peeps",   # Phase 55 : $4059A (sim.py)
+    "_set_frame": "Game.set_frame",   # Phase 55 : $422D2 (sim.py)
+    "_place_people": "Game.place_people",   # Phase 55 : $43164 (sim.py)
+    "_join_forces": "Game.join_forces",   # Phase 55 : ligne 5540 (sim.py)
+    "_set_battle": "Game.set_battle",   # Phase 55 : $42CBA (sim.py)
+    "_zero_population": "Game.zero_population",   # Phase 55 : $421F4 (sim.py)
 }
 
 #: ``routine asm`` : **analysée mais pas encore transcrite**.
