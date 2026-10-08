@@ -581,12 +581,12 @@ class PowerEngine:
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
         11          `_rotate_all_map` (99 l.)   **fait** — pli max + arbres
         12          `LAB_4C124` -> `_clear_all_map` **fait** — vide tout
-        13          `LAB_4C12A` -> `_load_ground`     non lu
+        13          `LAB_4C12A` -> `_load_ground` **fait** — change de sol
         15          `LAB_4C15C` (5 l.)         **fait** — le tricheur
         ==========  =========================  ==============================
 
-        Douze des seize codes sont ici (le defaut partage par 0 et 14
-        compris) ; quatre — `2`, `7`, `8`, `13` — **lèvent** au lieu de
+        Treize des seize codes sont ici (le defaut partage par 0 et 14
+        compris) ; trois — `2`, `7`, `8` — **lèvent** au lieu de
         retomber sur le defaut : un code non transcrit ne doit surtout pas
         passer pour un no-op, ce qui est exactement l'erreur que la Phase 22
         a reprochee. Le cas 12 merite d'etre raconte : `_sub_action`
@@ -672,14 +672,31 @@ class PowerEngine:
             self.g.clear_all_map()
             return
 
+        if code == 13:                            # LAB_4C12A
+            # L18984-18998, trois temps :
+            #   4c12a `_ground_in = $A(A5)` — ecrit AVANT l'appel, donc aussi
+            #         en cas d'echec ;
+            #   4c130 push #1 (identifiant de message), push $A(A5) (le sol),
+            #         `JSR ___load_ground` — le sol est donc le **premier**
+            #         argument, `arg2`, et non `code` ;
+            #   4c142 `_ground_in` reecrit si D0 != 0 (ici `load_ground`
+            #         leve sur le chemin d'erreur, donc toujours) ;
+            #   4c148 `_draw_map(0, 0, $3F, $3F)`, dans les deux cas.
+            self.g.ground = arg2
+            self.g.load_ground(arg2)
+            self.g.ren.draw_minimap(self.g.frame, self.g.terrain,
+                                    colours=self.g.colours)
+            return
+
         if code == 15:                            # LAB_4C15C
             sim.cheat = arg2 + 1                   # L19001-19002
             return
 
+        # Seuls codes encore joignables ici : 2, 7, 8. Les douze autres
+        # (0, 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15) sont transcrits et
+        # sont retournes plus haut.
         non_transcrit = {
-            3: "_do_war", 4: "do_flood", 5: "_do_knight",
-            7: "LAB_4BC94", 8: "LAB_4BE12", 2: "LAB_4BA34",
-            12: "_clear_all_map", 13: "_load_ground",
+            2: "LAB_4BA34", 7: "LAB_4BC94", 8: "LAB_4BE12",
         }
         raise NotImplementedError(
             "_do_action code %d : handler %s non transcrit" % (code, non_transcrit[code]))

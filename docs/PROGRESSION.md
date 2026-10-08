@@ -3770,6 +3770,167 @@ indecidable sans oracle 68000, c'est l'**interpretation** de la Phase 50
   `Game.load_ground(n)` qui **applique** les tables chargees (tuiles,
   couleurs de mini-carte, jeu de sprites 0 ou 4).
 
+### Phase 53 - `_load_ground` cable : le code 13, et un bug de `map_colour`
+
+Le code 13 est le **chargeur de sol**, pas de la logique de jeu : c'est ce
+qui le rendait trompeur. Nouveau : `Game.load_ground(n)` ; nouveau controle
+dans `tools/check_dispatch.py`.
+
+#### Ce qui a change
+
+* `Game.load_ground(n)` (game.py) — les quatre temps de L16468-4A444 :
+
+  1. `_Open("LANDn")` + 9 x `_Read` + `_Close` (L4A25A-4A32E). Les
+     octets sont deja lus ailleurs : `populous.land.load_land` pour
+     l'en-tete (114 o), `populous.assets.load_land` pour `_blk_data`
+     (0x8340 = 70 tuiles). Les offsets sont les memes, le trou
+     `lines cut` de L16504 est un defaut de listing (voir Phase 52).
+  2. `if sprites_no != _sprites_in: _read_sprites(sprites_no)`
+     (L4A330-4A342). Dans le port, `_sprites_in` = `ren.header["sprites_no"]`
+     **avant** l'affectation — c'est le seul moment ou l'ancien jeu est
+     encore connu.
+  3. `_map_colour[i+16] = _map_colour[i]` pour i = 0..15 (L4A348-4A36C).
+  4. `_weapons_order[0..10] = _weapons_add[0..10]` puis tri croissant
+     (L4A372-4A41E). Le tri est particulier : pour chaque `i` on compare
+     a **tous** les `j` et on echange des que `order[i] < order[j]`, ce
+     qui fait monter le maximum en `i` puis enchaîne — sur 11 elements
+     il produit bien un tri croissant.
+
+  Renvoie 1. Le chemin d'erreur LAB_4A426 appelle `_do_message`
+  (sous-systeme de messages, non transcrit) : `load_ground` **leve** plutot
+  que de renvoyer silencieusement 0.
+* `powers.py` : `do_action` code 13. Point d'appel a lire attentivement :
+  `MOVE.W #$0001,-(A7)` puis `MOVE.W ($A,A5),-(A7)`, donc **`n` = `$A(A5)`
+  = `arg2`** (le sol), et 1 est l'identifiant de message — le sol n'est
+  **pas** `code`. Puis `_ground_in = arg2` (deux fois, avant et apres
+  succes) et `_draw_map(0, 0, $3F, $3F)` dans les deux cas.
+* `sim.py` : `weapons_order` construit par `sorted(weapons_add[0:11]) +
+  [0xFFFF]` au lieu de `[0] + weapons_add[1:11] + [0xFFFF]`.
+* `coverage.py` : `ALIAS["_load_ground"] = "Game.load_ground"` — 13 des 16
+  codes ; `2`, `7`, `8` seuls a lever.
+
+#### Le bug que le sol 0 ne pouvait pas montrer
+
+`map_colours()` rendait `tete + image ROM (16..30) + 0x0C + [0x19]*200`,
+avec pour commentaire :
+
+    « `_load_ground` ne réécrit que les 16 premiers octets : les blocs
+      16..30 (« rives ») gardent donc la couleur par défaut. »
+
+C'est **faux**, et la preuve tient en trois lignes de listing :
+
+.. code-block:: none
+
+    LAB_4A348:  MOVE.B (0,A0,D0.W),(0,A1,D1.W)   ; _map_colour[i] -> [i+16]
+                ADDQ.W #1,(-6,A5) / CMPI.W #$10 / BLT.S LAB_4A348
+
+Les 16 octets lus dans `LANDn` sont **dupliques** en 16..31, par dessus
+l'image ROM. Decodage confirme sur deux instructions voisines de la meme
+routine : `MOVE.W (0,A0,D0.L),(0,A1,D1.L)` de L4A38A est bien
+`_weapons_order[i] = _weapons_add[i]` (A0 = source, A1 = destination), et
+l'extension word donne `0800` pour D0 long / `1800` pour D1 long — donc
+le registre d'index est en bits 14-12, la taille en bit 11.
+
+.. code-block:: none
+
+    ROM[0..15]      0e 0c 0b 0b 0c 0c 0b 0b 0d 0d 0c 0c 0d 0d 0c 0c
+    land0 map_colour 0e 0c 0b 0b 0c 0c 0b 0b 0d 0d 0c 0c 0d 0d 0c 0c  == ROM
+    land1 map_colour 0e 09 0a 0a 09 09 0a 0a 07 07 09 09 07 07 09 09
+    land2 map_colour 0e 04 05 05 04 04 05 05 03 03 04 04 03 03 04 04
+    land3 map_colour 08 02 03 03 02 02 03 03 01 01 02 02 01 01 02 02
+    land4 map_colour 0e 03 04 04 03 03 04 04 02 02 03 03 02 02 03 03
+
+**Le sol 0 est le seul dont les deux images coincident.** C'est la raison
+pour laquelle l'ecart est reste silencieux : la suite ne teste que le sol 0.
+Les sols 1..4 avaient donc les rives de la mini-carte colorees avec les
+valeurs du sol 0.
+
+#### Verification — et preuve que le controle est sensible
+
+`check_dispatch` controle 7 : deux passages, sol 1 puis sol 4.
+
+* sol 1 : `sprites_no` 0 -> 0, le `BEQ` de L4A334 doit **sauter**
+  `_read_sprites` — on verifie que le **même objet** `ren.sprites` survit ;
+* sol 4 : `sprites_no` 0 -> 4, le chemin complet — et `land4` a un
+  `map_colour` sans rapport avec l'image ROM ;
+
+pour chacun : `_ground_in` mis a jour, `_map_colour[16..31] == [0..15]`,
+`[32..] == 0x19`, `sim.land` recharge, `weapons_order == sorted(add)`,
+`_alt` et `_map_blk` **inchangees** (le relieve doit survivre), et
+`_draw_map` appele une fois par sol avec les couleurs fraiches.
+
+.. code-block:: none
+
+    code 13 _load_ground : sols 1 puis 4, map_colour duplique,
+      weapons_order trie, relief inchange                OK
+
+Controle negatif (script jete, execute une fois) : l'ancienne
+`map_colours` reinjectee dans `populous.game` → **exit 1, 4 ecarts** :
+
+.. code-block:: none
+
+    ECHECS : 4
+      code 13 : sol 1 : _map_colour[16..31] ne double pas 0..15
+      code 13 : sol 1 : 16..31 garde l'image ROM (le bug de la Phase 53)
+      code 13 : sol 4 : _map_colour[16..31] ne double pas 0..15
+      code 13 : sol 4 : 16..31 garde l'image ROM (le bug de la Phase 53)
+
+Le controle n'est donc pas decoratif : il voit l'ecart qu'il est cense voir.
+
+#### Verification complete
+
+.. code-block:: none
+
+    check_dispatch    routage 3/4/5 ... : 0 ecart
+                      routage 1/6/11/15 : 0 levage
+                      codes 2/7/8 levent : 3/3
+                      codes 9/10         : 56 essais, 0 ecart
+                      code 1             : OK
+                      code 12            : OK (4225 sommets, 4096 cases)
+                      code 13            : OK (sols 1 et 4)
+                      => TOUS LES CONTROLES DE ROUTAGE SONT VERTS
+    check_mana        665/665 + 56/56
+    68/68 controles   graine 59
+    check_render      OK (sol 0)
+    check_assets      OK
+    smoke_sim         OK
+    stress 2000 x 8   OK : 8/8
+    couverture        150 / 393 (38,2 %) — 25 alias fiables (24 -> 25)
+
+#### Une mesure le long du chemin : `check_render` sur les cinq sols
+
+En testant le sol 4 pour la premiere fois, `check_render` a rendu
+**ÉCART** (249 px, seuil 210) — alors que la suite, qui ne teste que le
+sol 0, restait verte. Nouvel outil `tools/measure_residue.py`, qui separe
+le residu connu (falaises interieures : la 3e passe laisse du **NOIR**) du
+reste (les deux rendus ont peint, mais differemment) :
+
+* **la carte ne depend pas du sol** : `Terrain.ground` est du state mort,
+  `build_map(s,0)` et `build_map(s,4)` donnent les memes `blk`, `disp_alt`
+  et `bk2`. L'ecart vient donc des **tuiles**, pas du relief ;
+* le sol 4 depasse le seuil (457 px max) uniquement a cause du residu :
+  439 de ses 457 ecarts sont du NOIR sur la 3e passe ;
+* le « vrai ecart » **n'est pas ne en Phase 53** : le sol 0 en a deja 9 a 14,
+  le sol 3 en a 18 a 30.
+
+Trois choses restent ouvertes ici, et elles sont mesurees, pas devinees :
+le seuil 210 de `check_render` vient d'un echantillon qui n'a pas couvert
+les cinq sols ; `check_render` **sort toujours en 0**, meme sur ÉCART ; et
+personne n'a tranche si le « vrai ecart » de 9 a 30 px est le comportement
+de l'original ou une difference de la transcription — sans oracle 68000,
+c'est indecidable.
+
+#### Ce qui n'a pas ete fait
+
+* `2`, `7`, `8` leverent toujours : le mur serie/options n'a pas bouge.
+* Comme pour les codes 12 et 13 depuis la Phase 51, rien n'ecrit
+  `st.act = 13` en jeu : `check_dispatch` l'exerce artificiellement.
+* `set_ground` (touche Tab) **regenere** la carte depuis la graine — ce
+  n'est pas `_load_ground`, qui ne touche ni a l'une ni a l'autre. Il a
+  ete laisse tel quel : c'est une touche de debug du port, pas une
+  transcription, et la boucle d'origine (`ADDQ / CMPI #3 / CLR`) fait
+  tourner `_ground_in` sur **0..3**, pas 0..4.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

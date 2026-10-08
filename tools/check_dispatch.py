@@ -12,7 +12,7 @@ et non suppose :
    tourner et que la table de Phase 46 donnait pour "non lus" ;
 3. le calcul du mana (codes 9/10) doit egaler le listing, reference
    reecrite ici de maniere independante (flottant, pas ``divs_long``) ;
-4. les codes ``2, 7, 8, 13`` doivent **lever** ``NotImplementedError``
+4. les codes ``2, 7, 8`` doivent **lever** ``NotImplementedError``
    et surtout pas retomber silencieusement en no-op : c'est la regle de
    Phase 22, et c'est exactement ce que ``_sub_action`` faisait ;
 5. le code 12 doit **bien vider la carte** (Phase 52) — 4225 sommets,
@@ -22,6 +22,11 @@ et non suppose :
    c'est ``_make_map`` qui les remplit apres le nettoyage. On les verifie
    donc au moment precis ou ``_make_map`` est sur le point d'etre appele,
    en l'interceptant.
+6. le code 13 doit **changer d'habillage sans toucher au relief** (Phase 53) :
+   ``map_colour`` duplique en 16..31 (la boucle L4A348 que le port avait
+   manquee), ``weapons_order`` re-copie et trie, ``_draw_map(0,0,63,63)``
+   appele une fois — et ``_alt``/``_map_blk`` **inchangees**, puisque
+   ``_load_ground`` ne s'occupe ni du relief ni de la carte.
 """
 import sys
 from pathlib import Path
@@ -33,7 +38,7 @@ from populous.constants import ACT_ACTION  # noqa: E402
 CIBLES = ("do_war", "do_flood", "do_knight")
 CODES_APPELES = (3, 4, 5)
 CODES_SANS_CIBLEE = (1, 6, 11, 15)
-CODES_NON_TRANSCRITS = (2, 7, 8, 13)
+CODES_NON_TRANSCRITS = (2, 7, 8)
 ESSAIS_MANA = (399, -250, 0, 1, 32767, 32768, 65535, 65536,
                99_999, 100_000, 100_001, 200_000, 300_000, 2_000_063)
 
@@ -106,7 +111,7 @@ def main() -> int:
             echecs.append("code %d : erreur inattendue %r" % (code, exc))
         else:
             echecs.append("code %d : PAS leve — no-op silencieux" % code)
-    print("codes 2/7/8/13 lèvent                    : %d/%d"
+    print("codes 2/7/8 lèvent                    : %d/%d"
           % (n_ok, len(CODES_NON_TRANSCRITS)))
 
     # --- 4. codes 9/10 : le calcul doit egaler le listing ---------------
@@ -223,6 +228,95 @@ def main() -> int:
           % (n_sommets, n_cases, n_peeps, captures.get("draw"),
              "OK" if not e12 else "%d ecart(s)" % len(e12)))
     for e in e12:
+        print("   %s" % e)
+
+    # --- 7. code 13 : _load_ground (L16468-4A444) -----------------------
+    from populous.assets import load_sprites as _sprites
+    from populous.land import load_land as _tables
+
+    e13 = []
+    rom = bytes.fromhex("0e0c0b0b0c0c0b0b0d0d0c0c0d0d0c0c")
+    alt0 = list(g.terrain.alt)
+    blk0 = bytes(g.terrain.blk)
+    sprites_obj0 = g.ren.sprites
+    sprites_in0 = g.ren.header["sprites_no"]
+    dessins = {}
+    REN = type(g.ren)
+    draw_reel = REN.draw_minimap
+
+    def draw_epion(self_, *a, **k):
+        dessins["n"] = dessins.get("n", 0) + 1
+        dessins["dest"] = a[0] if a else None
+        dessins["terr"] = a[1] if len(a) > 1 else None
+        dessins["couleurs"] = k.get("colours")
+        return draw_reel(self_, *a, **k)
+
+    def verifier(n_sol, attendu_sprites_obj):
+        """Les invariants de la routine, pour un sol donne."""
+        t = _tables(n_sol)
+        if g.ground != n_sol:
+            e13.append("sol %d : _ground_in = %s" % (n_sol, g.ground))
+        if g.colours[16:32] != g.colours[0:16]:
+            e13.append("sol %d : _map_colour[16..31] ne double pas 0..15"
+                       % n_sol)
+        if list(g.colours[0:16]) != list(t.map_colour):
+            e13.append("sol %d : _map_colour[0..15] = %s, fichier = %s"
+                       % (n_sol, g.colours[0:16], list(t.map_colour)))
+        if bytes(g.colours[0:16]) != rom and bytes(g.colours[16:32]) == rom:
+            e13.append("sol %d : 16..31 garde l'image ROM (le bug de la "
+                       "Phase 53)" % n_sol)
+        if g.colours[32:] != [0x19] * 200:
+            e13.append("sol %d : _map_colour[32..] != 0x19" % n_sol)
+        if g.ren.header["sprites_no"] != t.sprites_no:
+            e13.append("sol %d : sprites_no = %s (fichier = %s)"
+                       % (n_sol, g.ren.header["sprites_no"], t.sprites_no))
+        if g.sim.weapons_order[:11] != sorted(t.weapons_add):
+            e13.append("sol %d : weapons_order = %s (trie = %s)"
+                       % (n_sol, g.sim.weapons_order[:11],
+                          sorted(t.weapons_add)))
+        if g.sim.land.mana_add != t.mana_add:
+            e13.append("sol %d : sim.land non recharge" % n_sol)
+        if attendu_sprites_obj == "idem":
+            if g.ren.sprites is not sprites_obj0:
+                e13.append("sol %d : sprites recharges alors que "
+                           "sprites_no n'a pas change" % n_sol)
+        elif g.ren.sprites is sprites_obj0:
+            e13.append("sol %d : sprites NON recharges alors que "
+                       "sprites_no a change" % n_sol)
+
+    REN.draw_minimap = draw_epion
+    try:
+        # a) sprites_no 0 -> 0 : le BEQ de L4A334 doit sauter _read_sprites
+        g.powers.dispatch(0, ACT_ACTION, 1, 13)
+        verifier(1, "idem")
+        # b) sprites_no 0 -> 4 : le chemin complet, et le sol 4 a un
+        #    map_colour qui n'a rien a voir avec l'image ROM.
+        g.powers.dispatch(0, ACT_ACTION, 4, 13)
+        verifier(4, "recharge")
+        if len(g.ren.sprites) != len(_sprites("sprites4.dat")):
+            e13.append("sprites4 : %d sprites (attendu %d)"
+                       % (len(g.ren.sprites), len(_sprites("sprites4.dat"))))
+    except NotImplementedError as exc:
+        e13.append("encore NotImplementedError : %s" % exc)
+    except Exception as exc:                        # noqa: BLE001
+        e13.append("erreur inattendue %r" % (exc,))
+    finally:
+        REN.draw_minimap = draw_reel
+
+    if list(g.terrain.alt) != alt0:
+        e13.append("_alt a change : _load_ground ne doit pas y toucher")
+    if bytes(g.terrain.blk) != blk0:
+        e13.append("_map_blk a change : _load_ground ne doit pas y toucher")
+    if dessins.get("n") != 2:
+        e13.append("_draw_map appele %s fois (attendu 2, un par sol)"
+                   % dessins.get("n"))
+    elif dessins.get("couleurs") is not g.colours:
+        e13.append("_draw_map ne recoit pas les couleurs fraiches")
+    echecs.extend("code 13 : %s" % e for e in e13)
+    print("code 13 _load_ground : sols 1 puis 4, map_colour duplique, "
+          "weapons_order trie, relief inchange  %s"
+          % ("OK" if not e13 else "%d ecart(s)" % len(e13)))
+    for e in e13:
         print("   %s" % e)
 
     print()

@@ -49,7 +49,8 @@ import pygame  # noqa: E402
 
 from populous import config  # noqa: E402
 from populous import m68k  # noqa: E402
-from populous.assets import load_pic  # noqa: E402
+from populous.assets import load_pic, load_sprites  # noqa: E402
+from populous.assets import load_land as load_tiles  # noqa: E402
 from populous.config import DEFAULT_GROUND, DEFAULT_SEED, FPS  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
@@ -1434,6 +1435,52 @@ class Game:
         self.screen = pygame.display.set_mode((SCREEN_W * self.zoom,
                                                SCREEN_H * self.zoom),
                                               pygame.FULLSCREEN)
+
+    # ---------------------------------------------------- _load_ground (L16468)
+    def load_ground(self, n: int) -> bool:
+        """``_load_ground(n, msg)`` (L16468-4A444) — le code 13 de ``_do_action``.
+
+        Ce n'est **pas** la creation du relief : la routine ne touche ni
+        ``_alt`` ni ``_map_blk``. Elle recharge l'habillage d'un terrain :
+
+        1. ``_Open("LANDn")`` + 9 x ``_Read`` + ``_Close`` (L4A25A-4A32E) :
+           ``walk_death``, ``population_add``, ``mana_add``, ``weapons_add``,
+           ``battle_add1``, ``battle_add2``, ``map_colour`` (16 octets),
+           ``sprites_no`` (2 octets) et ``_blk_data`` (0x8340 = 70 tuiles).
+           ``land.load_land`` et ``assets.load_land`` lisent les memes octets
+           aux memes offsets (tableau dans :mod:`populous.land`).
+        2. ``if sprites_no != _sprites_in: _read_sprites(sprites_no)``
+           (L4A330-4A342) : le jeu 0 ou 4 n'est recharge que s'il change.
+        3. ``_map_colour[i+16] = _map_colour[i]`` (L4A348-4A36C), exprime ici
+           par la reconstruction de ``self.colours`` via :func:`map_colours`.
+        4. ``_weapons_order[0..10] = _weapons_add[0..10]`` puis tri croissant
+           (L4A372-4A41E).
+
+        Renvoie 1, comme le ``MOVEQ #1,D0`` du listing. Le chemin d'erreur
+        LAB_4A426 appelle ``_do_message``, sous-systeme non transcrit : cette
+        methode **leve** plutot que de renvoyer silencieusement 0.
+        """
+        try:
+            tables = load_land(n)                 # LandTables : l'en-tete
+            header, tiles = load_tiles(n)         # + les 0x8340 octets de tuiles
+        except (FileNotFoundError, ValueError):
+            raise NotImplementedError(
+                "_load_ground : chemin d'erreur LAB_4A426 (_do_message) "
+                "non transcrit") from None
+
+        ren = self.ren
+        sprites_in = ren.header["sprites_no"]     # _sprites_in (L4A334)
+        ren.header, ren.tiles = header, tiles
+        if header["sprites_no"] != sprites_in:    # BEQ LAB_4A344
+            ren.sprites = load_sprites("sprites%d.dat" % header["sprites_no"])
+        ren.ground = n
+
+        self.ground = n                           # _ground_in (L4C12A)
+        self.sim.land = tables
+        self.sim.weapons_order = (
+            sorted(tables.weapons_add[0:11]) + [0xFFFF])
+        self.colours = map_colours(ren.header)
+        return True
 
     def set_ground(self, g: int) -> None:
         self.ground = g

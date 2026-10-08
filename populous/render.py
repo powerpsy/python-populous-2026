@@ -499,17 +499,35 @@ class Renderer:
 _ROM_MAP_COLOUR_16_30 = bytes.fromhex("0e0c0b0b0c0c0b0b0d0d0c0c0d0d0c")
 """Octets ROM de ``_map_colour`` pour les blocs 16..30 (L24252-24254).
 
-``_load_ground`` ne réécrit que les 16 premiers octets : les blocs 16..30
-(« rives ») gardent donc la couleur par défaut, quel que soit le sol choisi.
+Image ROM, donc **etat initial** : ``_load_ground`` recopie
+``_map_colour[0..15]`` sur ``_map_colour[16..31]`` (boucle L4A348-4A36C),
+donc ces 16 octets sont ensuite ecrases par ceux de ``LANDn``.
+Le texte qui precedait ce commentaire affirmait le contraire : la boucle
+avait ete manquee. Seul le sol 0, celui des tests, a les deux images
+identiques -- d'ou le caractere silencieux de l'ecart.
 """
 
 
 def map_colours(header: dict | None = None) -> list[int]:
-    """Table complète ``_map_colour`` indexée par ``map_blk`` (0..231)."""
+    """Table complète ``_map_colour`` indexée par ``map_blk`` (0..231).
+
+    Boucle L4A348-4A36C de ``_load_ground``::
+
+        i = 0
+        LAB_4A348:  _map_colour[i + $10] = _map_colour[i]
+                    i += 1 ; if i < $10 goto LAB_4A348
+
+    ``32..`` vaut ``0x19`` (``DC.L $19191919`` de L5177E) ;
+    ``draw_minimap`` remplace ce ``0x19`` par ``colours[0x1F]``.
+    """
     head = list(header["map_colour"]) if header else list(
         bytes.fromhex("0e0c0b0b0c0c0b0b0d0d0c0c0d0d0c0c"))
-    # blocs 16..30 (ROM) ; 31 = LAB_5177D = 0x0C ; 32.. = 0x19 -> replacé par 0x0C
-    return head + list(_ROM_MAP_COLOUR_16_30) + [0x0C] + [0x19] * 200
+    # L4A348-4A36C de `_load_ground` : `_map_colour[i + $10] = _map_colour[i]`
+    # pour i = 0..15. Les octets lus dans LANDn sont donc DUPLIQUES en 16..31,
+    # par dessus l'image ROM. Le commentaire precedent affirmait le contraire
+    # (« ne reecrit que les 16 premiers octets ») : la boucle avait ete
+    # manquee. Seul le sol 0, celui des tests, a les deux images identiques.
+    return head + list(head) + [0x19] * 200
 
 
 def _map_rgb() -> dict[int, tuple[int, int, int]]:

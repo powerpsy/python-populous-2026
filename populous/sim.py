@@ -186,7 +186,14 @@ class Game:
         # peep.weapons, i de 1 a 10 : c'est l'ordre d'affichage des armes dans
         # l'ecusson. On construit la table depuis ``weapons_add`` du terrain,
         # qui donne l'arme de chaque age (asm L3877-3882).
-        self.weapons_order = [0] + list(self.land.weapons_add[1:11]) + [0xFFFF]
+        # L4A372-4A41E : `for i in 0..10: _weapons_order[i] = _weapons_add[i]`
+        # puis un tri croissant (boucle particuliere : pour chaque i on
+        # compare a tous les j et on echange des que order[i] < order[j]).
+        # Les sols 0..4 livrent deja leurs weapons_add tries, donc `sorted()`
+        # ne change rien sur les donnees reelles — c'est la transcription, pas
+        # une correction. Le rang 0 n'est jamais lu (la recherche de L2804
+        # part de 1) ; le 0xFFFF borne l'indice 10.
+        self.weapons_order = sorted(self.land.weapons_add[0:11]) + [0xFFFF]
         # LAB_52DE8[_player] : quel outil de relief est arme (0 = aucun).
         # C'est ce que ``_set_tend_icons`` (L2455) utilise pour inverser la
         # bonne icone de la croix de selection.
