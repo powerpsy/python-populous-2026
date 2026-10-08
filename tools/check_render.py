@@ -16,6 +16,20 @@ l'optimisation de l'original (seules les bords de la fenêtre en ont).
 Contrôle supplémentaire : ``cell_px`` (adresse octet réduite modulo 40) doit
 donner exactement ``cell_abs`` (projection pixel) sur toute la fenêtre.
 
+Les écarts sont **classés** (Phase 54), et le sort en code d'erreur est
+enfin :
+
+* ``résidu`` — la 3e passe a laissé du **NOIR** : falaise intérieure non
+  dessinée. Artefact *attendu* de l'optimisation de l'original, toléré par
+  ``SEUIL_RESIDU`` ;
+* ``vrai écart`` — les deux rendus ont peint, mais différemment. C'est la
+  seule catégorie qui puisse révéler une erreur de transcription, tolérée
+  par ``SEUIL_VRAI``.
+
+L'ancien compteur additionnait les deux, et l'outil sortait **toujours en
+0** : un dépassement s'imprimait mais ne pouvait pas faire échouer une
+vérification. ``main`` renvoie désormais 1 au-delà des seuils.
+
 Usage : ``python tools\\check_render.py [graine] [ground] [xoff] [yoff]``
 """
 from __future__ import annotations
@@ -33,6 +47,17 @@ from populous.render import (SCREEN_H, SCREEN_W, WINDOW,  # noqa: E402
 from populous.terrain import build_map  # noqa: E402
 
 BLACK = (0, 0, 0)
+
+#: Résidu **attendu** : les falaises intérieures que l'original ne dessine
+#: pas laissent le noir du fond. Ce n'est pas une erreur de transcription.
+#: Mesuré sur 25 fenêtres (5 sols x 5 graines, fenêtre (48,16)) : max 439 px
+#: (sol 4, graine 1). L'échantillon d'origine (168 fenêtres = 7 graines x
+#: 4 sols x 6 positions) **ne couvrait pas le sol 4** et donnait max 202.
+SEUIL_RESIDU = 600
+#: Pixels où les deux rendus ont peint, mais différemment. Ce n'est **pas**
+#: le résidu, et l'ancien compteur unique les mélangeait. Mesuré sur les
+#: mêmes 25 fenêtres : max 30 px (sol 3, graine 59).
+SEUIL_VRAI = 60
 
 
 def painter_window(r: Renderer, t, xoff: int, yoff: int) -> pygame.Surface:
@@ -64,6 +89,30 @@ def diff(a: pygame.Surface, b: pygame.Surface) -> list[tuple[int, int]]:
             for i in range(SCREEN_W * SCREEN_H) if pa[i * 3:i * 3 + 3] != pb[i * 3:i * 3 + 3]]
 
 
+def classe(a: pygame.Surface, b: pygame.Surface) -> tuple[int, int]:
+    """(résidu, vrai écart).
+
+    *résidu* : la 3e passe a laissé du **NOIR** — falaise intérieure non
+    dessinée, artefact attendu de l'optimisation de l'original.
+
+    *vrai* : les deux rendus ont peint quelque chose mais différent. Ce
+    n'est pas le résidu, et c'est la seule catégorie qui puisse signaler
+    une erreur de transcription.
+    """
+    pa = pygame.image.tostring(a, "RGB")
+    pb = pygame.image.tostring(b, "RGB")
+    residu = vrai = 0
+    for i in range(SCREEN_W * SCREEN_H):
+        ca, cb = pa[i * 3:i * 3 + 3], pb[i * 3:i * 3 + 3]
+        if ca == cb:
+            continue
+        if ca == b"\x00\x00\x00":
+            residu += 1
+        else:
+            vrai += 1
+    return residu, vrai
+
+
 def check_projection() -> int:
     bad = 0
     for d0 in range(WINDOW):
@@ -74,7 +123,7 @@ def check_projection() -> int:
     return bad
 
 
-def main() -> None:
+def main() -> int:
     seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     ground = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     xoff = int(sys.argv[3]) if len(sys.argv) > 3 else 48
@@ -93,22 +142,22 @@ def main() -> None:
     r.draw_window(a, t, xoff, yoff)
     b = painter_window(r, t, xoff, yoff)
     d = diff(a, b)
-    print("fenêtre (%d,%d) : %d pixel(s) différents sur %d"
-          % (xoff, yoff, len(d), SCREEN_W * SCREEN_H))
+    residu, vrai = classe(a, b)
+    print("fenêtre (%d,%d) : %d pixel(s) différents sur %d "
+          "(dont %d résidu attendu, %d vrai écart)"
+          % (xoff, yoff, len(d), SCREEN_W * SCREEN_H, residu, vrai))
     if d:
         xs = [p[0] for p in d]
         ys = [p[1] for p in d]
-        print("  bbox des écarts : x %d..%d  y %d..%d" % (min(xs), max(xs), min(ys), max(ys)))
+        print("  bbox des écarts : x %d..%d  y %d..%d"
+              % (min(xs), max(xs), min(ys), max(ys)))
         print("  premiers :", d[:12])
         pygame.image.save(a, str(ROOT / "out_png" / "check_3pass.png"))
         pygame.image.save(b, str(ROOT / "out_png" / "check_painter.png"))
-    # Résidu documenté (docs/map_generation.md §9.4) : les falaises *intérieures*
-    # que l'original ne dessine pas laissent voir le fond sur quelques pixels.
-    # Mesure sur 168 fenêtres : 1287 px au total, 7,7 px/fenêtre, max 202
-    # (0,3 % de l'écran) — et 0 px de plus avec le décodeur « masque » exact.
-    print("=> %s" % ("OK" if bad == 0 and len(d) <= 210
-                      else "ÉCART"))
+    ok = (bad == 0 and residu <= SEUIL_RESIDU and vrai <= SEUIL_VRAI)
+    print("=> %s" % ("OK" if ok else "ÉCART"))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

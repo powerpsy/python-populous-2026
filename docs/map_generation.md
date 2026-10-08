@@ -437,6 +437,29 @@ trous sont alors peints en noir au lieu de laisser voir le fond.
 Ordre de dessin : passe 1 (tous les hauts) → passes 2/3 (les faces visibles) ;
 la fenêtre suivante est dessinée après, ce qui recouvre correctement ces faces.
 
+**Phase 54 — seuil recalibré, et l'outil échoue enfin.** Trois choses
+mesurées (`tools/measure_residue.py`, 25 fenêtres = 5 sols × 5 graines,
+fenêtre (48,16)) :
+
+1. **La carte ne dépend pas du sol.** `Terrain.ground` est du state mort :
+   `build_map(s, 0)` et `build_map(s, 4)` donnent les mêmes `blk`,
+   `disp_alt` et `bk2`. Les écarts entre sols viennent donc des **tuiles**,
+   pas du relief.
+2. L'échantillon des 168 fenêtres ci-dessus (7 graines × **4** sols ×
+   6 positions) ne couvrait pas le sol 4. Or sur le sol 4 le résidu atteint
+   **439 px** (graine 1), au-delà du max 202 enregistré ici — et
+   `check_render` rendait « ÉCART » **sans que la suite s'en aperçoive**,
+   parce que l'outil sortait toujours en code 0.
+3. Ce total mélangeait deux choses : le résidu attendu (3e passe = NOIR) et
+   de **vrais écarts** (les deux rendus ont peint, mais différemment),
+   mesurés de **0 à 30 px** — y compris sur le sol 0 (9 à 14 px), donc
+   antérieurs à toute modification récente.
+
+`tools/check_render.py` compte donc les deux séparément
+(`SEUIL_RESIDU = 600`, `SEUIL_VRAI = 60`) et **sort en 1** au-delà de
+l'un ou l'autre. Les 25 fenêtres de l'échantillon sortent en 0 ; en
+forçant un seuil à 1, chaque contrôle rend `ÉCART` et exit 1.
+
 ### 9.5 `_move_sprite` (L15951)
 
 ```

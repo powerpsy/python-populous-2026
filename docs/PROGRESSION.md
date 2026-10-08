@@ -3931,6 +3931,85 @@ c'est indecidable.
   transcription, et la boucle d'origine (`ADDQ / CMPI #3 / CLR`) fait
   tourner `_ground_in` sur **0..3**, pas 0..4.
 
+### Phase 54 - `check_render` separe le residu du vrai ecart — et sort en 1
+
+Deux defauts de l'outil de verification lui-memes, trouves en le tournant
+sur les cinq sols pour la Phase 53. **Aucune logique de jeu n'a bouge.**
+
+#### Ce qui n'allait pas
+
+1. **Un seul compteur pour deux choses.** `check_render` comparait la 3e
+   passe a un rendu « falaises partout » et acceptait jusqu'a 210 pixels.
+   Ce total melangeait le residu attendu — la 3e passe ne peint les
+   falaises que sur les bords, donc les falaises *interieures* manquent et
+   laissent le **NOIR** du fond, ce qui est l'optimisation de l'original —
+   et des pixels ou les deux rendus ont peint, mais differemment.
+2. **Un echantillon qui ne couvrait pas les cinq sols.** Les 168 fenetres
+   de `docs/map_generation.md` 9.4 font 7 graines x **4** sols x 6
+   positions. Sur le sol 4 le residu atteint **439 px** (graine 1) :
+   `check_render 1 4 48 16` rendait `ECART` alors que la suite restait
+   verte, puisque la suite ne tourne que le sol 0.
+3. **L'outil sortait toujours en code 0**, ECART compris. Un controle qui
+   ne peut pas echouer ne peut pas decouvrir une regression — c'est la
+   meme remarque que celle de Phase 50 sur le code sans appelant.
+
+#### Ce qui a change
+
+* `tools/check_render.py` : nouvelle fonction `classe(a, b)` qui rend
+  `(residu, vrai)`, deux seuils (`SEUIL_RESIDU = 600`,
+  `SEUIL_VRAI = 60`), et `main() -> int` — `sys.exit(main())` au lieu de
+  `main()`. Affichage : `35 pixel(s) differents ... (dont 26 residu
+  attendu, 9 vrai ecart)`.
+* `tools/measure_residue.py` (nouvel outil) : la mesure sur les 5 sols x
+  5 graines, avec le classement.
+* `docs/map_generation.md` 9.4 : la mesure d'origine est conservee, la
+  Phase 54 est ajoutee a cote' avec les trois faits ci-dessus.
+
+#### Les trois faits mesures
+
+.. code-block:: none
+
+    sol graine  residu  vrai          sol graine  residu  vrai
+      0      1      26     9           3      1      16    18
+      0      7      36    12           3      7      36    24
+      0     59      16    14           3     59      11    30
+      0    112       0     0           4      1     439    18
+      1   1/7/59    <=5    0           4      7     225    24
+      2   1/7/59    <=4    0           4     59     189    25
+
+1. **La carte ne depend pas du sol.** `Terrain.ground` est du state mort :
+   `build_map(s, 0)` et `build_map(s, 4)` donnent les memes `blk`,
+   `disp_alt` et `bk2`. Les differences entre sols viennent donc des
+   **tuiles**, pas du relief.
+2. Le sol 4 depasse l'ancien seuil de 210 uniquement a cause du residu :
+   439 de ses 457 ecarts sont du NOIR sur la 3e passe. Avec les deux
+   compteurs, il repasse sous la barre (439 <= 600, 18 <= 60).
+3. Le « vrai ecart » **n'est pas ne dans les phases recentes** : le sol 0
+   en a deja 9 a 14 px, le sol 3 en a 18 a 30. Il reste sous son seuil de
+   60 partout.
+
+#### Verification
+
+.. code-block:: none
+
+    5 sols x 5 graines         25/25 exit 0
+    controle negatif residu    SEUIL_RESIDU force a 1 (sol 4, 439 px)
+                               -> "=> ECART", exit 1
+    controle negatif vrai      SEUIL_VRAI force a 1 (sol 0, 14 px)
+                               -> "=> ECART", exit 1
+
+#### Ce qui n'a pas ete fait
+
+* **Le « vrai ecart » de 9 a 30 px n'est pas explique.** On sait qu'il
+  existe sur tous les sols sauf 1 et 2, qu'il ne vient pas du relief (le
+  relief est identique partout) et qu'il est sous son seuil. S'il vient de
+  l'original ou d'une difference de transcription, c'est **indecidable**
+  sans oracle 68000 — et le signaler ainsi, c'est deja mieux que de le
+  fondre dans le residu.
+* Les seuils `600` et `60` sont des maxima mesures (439 et 30) avec une
+  marge, pas des valeurs du listing : ce sont des parametres de controle,
+  et ils sont tels que la suite reste verte sur les 25 fenetres connues.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
