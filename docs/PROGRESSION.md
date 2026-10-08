@@ -3659,7 +3659,117 @@ l'execution. D'ou `check_dispatch.py`.
   `_zero_population`, puis razie `_no_peeps`), pas les « 3 l. » que la
   table de la Phase 46 annoncait.
 
-### Reste a faire
+### Phase 52 - `_clear_all_map` transcrit : le code 12 ne leve plus
+
+La Phase 51 se terminait sur « `12` est le plus dommage ». Routine
+bornee, 38 lignes de listing (L6926-6963), et les trois sous-routines
+qu'elle appelle etaient deja la : c'etait le prochain bloc.
+
+#### Ce qui a change
+
+* `Game.clear_all_map()` (game.py) — les trois temps du listing, dans
+  l'ordre :
+
+  1. une boucle de **4225** iterations (`CMP.W #$1081,D4 / BLT`) qui
+     vide chaque mot de `_alt` (`D0 = D4<<1` puis `CLR.W`), et — seulement
+     quand `D4 < $1000`, le `CMP.W #$1000 / BGE` sautant les quatre
+     `CLR.B` — chaque octet de `_map_who`, `_map_bk2`, `_map_blk`.
+     `_map_alt` **n'y passe pas** : c'est `_make_map` qui le recalcule
+     plus bas. Un test qui ne verifierait que `alt` passerait meme si le
+     nettoyage des cases n'existait pas.
+  2. `for (i = 0; i < _no_peeps; i++) _zero_population(&peeps[i], i)`,
+     puis `_no_peeps = 0`.
+  3. `_make_map(0, 0, $3F, $3F)` puis `_draw_map(0, 0, $3F, $3F)`. Les
+     quatre mots empiles sont `0, 0, $3F, $3F` — le dernier empile est
+     celui de l'offset 8 — donc `(x0, y0, x1, y1)`, l'integralite de la
+     carte.
+* `powers.py` : `do_action` code 12 appelle `self.g.clear_all_map()` et
+  **retombe sur `return`**, sans plus rien empiler : `JSR
+  (___clear_all_map,A4)` seul, contrairement aux codes 3/4/5 qui
+  empilent un argument.
+* `coverage.py` : `ALIAS["_clear_all_map"] = "Game.clear_all_map"`, et
+  la note sur `_do_action` passe de « 11 des 16 codes » a « 12 des 16 ».
+* `check_dispatch.py` : le code 12 sort de `CODES_NON_TRANSCRITS` — qui
+  devient `(2, 7, 8, 13)` — et gagne un **controle 6**.
+
+#### Un `__slots__`, et la maniere de l'epier
+
+Le controle intercepte `_make_map` : c'est le seul instant ou l'on peut
+observer `who`/`bk2`/`blk` apres le nettoyage et avant que `_make_map`
+ne les remplisse a nouveau. Premier essai :
+
+.. code-block:: none
+
+    terr.make_map, g.ren.draw_minimap = make_epion, dessin_epion
+    AttributeError: 'Terrain' object attribute 'make_map' is read-only
+
+`Terrain` a des `__slots__`. On epingle donc la **classe**, pas
+l'instance : `self_` explicite, et restauration dans un `finally`.
+
+#### Verification
+
+.. code-block:: none
+
+    check_dispatch    routage 3/4/5 -> do_war/do_flood/do_knight : 0 ecart
+                      routage 1/6/11/15 sans le lever              : 0 levage
+                      codes 2/7/8/13 levent                       : 4/4
+                      codes 9/10 via dispatch : 56 essais, 0 ecart
+                      code 1 ecrit players[].command              : OK
+                      code 12 _clear_all_map : 4225 sommets, 4096 cases,
+                        no_peeps 2->0, _draw_map x1               : OK
+                      => TOUS LES CONTROLES DE ROUTAGE SONT VERTS
+    check_mana        665/665 + 56/56, 0 ecart
+    68/68 controles   graine 59
+    check_render      OK
+    check_assets      OK
+    smoke_sim         OK
+    stress 2000 x 8   OK : 8/8
+    couverture        148 / 393 (37,7 %) — 24 alias fiables (23 -> 24)
+
+Le controle 6 est **construit pour etre sensible** : `alt`, `who`, `bk2`
+et `blk` sont remis a des valeurs non nulles avant l'appel, un peep hors
+`_no_peeps` recoit `life = 77` pour prouver que la boucle s'arrete bien
+ou le listing dit, et `make_map` est intercepte avec ses arguments pour
+verifier `(0, 0, 63, 63)`. En desactivant l'une des trois phases, il
+echoue.
+
+#### Ce que la Phase 50 laissait ouvert sur `mana_add`, et qui se ferme
+
+La Phase 50 notait que les quatre premiers crans de `mana_add` valaient
+0 et que « la declaration est `DS.L 5 / DS.W 1`, une reserve remplie au
+chargement, donc le listing ne donne pas les valeurs ». En lisant
+`_load_ground` (L16468) pour preparer le code 13, la suite est tombee :
+les valeurs **ne viennent pas du listing, elles viennent du disque**.
+
+.. code-block:: none
+
+    _load_ground(n)   PEA $16.W / PEA (_mana_add,A4) / JSR ___Read
+                      2 (walk_death) + 22 (population_add) = 24
+
+`populous/land.py` lit exactement `struct.unpack_from(">11H", b, 24)` :
+le meme fichier `LANDn`, le meme offset, la meme taille. Et le « trou »
+`lines cut here` signale a L16504 est un defaut de listing, pas une
+logique manquante : la somme des lectures vaut 114 octets, ce que
+confirment les fichiers du disque original.
+
+Donc `mana_add = [0, 0, 0, 0, 1, ...]` n'est ni un mystere ni une
+approximation : c'est le contenu reel de `land0`. Ce qui reste
+indecidable sans oracle 68000, c'est l'**interpretation** de la Phase 50
+(l'IA de l'original casterait-elle plus tot ?), pas les valeurs.
+
+#### Ce qui n'a pas ete fait
+
+* `12` ne leve plus, mais — comme en Phase 51 — il reste **jamais
+  parcouru en jeu** : rien n'ecrit `st.act = 12`. `check_dispatch` le
+  fait tourner artificiellement, et il faut le lire comme tel.
+* `2`, `7`, `8`, `13` leverent toujours.
+* Le code 13 (`_load_ground`, L16468) est le plus proche du suivant et
+  le plus trompeur : ce n'est pas de la logique de jeu mais un
+  **chargeur de fichiers** (`_Open`/`_Read`/`_Close` + `_read_sprites`).
+  `land.py` lit deja les memes octets au demarrage ; ce qui manque, c'est
+  `Game.load_ground(n)` qui **applique** les tables chargees (tuiles,
+  couleurs de mini-carte, jeu de sprites 0 ou 4).
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

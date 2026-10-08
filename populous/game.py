@@ -464,6 +464,42 @@ class Game:
         self.draw_end_screen()
         self._draw_hud()
 
+    # ------------------------------------------- _clear_all_map (L6926-6963)
+    def clear_all_map(self) -> None:
+        """``_clear_all_map`` — le code 12 de ``_do_action`` (``LAB_4C124``).
+
+        Trois temps, dans l'ordre du listing :
+
+        1. une boucle de **4225** iterations (`CMP.W #$1081,D4 / BLT`) qui
+           vide chaque mot de `_alt` (`D0 = D4<<1`, `CLR.W`), et — seulement
+           quand `D4 < $1000`, le `CMP.W #$1000 / BGE` les sautant — chaque
+           octet de `_map_who`, `_map_bk2` et `_map_blk`. `_map_alt` n'y
+           passe **pas** : c'est `_make_map` plus bas qui le recalcule.
+        2. `for (i = 0; i < _no_peeps; i++) _zero_population(&peeps[i], i)`,
+           puis `_no_peeps = 0`.
+        3. `_make_map(0, 0, $3F, $3F)` puis `_draw_map(0, 0, $3F, $3F)`.
+
+        Les quatre mots empiles avant chaque appel sont `0, 0, $3F, $3F`
+        (le dernier empile est celui de l'offset 8), donc `(x0, y0, x1,
+        y1)` — bien l'integralite de la carte.
+        """
+        sim = self.sim
+        terr = self.terrain
+        alt, who = terr.alt, terr.who
+        blk, bk2 = terr.blk, terr.bk2
+        for d4 in range(len(alt)):                 # 4225 = CMP.W #$1081
+            alt[d4] = 0                            # CLR.W (_alt, D4*2)
+            if d4 < len(who):                      # 4096 = CMP.W #$1000
+                who[d4] = 0                        # CLR.B (_map_who, D4)
+                bk2[d4] = 0                        # CLR.B (_map_bk2, D4)
+                blk[d4] = 0                        # CLR.B (_map_blk, D4)
+        for d4 in range(sim.no_peeps):             # LAB_43118-43134
+            sim.zero_population(d4)
+        sim.no_peeps = 0                           # CLR.W (_no_peeps)
+        terr.make_map(0, 0, 0x3F, 0x3F)            # ___make_map
+        self.ren.draw_minimap(self.frame, self.terrain,
+                              colours=self.colours)   # ___draw_map
+
 # ------------------------------------------- _show_the_shield (asm L2769)
     # Le Â« bouclier Â» : le panneau de l'habitant selectionne dans
     # ``_view_who``. L'asm le dessine dans ``_w_screen`` (le fond), pas dans

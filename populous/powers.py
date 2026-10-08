@@ -580,20 +580,21 @@ class PowerEngine:
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
         11          `_rotate_all_map` (99 l.)   **fait** — pli max + arbres
-        12          `LAB_4C124` -> `_clear_all_map`  non lu
+        12          `LAB_4C124` -> `_clear_all_map` **fait** — vide tout
         13          `LAB_4C12A` -> `_load_ground`     non lu
         15          `LAB_4C15C` (5 l.)         **fait** — le tricheur
         ==========  =========================  ==============================
 
-        Onze des seize codes sont ici (le defaut partage par 0 et 14
-        compris) ; cinq — `2`, `7`, `8`, `12`, `13` — **lèvent** au lieu de
+        Douze des seize codes sont ici (le defaut partage par 0 et 14
+        compris) ; quatre — `2`, `7`, `8`, `13` — **lèvent** au lieu de
         retomber sur le defaut : un code non transcrit ne doit surtout pas
         passer pour un no-op, ce qui est exactement l'erreur que la Phase 22
-        a reprochee. Le cas 12 est a noter : `_sub_action` (supprime en
-        Phase 51) y mettait une boucle `blk = BLK_WATER` de son cru, alors
-        que `_clear_all_map` (L6926) vide `alt`/`who`/`bk2`/`blk` en **0**,
-        tue les peeps par `_zero_population` puis razie `_no_peeps`. Mieux
-        valait le lever que laisser tourner une invention.
+        a reprochee. Le cas 12 merite d'etre raconte : `_sub_action`
+        (supprime en Phase 51) y mettait une boucle `blk = BLK_WATER` de son
+        cru, alors que `_clear_all_map` (L6926) vide `alt`/`who`/`bk2`/`blk`
+        en **0**, tue les peeps par `_zero_population`, razie `_no_peeps`,
+        puis rappelle `_make_map` et `_draw_map`. Mieux valait le transcrire
+        que laisser tourner une invention.
         """
         sim = self.g.sim
 
@@ -663,6 +664,12 @@ class PowerEngine:
             # `_rotate_all_map(0,0,63,63)` — un seul appel, sans argument
             # pertinent pour nous : `arg2` n'est pas lu dans ce handler.
             self.g.terrain.rotate_all_map()
+            return
+
+        if code == 12:                            # LAB_4C124
+            # L18981-18983 : `JSR (___clear_all_map,A4)` — **aucun argument**
+            # empile, contrairement aux codes 3/4/5.
+            self.g.clear_all_map()
             return
 
         if code == 15:                            # LAB_4C15C

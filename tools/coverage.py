@@ -65,9 +65,10 @@ ALIAS: dict[str, str] = {
     "_set_devil_magnet": "PowerEngine.set_devil_magnet",
     "_where_do_i_go": "Game.where_do_i_go",          # appele par _move_explorer
     "_rotate_all_map": "Terrain.rotate_all_map",      # Phase 47 : verifie 400 essais
+    "_clear_all_map": "Game.clear_all_map",           # Phase 52 : verifie par dispatch
     "_move_mana": "Game.move_mana",                   # Phase 49 : verifie 665 essais
-    # Phase 51 : 11 des 16 codes transcrits et verifies (check_dispatch) ;
-    # les codes 2, 7, 8, 12, 13 LEVENT `NotImplementedError` par regle.
+    # Phase 51-52 : 12 des 16 codes transcrits et verifies (check_dispatch) ;
+    # les codes 2, 7, 8, 13 LEVENT `NotImplementedError` par regle.
     "_do_action": "PowerEngine.do_action",
     "_newrand": "Rng.raw",
     # `_divs` (L23385) est la division **longue** signee ; `___divs` n'est
