@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from . import m68k
 from .constants import (
-    ACT_NONE, BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
+    BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
     BLK_TRIBE0, BLK_WATER,
     FRAME_AGE, FRAME_TOWN, FUNNY, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
     PEEP_SLOTS, BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
@@ -88,21 +88,39 @@ class Tribe:
         "colour", "strongest", "p26", "p2a", "tend",
     )
 
-    def __init__(self) -> None:
-        self.act = ACT_NONE     # +0x00 code d'action en attente
-        self.p1 = 0             # +0x01 x
-        self.p2 = 0             # +0x02 y / sous-commande
-        self.can_build = 0      # +0x06 == 1 => emet des actions
-        self.queued = 0         # +0x08 action deja en file
-        self.threshold = 0      # +0x0C seuil (CMP #4)
-        self.power_mask = 0     # +0x0E masque de pouvoirs (`tend` dans l'asm)
+    def __init__(self, t: int = 0) -> None:
+        # `.data` de `_stats` (L24171-24230) : les deux fiches sont
+        # initialisees une fois pour toutes au chargement du binaire, avant
+        # toute partie. Les trois premiers octets valent $61/$62/$63 —
+        # « abc », dc.b de L24172 pour la fiche 0 et `strABC` de L24212
+        # pour la fiche 1. Ce sont des codes `act/p1/p2` sans effet : le
+        # dispatch saute a LAB_4B818 des que `act >= $0F` (L18219-18220),
+        # donc 97 ne fait rien.
+        self.act = 0x61         # +0x00  LAB_516A4 / strABC[0]
+        self.p1 = 0x62          # +0x01  LAB_516A5 / strABC[1]
+        self.p2 = 0x63          # +0x02  LAB_516A6 / strABC[2]
+        # `can_build[t] == 1` veut dire « l'Amiga conduit la tribu t » :
+        # menu Game Setup, `strHumanVsAmiga` est selectionne quand
+        # `can_build[_player] == 0` (L12849-12866). Le `.data` vaut donc
+        # 0 (bon) / 1 (mal), et L11256-11259 ne pose que `+1` sur le
+        # `_not_player` du setup monojoueur.
+        self.can_build = 1 if t else 0   # +0x06  LAB_516AA / LAB_516D8
+        # `queued == 1` arrete tout ce qui depend de l'IA pour la tribu :
+        # `_set_devil_magnet`/`_devil_effect` (L3255-3268), le bloc
+        # `_make_level` (L3770), `one_block_flat` (L4112) et le seuil
+        # avide 0x131 (L3841). Le SEUL vidage du listing exige
+        # `can_build == 1` (L17934-17951) : la tribu humaine garde donc
+        # `queued == 1` pour toujours.
+        self.queued = 1         # +0x08  LAB_516AC / LAB_516DA ($00010000)
+        self.threshold = 1 if t == 0 else 5   # +0x0C  LAB_516B0 / LAB_516DE
+        self.power_mask = 0xFFFF              # +0x0E  LAB_516B2 / LAB_516E0
         self.tend = 0           # alias explicite du champ +0x0E
-        self.period = 0         # +0x10 période des décisions IA
+        self.period = 1 if t == 0 else 3         # +0x10 période des décisions IA
         self.t12 = 0            # +0x12
         self.castles = 0        # +0x14 châteaux
         self.towns = 0          # +0x16 villes
         self.t18 = self.t1a = self.t1c = self.t1e = 0
-        self.colour = 0         # +0x20 couleur de la mini-carte
+        self.colour = 5 if t == 0 else 1         # +0x20 couleur de la mini-carte
         self.strongest = -1     # +0x22 index du peep ennemi le plus fort
         self.p26 = -1           # +0x26 (0 = pointeur nul dans le jeu)
         self.p2a = -1           # +0x2A index du peep le plus jeune
@@ -153,15 +171,12 @@ class Game:
         # `_do_place_funny` (slots 0xD1/0xD2) et lues via `map_who`.
         self.peeps: list[Peep] = [Peep() for _ in range(PEEP_SLOTS)]
         self.no_peeps = 0
-        self.stats = [Tribe(), Tribe()]
-        # `.data` de `_stats` (L24171-24230) : le listing initialise les deux
-        # fiches avant toute partie. Sans ce bloc `power_mask` vaut 0 et toute
-        # la cascade d'`ai_choose` (L9365-9396) reste morte hors Conquest.
-        for t, (seuil, periode) in enumerate(((1, 1), (5, 3))):
-            st = self.stats[t]
-            st.threshold = seuil       # LAB_516B0 / LAB_516DE (L24184 / L24222)
-            st.power_mask = 0xFFFF     # LAB_516B2 / LAB_516E0 (L24186 / L24224)
-            st.period = periode        # LAB_516B4 / LAB_516E2 (L24188 / L24226)
+        # `Tribe(0)` / `Tribe(1)` portent desormais tout le `.data` de
+        # `_stats` (L24171-24230) : act/p1/p2 = $61/$62/$63, `can_build`
+        # 0/1, `queued` 1/1, `threshold` 1/5, `power_mask` $FFFF/$FFFF,
+        # `period` 1/3, `colour` 5/1. Sans `power_mask = $FFFF` toute la
+        # cascade d'`ai_choose` (L9365-9396) reste morte hors Conquest.
+        self.stats = [Tribe(0), Tribe(1)]
         self.players = [Player(), Player()]
 
         self.game_turn = 0

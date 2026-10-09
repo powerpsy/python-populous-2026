@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from populous.conquest import (LEVEL_COUNT, apply_display, level,   # noqa: E402
                                load_levels)
 from populous.game import Game  # noqa: E402
+from populous.sim import Game as SimGame  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 ASM = ROOT / "reference" / "tetracorp" / "populous_prg.asm"
@@ -199,6 +200,70 @@ for t, (seuil, periode) in enumerate(((1, 1), (5, 3))):
 chk(g2.sim.flags == 0x10,
     "defaut hors conquest : LAB_518A7 = 0x%02X (L24311-24312, DC.B $10)"
     % g2.sim.flags)
+
+# --- 9 : le reste du `.data` (L24171-24230) ---------------------------------
+# `act/p1/p2` valent $61/$62/$63 (dc.b de L24172 pour la fiche 0, `strABC`
+# de L24212 pour la fiche 1) : des codes sans effet, le dispatch sautant a
+# LAB_4B818 des que `act >= $0F` (L18219-18220). `can_build` 0/1 veut dire
+# « l'Amiga conduit la tribu 1 » ; `queued` 1/1 vient des deux
+# `DC.L $00010000` de L24181 et L24219.
+for t in (0, 1):
+    s3 = g2.sim.stats[t]
+    chk((s3.act, s3.p1, s3.p2) == (0x61, 0x62, 0x63),
+        "defaut hors conquest : stats[%d].act/p1/p2 = %02X/%02X/%02X "
+        "(L24172 / L24212)" % (t, s3.act, s3.p1, s3.p2))
+chk((g2.sim.stats[0].can_build, g2.sim.stats[1].can_build) == (0, 1),
+    "defaut hors conquest : can_build = %d/%d (L24177-24180 / L24215-24218)"
+    % (g2.sim.stats[0].can_build, g2.sim.stats[1].can_build))
+chk((g2.sim.stats[0].queued, g2.sim.stats[1].queued) == (1, 1),
+    "defaut hors conquest : queued = %d/%d (L24181 / L24219)"
+    % (g2.sim.stats[0].queued, g2.sim.stats[1].queued))
+# `colour` : le `.data` porte 5/1 (L24203 / L24229). `_settle_peoples`
+# reecrit ensuite le champ en 11/14 — L408 et L12070 font de meme dans
+# l'asm, avec une table de palettes differente de celle du port. L'ecart
+# est donc **assume** : on verifie la valeur `.data` sur une fiche nue,
+# et l'ecart declare sur la partie complete.
+g2b = SimGame(62)
+chk((g2b.stats[0].colour, g2b.stats[1].colour) == (5, 1),
+    "data .data : colour = %d/%d (L24203 / L24229)"
+    % (g2b.stats[0].colour, g2b.stats[1].colour))
+chk((g2.sim.stats[0].colour, g2.sim.stats[1].colour) == (11, 14),
+    "ECART assume : _settle_peoples pose colour = %d/%d (table du port)"
+    % (g2.sim.stats[0].colour, g2.sim.stats[1].colour))
+# --- 10 : la periode de `queued` (L17934-17951) ----------------------------
+# Le SEUL vidage de `queued` de tout le listing exige `can_build == 1` ET
+# `game_turn % period == 0`. La fiche 1 (Amiga, `period = 3`) est donc
+# liberee tous les 3 tours ; la fiche 0 (humaine, `can_build = 0`) ne
+# l'est **jamais** — c'est ce qui eteint toute son IA.
+g3 = Game(61, 0, 3)
+for t in (0, 1):
+    g3.sim.stats[t].queued = 1
+g3.sim.game_turn = 3                  # 3 % 3 == 0
+g3._run_commands()
+chk(g3.sim.stats[1].queued == 0,
+    "periode : queued[1] = %d a game_turn = 3, can_build == 1 (L17950)"
+    % g3.sim.stats[1].queued)
+chk(g3.sim.stats[0].queued == 1,
+    "periode : queued[0] = %d — can_build == 0, jamais vide (L17940)"
+    % g3.sim.stats[0].queued)
+
+g4 = Game(61, 0, 3)
+g4.sim.stats[1].queued = 1
+g4.sim.game_turn = 4                  # 4 % 3 == 1
+g4._run_commands()
+chk(g4.sim.stats[1].queued == 1,
+    "periode : queued[1] = %d a game_turn = 4, 4 %% 3 == 1 (L17949)"
+    % g4.sim.stats[1].queued)
+
+# `_clear_send` (L18234-18254) ne vide que `act/p1/p2` : apres un tour,
+# les trois octets sont retombes, `queued` non.
+g5 = Game(61, 0, 3)
+s5 = g5.sim.stats[1]
+s5.act, s5.p1, s5.p2 = 0x61, 0x62, 0x63
+g5._run_commands()
+chk((s5.act, s5.p1, s5.p2) == (15, 0, 0),
+    "clear_send : act/p1/p2 = %d/%d/%d apres un tour (L18234-18254)"
+    % (s5.act, s5.p1, s5.p2))
 
 print()
 if ECHECS:

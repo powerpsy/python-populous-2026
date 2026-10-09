@@ -79,6 +79,14 @@ ALIAS: dict[str, str] = {
     "_divs": "m68k.divs_long",
     "_mulu": "m68k.mulu_word",
 
+    # --- Phase 58 : l'init `.data` de `_stats`, la periode de `queued`
+    # `_clear_send` (L18234-18254) ne vide que `act/p1/p2` et laisse
+    # `queued` intact. `_get_message` (L17707) contient en plus tout le
+    # canal serie et le replay : il n'est PAS declare ici, seule la
+    # periode `can_build == 1 and game_turn % period == 0` (L17934-17951)
+    # est transcrite, dans `Game._run_commands`.
+    "_clear_send": "PowerEngine.do_queued",
+
     # --- Phase 55 : audit des routines « citees ». Une entree par preuve
     #     (la def nomme la routine, ou cite sa ligne / son adresse de
     #     depart). Voir PROGRESSION 55 pour les cas non retenus.

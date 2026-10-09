@@ -242,9 +242,18 @@ class PowerEngine:
         """Execute l'action en attente ``_stats[tribe]`` (table §4.3)."""
         st = self.g.sim.stats[tribe]
         self.dispatch(tribe, st.act, st.p1, st.p2)
-        # L'action a ete consommee : la file est vide.
+        # `_clear_send` (L18234-18254) : `act`, `p1` et `p2` remis a zero
+        # pour la fiche — l'asm le fait en une passe sur les deux fiches,
+        # apres le dispatch de chacune, ce qui revient au meme. Le SEUL
+        # vidage de `queued` du listing est la periode
+        # `can_build == 1 and game_turn % period == 0` (L17934-17951),
+        # transcrite dans `Game._run_commands`. Une tribu humaine
+        # (`can_build == 0`) garde donc `queued == 1` pour toujours, ce
+        # qui eteint toute son IA — c'est voulu : l'humain conduit
+        # lui-meme son aimant et son relief.
         st.act = ACT_NOP
-        st.queued = 0
+        st.p1 = 0
+        st.p2 = 0
 
     def dispatch(self, tribe: int, act: int, x: int, y: int) -> bool:
         """Execute ``act`` sur la case ``(x, y)`` — dispatch unique du joueur.
@@ -257,12 +266,16 @@ class PowerEngine:
         ``_stats+1/+2``.
 
         .. note::
-           ``queued`` (offset ``+8``, ``LAB_516AC``) est **vide par
-           `do_queued`**, une fois l'action consommee. Sans cela le drapeau
-           restait a 1 indefiniment : or `grow_peep` (asm L3841) n'autorise une
-           ville a se scinder que si ``queued == 0``. Le verrou etait donc
-           pose pour de bon et **aucun habitant ne naissait plus** apres les
-           premieres villes.
+           ``queued`` (offset ``+8``, ``LAB_516AC``) **ne se vide pas
+           ici** : `_clear_send` (L18234-18254) ne touche qu'a
+           ``act/p1/p2``. Le SEUL vidage du listing est la periode
+           ``can_build == 1 and game_turn % period == 0``
+           (L17934-17951), transcrit dans ``Game._run_commands``.
+           `grow_peep` (L3841) n'autorise une ville a se scinder que si
+           ``queued == 0`` : pour la tribu humaine, qui garde
+           ``queued == 1`` pour toujours, la scission passe donc par le
+           seuil naturel ``score`` (L1122) et non par le seuil avide
+           0x131 (L3834).
         """
         sim = self.g.sim
         st = sim.stats[tribe]

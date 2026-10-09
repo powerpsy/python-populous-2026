@@ -151,8 +151,20 @@ class Game:
         """
         sim = self.sim
         blk = self.terrain.blk
+        # L11256-11259 : le setup monojoueur ne pose que
+        # `can_build[_not_player] = 1` ; `can_build[_player]` garde sa
+        # valeur `.data`, qui est 0. `can_build[t] == 1` veut dire
+        # « l'Amiga conduit la tribu t » (menu Game Setup, L12849-12866) :
+        # c'est ce qui autorise l'auto-releve des noyes (L3497), le
+        # sculptage `one_block_flat` (L4112) et le seuil avide 0x131
+        # (L3830). Comme le port n'a pas encore d'interface de pouvoir,
+        # la tribu joueur cesse donc de reagir toute seule.
+        sim.stats[sim.player].can_build = 0
+        sim.stats[sim.not_player].can_build = 1
+        # `colour` garde 11/14 : le `.data` porte 5/1 (L24203 / L24229),
+        # mais L408 et L12070 reecrivent le champ au demarrage et le port
+        # travaille avec une autre table de palettes.
         for t in (0, 1):
-            sim.stats[t].can_build = 1
             sim.stats[t].colour = 11 if t == 0 else 14
 
         scored = []
@@ -431,14 +443,30 @@ class Game:
 
     # -------------------------------------------------------------- affichage
     def _run_commands(self) -> None:
-        """Fin de tour : l'IA ennemie choisit, puis le canal execute.
+        """Fin de tour : periode, IA ennemie, puis le canal execute.
 
-        Le joueur n'a pas encore d'interface de pouvoir, donc les deux fiches
-        sont traitees de la meme facon — comme un joueur humain qui ne
-        commanderait rien.
+        L'asm appelle cette boucle de messages **avant** `_move_peeps`
+        (L17929-18230) ; le port l'appelle apres, ce qui decale d'un tour
+        `ai_choose` et les extrema (ECART note en Phase 57, non corrige
+        ici). L'ordre interne, lui, est celui du listing.
         """
-        self.powers.ai_choose(self.sim.not_player)
-        for t in (self.sim.player, self.sim.not_player):
+        sim = self.sim
+        # L17934-17951 : la boucle de messages vide `queued` pour chaque
+        # tribu dont `can_build == 1`, quand `game_turn % period == 0`.
+        # C'est le SEUL vidage de `queued` de tout le listing :
+        # `_clear_send` (L18234-18254) ne touche qu'a `act/p1/p2`. Une
+        # tribu humaine (`can_build == 0`) garde donc `queued == 1` pour
+        # toujours, ce qui eteint toute son IA.
+        # `DIVU` par zero piégerait le 68000 : le test `period != 0`
+        # empeche le crash sans changer le comportement, le `.data`
+        # portant 1 et 3 (L24188 / L24226).
+        for t in (0, 1):
+            st = sim.stats[t]
+            if st.can_build == 1 and st.period != 0 and (
+                    sim.game_turn % st.period == 0):
+                st.queued = 0
+        self.powers.ai_choose(sim.not_player)
+        for t in (sim.player, sim.not_player):
             self.powers.do_queued(t)
         # `sim.effect` n'est pose que dans deux cas rares ; on le recopie
         # dans le mot global `_effect`, que l'horloge audio consomme a la

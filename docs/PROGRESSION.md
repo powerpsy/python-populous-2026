@@ -4133,7 +4133,7 @@ check_mana, check_dispatch, smoke_sim, stress) est retounee verte.
 Il restait **deux** marqueurs `[APPROX]` dans `populous/`, plus une branche
 manquante documentee. Le premier tombe ici : `_where_do_i_go` (L4622-4901,
 280 lignes, 25 etiquettes `LAB_416xx`) est **transcrite ligne a ligne**, et
-l'heuristique inventee qui la remplaçait disparait avec les deux helpers
+l'heuristique inventee qui la remplaÃ§ait disparait avec les deux helpers
 qu'elle appelait.
 
 #### Le fonctionnement relu dans le listing
@@ -4144,7 +4144,7 @@ La routine evalue **neuf directions** (L4637-4853) et, pour chacune,
 ses huit voisines.
 
 Cinq criteres remplissent cinq cases (score + decalage), `5` valant
-« jamais retenu » (valeur initiale, L4627-4635) :
+Â« jamais retenu Â» (valeur initiale, L4627-4635) :
 
 | slot | frame | critere |
 |---|---|---|
@@ -4154,7 +4154,7 @@ Cinq criteres remplissent cinq cases (score + decalage), `5` valant
 | 3 | -16 / -26 | occupant explorateur (`BTST #1`, L4793) |
 | 4 | -14 / -24 | chemin le plus court sur `_map_steps` (L4818-4840) |
 
-Le « pas peut s installer ici » n'est donc **pas** un test special : c'est le
+Le Â« pas peut s installer ici Â» n'est donc **pas** un test special : c'est le
 slot 0 rempli sur la case courante (`d5 == 0`). La selection finale
 (L4854-4901) privilegie le slot 2 si `command == 3`, le slot 3 si
 `command == 2`, sinon le premier slot non vide, sinon `999` ($03E7) - que
@@ -4190,7 +4190,7 @@ Trois autres ecarts de la meme routine ont ete **recenses, pas corriges**
 
 #### Les deux helpers inventes ont ete supprimes
 
-`_explore_score` et `_find_flat_ahead` (« regard plus loin » en rayon 2-3)
+`_explore_score` et `_find_flat_ahead` (Â« regard plus loin Â» en rayon 2-3)
 nexistent pas dans le listing : ils compensaient exactement l absence de la
 transcription. Devenus morts, ils ont ete supprimes, et l import
 `offset_to_dx` avec eux.
@@ -4512,6 +4512,144 @@ ligne. `PLANIFIE` reste vide.
   l'ordre du listing : `ai_choose` lit donc les valeurs du tour precedent
   pour `p2a` / `p26` / `strongest`. Corriger demanderait de reordonner
   `tick()`, ce qui sort de la portee tranchee en dialogue. Trace ici.
+
+### Phase 58 - `_stats` : l'init `.data` complete, `can_build`, la periode
+
+#### Ce que le `.data` dit reellement
+
+`_stats` (L24171-24230) contient **deux** fiches de 46 octets, initialisees
+au chargement du binaire. La seconde commence a `strABC`, ce qui donne octet
+par octet :
+
+.. code-block:: none
+
+    +0  act        $61 / "a"       (L24172 / L24212)
+    +1  p1         $62 / "b"
+    +2  p2         $63 / "c"
+    +3..+5         0 /  0
+    +6  can_build   0 /  1         (LAB_516AA / LAB_516D8 : DS.B 1 + DC.B $01)
+    +8  queued      1 /  1         (LAB_516AC / LAB_516DA : DC.L $00010000)
+    +10             0 /  0
+    +12 threshold   1 /  5         (LAB_516B0 / LAB_516DE)
+    +14 power_mask  $FFFF / $FFFF  (LAB_516B2 / LAB_516E0)
+    +16 period      1 /  3         (LAB_516B4 / LAB_516E2 : DC.L $00030000)
+    +18..+30        0 /  0
+    +32 colour      5 /  1         (LAB_516C4 / mot de $516F2)
+    +34 strongest   0 /  0         (LAB_516C6 / DS.L 1)
+    +38 p26         0 /  0         (LAB_516CA)
+    +42 p2a         0 /  0         (LAB_516CE)
+
+Deux points a lire attentivement :
+
+* `act/p1/p2` valent `$61/$62/$63` - "abc", les trois octets de `strABC`
+  (L24212) et le `dc.b` explicite de L24172. Ce ne sont pas des codes
+  d'action valides : le dispatch saute a `LAB_4B818` des que `act >= $0F`
+  (L18219-18220), donc 97 ne fait rien. Le port initialise a la meme
+  valeur, pour la meme raison.
+* les trois LONGS `strongest`/`p26`/`p2a` valent **0**, qui est le pointeur
+  nul dans le jeu. Le port stocke des index et garde `-1` comme sentinelle
+  (convention de la Phase 57) : 0 voudrait dire "peep 0", ce n'est pas le
+  meme etat. L'ecart est **maintenu**, pas corrige.
+
+`Tribe.__init__(t)` porte desormais tout ce bloc ; `Game.__init__` ne
+reecrit plus `threshold`/`power_mask`/`period` a la main.
+
+#### `can_build` = "l'Amiga conduit cette tribu"
+
+Le menu Game Setup le dit sans ambiguite (L12849-12866) :
+
+.. code-block:: none
+
+    strAmigaVsAmiga = can_build[_player] + $80   ; selectionne si == 1
+    strHumanVsAmiga = (can_build[_player] == 0) + $80
+
+`can_build[t] == 1` signifie donc "la tribu t est conduite par
+l'ordinateur". Les entrees du menu le posent en consequence (L13178-13221)
+: "Humain vs Amiga" ecrit `0` sur la fiche joueur et `1` sur l'autre,
+"Amiga vs Amiga" ecrit `1` sur les deux, et la rotation Good/Evil
+(L13076-13157) ne fait que les permuter en changeant de cote.
+
+Le setup monojoueur (L11256-11259), lui, ne fait qu'une seule ecriture :
+
+.. code-block:: none
+
+    JSR     _clear_send            ; act/p1/p2 des DEUX fiches
+    D0      = _not_player          ; 1 par defaut (L24147)
+    can_build[D0] = 1              ; LAB_516AA + D0 * $2E
+
+`can_build[_player]` garde sa valeur `.data`, c'est-a-dire `0`.
+`game.py:_settle_peoples` posait les deux a `1` : la tribu joueur gagnait
+l'auto-releve des noyes (L3497), le sculptage `one_block_flat` (L4112) et le
+seuil avide 0x131 (L3830). Corrige - et la consequence se voit tout de
+suite : sur la graine 1, `pop J` passe de la valeur "deux IA" a 6 001,
+contre 9 351 pour l'Amiga. `tools/smoke_sim.py` met les deux `can_build` a
+1 explicitement, donc il mesure toujours le meme "Amiga vs Amiga".
+
+#### La periode : le seul vidage de `queued`
+
+On cherchait depuis la Phase 42 le site qui remet `queued` a 0. Il est
+unique, dans `_get_message` (L17934-17951) :
+
+.. code-block:: none
+
+    LAB_4B4EA:
+        can_build[t] == 1 ?               ; BNE LAB_4B528 -> non
+        D1 = game_turn
+        DIVU  period[t], D1 ; SWAP D1     ; reste dans le mot bas
+        TST.W D1 / BNE LAB_4B528          ; reste != 0 -> non
+        queued[t] = 0                     ; CLR.W (LAB_516AC)
+
+Trois consequences, toutes mesurees :
+
+1. `_clear_send` (L18234-18254) ne vide que `act/p1/p2`, pas `queued`. Le
+   port vidait les deux dans `do_queued` : c'est corrige, et `p1`/`p2` sont
+   desormais remis a zero comme dans le listing.
+2. une tribu **humaine** (`can_build == 0`) ne voit jamais son `queued`
+   tomber a 0 : `_set_devil_magnet`/`_devil_effect` (L3255-3268), le bloc
+   `_make_level` (L3770), `one_block_flat` (L4112) et le seuil avide
+   (L3841) restent eteints pour elle. C'est voulu : l'humain conduit son
+   aimant et son relief lui-meme, et le port n'appelle de toute facon
+   `ai_choose` que pour `not_player`.
+3. la scission des villes passe alors par le seuil naturel `score`
+   (L1122), et non par 0x131.
+
+`DIVU` par zero piegerait le 68000 : le port teste `period != 0` avant,
+sans changer le comportement (le `.data` porte 1 et 3). L'ecart d'ordre deja
+note en Phase 57 subsiste : l'asm appelle la boucle de messages **avant**
+`_move_peeps`, le port **apres**.
+
+#### Ou le `.data` n'est pas la fin de l'histoire
+
+`colour` vaut 5/1 dans le `.data`, mais L408 et L12070 reecrivent le champ
+au demarrage - le port travaille avec une table de palettes differente et
+garde 11/14. L'ecart est **declare et verifie** dans `tools/check_level.py`
+plutot que cache.
+
+Deux morceaux restent **non transcrits**, et le sont dits comme tels :
+
+* `_get_message` (L17707) en entier : seule la periode de `queued` et le
+  dispatch sont dans le port ; le canal serie et le replay n'y sont pas.
+  L'alias de couverture n'est donc declare que pour `_clear_send`, et le
+  credit de "citation reperee" vient des numeros de ligne cites dans
+  `game.py`.
+* les entrees du menu Game Setup qui ecrivent `can_build` (L12993,
+  L13178-13221) : le port n'a pas de menu.
+
+#### Verification
+
+.. code-block:: none
+
+    tools/check_level.py        : 41/41 controles (31 -> 41)
+    tools/check_devil.py        : 13/13 chemins, 621 cas, 0 ecart
+    tools/autopilot.py 59 0 3   : 68/68 controles
+    tools/check_funny.py        : 40/40 controles
+    tools/check_render.py       : OK - 9 vrais ecarts (seuil 60)
+    tools/check_assets.py       : OK
+    tools/check_mana.py         : 0 ecart (56 essais do_action)
+    tools/check_dispatch.py     : controles verts
+    tools/smoke_sim.py          : 5000 tours, map_who sur peep mort = []
+    tools/stress.py 2000 8      : 8/8 parties robustes
+    tools/coverage.py           : 160/393 - 63 alias declare - 0 a coder
 
 ### Reste a faire
 
