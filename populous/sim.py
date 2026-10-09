@@ -4,10 +4,11 @@ Références : ``docs/game_logic.md`` (lecture intégrale du désassemblage) et
 ``reference/tetracorp/populous_prg.asm``. Les passages marqués **[APPROX]** ne
 sont plus « là où le désassemblage est coupé » — la Phase 12 a montré que le
 listing est complet — mais ceux qui n'ont pas encore été transcrits ligne à
-ligne : il n'en reste qu'un dans ``populous/`` — la branche `LAB_4516`
-de ``_set_devil_magnet`` (``powers.py``), non transcrite. La marche
-d'exploration et ``_do_place_funny`` ont ete transcrits ligne a ligne
-(Phase 56).
+ligne. Il n'en reste **aucun** dans ``populous/`` : la derniere branche
+ouverte, ``LAB_45196`` de ``_set_devil_magnet``, a ete transcrite ligne a
+ligne en Phase 57, apres ``_do_place_funny`` (Phase 56) et la marche
+d'exploration. Les marqueurs **[APPROX]** servent donc maintenant de
+compteur : ils sont a zero.
 
 Corrections apportées au document par relecture directe du code :
 
@@ -104,7 +105,8 @@ class Tribe:
         self.colour = 0         # +0x20 couleur de la mini-carte
         self.strongest = -1     # +0x22 index du peep ennemi le plus fort
         self.p26 = -1           # +0x26 (0 = pointeur nul dans le jeu)
-        self.p2a = 0            # +0x2A
+        self.p2a = -1           # +0x2A index du peep le plus jeune
+                              # (pointeur nul dans l'asm)
 
 
 class Player:
@@ -152,6 +154,14 @@ class Game:
         self.peeps: list[Peep] = [Peep() for _ in range(PEEP_SLOTS)]
         self.no_peeps = 0
         self.stats = [Tribe(), Tribe()]
+        # `.data` de `_stats` (L24171-24230) : le listing initialise les deux
+        # fiches avant toute partie. Sans ce bloc `power_mask` vaut 0 et toute
+        # la cascade d'`ai_choose` (L9365-9396) reste morte hors Conquest.
+        for t, (seuil, periode) in enumerate(((1, 1), (5, 3))):
+            st = self.stats[t]
+            st.threshold = seuil       # LAB_516B0 / LAB_516DE (L24184 / L24222)
+            st.power_mask = 0xFFFF     # LAB_516B2 / LAB_516E0 (L24186 / L24224)
+            st.period = periode        # LAB_516B4 / LAB_516E2 (L24188 / L24226)
         self.players = [Player(), Player()]
 
         self.game_turn = 0
@@ -164,7 +174,8 @@ class Game:
         self.seed = seed
         self.cheat = 0
         self.serial_off = 0
-        self.flags = 0            # LAB_518A7 : bit0 tue dans l'eau, bit2 gèle l'IA
+        self.flags = 0x10        # LAB_518A7 (L24311-24312, DC.B $10) :
+                                   # bit0 tue dans l'eau, bit2 gele l'IA
         self.battle_won = [0, 0]
         # miroirs de `players[t].magnet_to` (asm A4+$ae78 / A4+$ae76)
         self.god_magnet = 0x820
@@ -903,18 +914,32 @@ class Game:
                 # L3308 : `ADDQ.W #1,(LAB_52DF0)+tribu*16` -- le champ est un
                 # LONG, l'addition reboucle donc a 0x100000000.
                 pl.mana = m68k.add_long(pl.mana, 1)
-            st.p2a = 0
+            # L3313/3317/3321 : `CLR.L` des trois pointeurs de `_stats`.
+            # Ils ne sont lus qu'a la fin du tour, par `_devil_effect` et
+            # `_set_devil_magnet` ; nul = aucun peep repere, donc -1 chez
+            # nous (indice base 0), comme `p26` depuis la Phase 37.
+            st.p2a = -1
             st.p26 = -1
             st.strongest = -1
+
+        # (-24,A5) / (-28,A5) / (-36,A5) : les trois registres par tribu du
+        # cadre de `_move_peeps`, remis a zero ici (L3335 / L3330 / L3341).
+        # `0x4E1F` = 19999 est la valeur initiale du registre "plus jeune".
+        vie_max = [0, 0]
+        age_max = [0, 0]
+        age_min = [0x4E1F, 0x4E1F]
 
         # (c) compacter les peeps morts en fin de tableau
         while self.no_peeps > 0 and self.peeps[self.no_peeps - 1].life <= 0:
             self.no_peeps -= 1
 
-        # (e) guerre globale : tous les aimants valent 0x0820
+        # (e) guerre globale (L3426-3432) : c'est `magnet_to` qui vaut
+        # 0x0820 (le centre de la carte) - `LAB_52DE6` / `LAB_52DF6` et
+        # les deux miroirs `_god_magnet` / `_devil_magnet`. `magnet`
+        # (l'indice du peep vise) n'est pas touche.
         if self.war:
             for pl in self.players:
-                pl.magnet = 0x0820
+                pl.magnet_to = 0x0820
 
         # (f) boucle principale
         for i in range(self.no_peeps):
@@ -999,6 +1024,23 @@ class Game:
                     self.players[p.tribe].town_count += 1
                 if self.map.who[p.block] == 0:
                     self.map.who[p.block] = i + 1
+
+                # L3679-3763 : les trois registres de la tribu. Trois
+                # extrema, chacun range dans la fiche de l'**autre** tribu
+                # (`D0 = 1 - peep.tribe`, L3694-3701) : ce que lit
+                # `_set_devil_magnet` est donc l'ennemi le plus fort, le
+                # plus vieux et le plus jeune.
+                k = p.tribe
+                age = (self.game_turn - p.w6) & 0xFFFF    # L3711-3712, MOT
+                if vie_max[k] < score:                     # L3685 BGE (signe)
+                    vie_max[k] = score
+                    self.stats[1 - k].strongest = i        # L3703
+                if not age_max[k] > age:                   # L3714 BHI (non signe)
+                    age_max[k] = age
+                    self.stats[1 - k].p26 = i              # L3735
+                if not age_min[k] <= age:                  # L3746 BLS (non signe)
+                    age_min[k] = age
+                    self.stats[1 - k].p2a = i              # L3763
 
                 # tous les 8 tours : mana, armes, croissance, scission
                 if (self.game_turn & 7) == 0:
@@ -1516,7 +1558,9 @@ class Game:
             return
         if not (st.power_mask & 0x100):               # L9172-9173
             return
-        if not (self.flags & 0x04):                   # L9174-9175
+        # L9174-9175 : `BTST #2,(LAB_518A7) / BEQ LAB_44BE2` - LAB_44BE2
+        # est le corps : il ne s'execute que si le bit 2 est **nul**.
+        if self.flags & 0x04:
             return
 
         alt = self.terrain.alt if self.terrain is not None else []

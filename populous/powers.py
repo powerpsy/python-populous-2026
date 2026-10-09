@@ -22,7 +22,7 @@ from .constants import (
     ACT_SWAMP, ACT_TREE, ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2,
     BLK_ROCK3, BLK_SWAMP, BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
     COST_FLOOD, COST_KNIGHT, COST_MAGNET, COST_QUAKE, COST_RAISE, COST_SWAMP,
-    COST_VOLCANO, COST_WAR, MAX_PEEPS, SUB_FLOOD,
+    COST_VOLCANO, COST_WAR, PEEP_SLOTS, SUB_FLOOD,
     SUB_KNIGHT, SUB_WAR, TEND_X, TEND_Y,
 )
 
@@ -423,7 +423,7 @@ class PowerEngine:
         # (3) BTST #5,(-5,A5) -> bit 13 du masque : l'aimant
         if m & 0x2000:                                   # L9365-9396
             j = pl.magnet - 1
-            if pl.magnet == 0 or not (0 <= j < MAX_PEEPS):
+            if pl.magnet == 0 or not (0 <= j < PEEP_SLOTS):
                 return
             if sim.peeps[j].life <= 0x0BB8:              # CMPI.W #$0BB8
                 return
@@ -434,7 +434,7 @@ class PowerEngine:
             return
 
         # (4) LAB_44E8C : les deux effets informatiques
-        if st.p26 == 0:                                  # L9398-9399
+        if st.p26 < 0:                                  # L9398-9399
             return
         if mana > self.TH_VPC and (m & 0x4000):          # L9404-9418
             st.act = 0x06
@@ -491,7 +491,11 @@ class PowerEngine:
         else:
             occ = sim.map.who[pl.magnet_to] if 0 <= pl.magnet_to < len(sim.map.who) else 0
             j = occ - 1
-            if occ == 0 or not (0 <= j < MAX_PEEPS) or sim.peeps[j].tribe == tribe:
+            # Borne = la table physique (212), pas `MAX_PEEPS` (208) :
+            # `_do_place_funny` ecrit `map_who = idx + 1` (L8971-8977)
+            # pour les fiches 0xD1/0xD2, donc 210 et 211 - observe en
+            # execution (`tools/stress.py`, graines 112 et 260).
+            if occ == 0 or not (0 <= j < PEEP_SLOTS) or sim.peeps[j].tribe == tribe:
                 lent = True                               # L9544 / L9552
             else:
                 st.p1 = pl.magnet_to & 0x3F               # L9558-9560
@@ -502,7 +506,7 @@ class PowerEngine:
         # LAB_450B8 : chemin lent. `($26,A2)` est le champ +0x26 de la fiche
         # de tribu, donc `st.p26` -- et non celui du joueur.
         cible = st.p26
-        bloc = sim.peeps[cible].block if 0 <= cible < MAX_PEEPS else 0
+        bloc = sim.peeps[cible].block if 0 <= cible < PEEP_SLOTS else 0
         x = (bloc & 0x3F) - 3                             # L9576-9577
         y = (bloc >> 6) - 3                               # L9582-9583
         if x < 0:
@@ -513,41 +517,179 @@ class PowerEngine:
         st.p2 = y                                         # L9596
 
     def set_devil_magnet(self, tribe: int) -> None:
-        """``_set_devil_magnet`` (L9601-9690) : le releve de terrain.
+        """``_set_devil_magnet`` (L9601-9897) : l'aimant decide tout seul.
+
+        Deux moities. La premiere (L9611-9643) est le test de periode : elle
+        arme l'action ``$0E`` (le releve de terrain). La seconde,
+        ``LAB_45196`` (L9648-9897), fait bouger l'aimant.
 
         .. code-block:: none
 
-            D0 = stats->$16 (towns) + stats->$14 (castles)
-            D1 = stats->$0C (threshold) * 2 + $0F
-            si D0 >= D1 :
-                D0 = _game_turn / 90          (DIVU #$5A)
-                D1 = stats->$0C + $0A
-                si D0 >= D1 : -> LAB_45196
-        LAB_4515A:
-            si command[tribu] == 0 :
-                act = $0E ; p2 = 1 ; p1 = 1 + (newrand % 3) ; queued = 1
+            L9611-9616  total = towns + castles ; seuil = threshold*2 + $0F
+            L9616-9617  CMP.W D1,D0 / BLT LAB_4515A
+            L9618-9623  DIVU #$5A puis SWAP      -> D0 = game_turn % 90
+            L9624-9627  seuil2 = threshold + $0A ; BCC LAB_45196
+        LAB_4515A (L9628-9643) :
+            si command[tribu] == 0 : act=$0E, p2=1, p1=1+(newrand%3), queued=1
 
-        La seconde branche (LAB_4516 onward) fait bouger l'aimant ; elle est
-        la suite de la meme lecture, et n'est pas encore transcrite — d'ou le
-        `[APPROX]` qu'on laisse ici plutot que d'ecrire un chemin devine.
+        ``LAB_45196`` lit trois choses mises a jour **au tour precedent**
+        (le ``CLR.L`` de L3313 vient apres l'appel de L3259) :
+
+        * ``A3``  - le peep vise par l'aimant de **cette** tribu (L9678-9693) ;
+        * ``D4``  - le peep vise par l'aimant de l'**autre** (L9656-9676) ;
+        * ``p2a`` / ``strongest`` - ``+0x2A`` / ``+0x22``, lus en L9745 et
+          L9865.
+
+        Ce sont des **indices** chez nous (``-1`` = pointeur nul). Deux ecarts
+        assumes, marques ci-dessous : l'asm derobe un pointeur nul (il lit
+        l'octet 8 de la memoire basse, donc un octet d'adresse fixe) et, quand
+        ``magnet[t]`` depasse la table, une fiche hors ``_peeps`` ; on y met
+        ``block = 0``, la convention deja utilisee en ``powers.py:505``.
         """
         sim = self.g.sim
         st = sim.stats[tribe]
+        pl = sim.players[tribe]
+        po = sim.players[1 - tribe]
 
         total = st.towns + st.castles                      # L9611-9612
-        cible = st.threshold * 2 + 0x0F                   # L9613-9616
-        # L9617 : `CMP.W D1,D0 / BLT LAB_4515A` — c est donc quand
-        # total < cible qu on va droit a l'action, et non l'inverse.
-        if total >= cible:                                 # chemin des tours
-            tours = sim.game_turn // 0x5A                  # L9618-9623
-            if tours >= st.threshold + 0x0A:               # BCC LAB_45196
-                return                                     # LAB_45196, non lu
-        # LAB_4515A : le releve de terrain
-        if sim.players[tribe].command == 0:                # L9633-9634
-            st.act = 0x0E                                  # L9635
-            st.p2 = 0x01                                   # L9636
-            st.p1 = 1 + sim.rng.below(3)                   # L9637-9642
-            st.queued = 1                                  # L9643
+        seuil = st.threshold * 2 + 0x0F                   # L9613-9616
+        # L9616-9617 : `CMP.W D1,D0 / BLT LAB_4515A` - c'est quand
+        # total < seuil qu'on va droit a l'action, et non l'inverse.
+        # L9622-9623 : `DIVU #$5A` suivi de `SWAP` : le mot bas de D0 est
+        # alors le **reste**, pas le quotient - d'ou `game_turn % 90`.
+        aller = (total >= seuil
+                 and (sim.game_turn % 0x5A) >= st.threshold + 0x0A)   # L9626
+        if not aller:
+            # LAB_4515A (L9628-9643) : le releve de terrain
+            if pl.command == 0:                            # L9633-9634
+                st.act = 0x0E                              # L9635
+                st.p2 = 0x01                               # L9636
+                st.p1 = 1 + sim.rng.below(3)               # L9637-9642
+                st.queued = 1                              # L9643
+            return
+
+        # ---------------- LAB_45196 (L9648-9897) : bouger l'aimant
+        # L9649-9655 : `D0 = (tribe == 0) ? 1 : 0` - l'autre tribu.
+        # L9656-9676 : D4 = &peeps[magnet[autre]-1] ; D4 valait deja 0
+        # (L9605 `MOVEQ #0,D4`), donc "aimant de l'autre nul" = D4 nul.
+        # L9678-9693 : A3 = &peeps[magnet[cette tribu]-1] ; `SUBA.L A3,A3`
+        # (L9604) l'a remis a zero : aimant nul donc pointeur nul.
+        je = po.magnet - 1
+        # ECART : hors table si `magnet` > 212 (cas de guerre, 0x0820).
+        pe = sim.peeps[je] if 0 <= je < PEEP_SLOTS else None
+        jo = pl.magnet - 1
+        pa = sim.peeps[jo] if 0 <= jo < PEEP_SLOTS else None
+
+        if pa is None:                                     # L9695-9696
+            if pl.command != 0:                            # L9701-9702
+                st.act = 0x0E                              # L9703
+                st.p2 = 0x01                               # L9704
+                st.p1 = 0                                  # L9705
+                st.queued = 1                              # L9706
+                st.t1c = 0                                 # L9707
+            return                                         # L9708-9709
+
+        # ---- LAB_45238 (L9710) : un peep est vise
+        if pa.block == st.t1e and st.t1c != 0:             # L9711-9715
+            st.t1c -= 1                                     # L9716
+        # L9718 : `CMPI.W #$1770,(4,A3) / BGE LAB_45318` = 6000 points de vie.
+        if pa.life >= 0x1770:
+            self._aimant_fort(st, pl, po, pa, pe)
+            return
+
+        if st.t1c != 0:                                    # L9720-9721
+            # L9722-9737 : la course en cours continue.
+            if pl.magnet_to != st.t1e:                     # L9725-9728
+                st.act = 0x05                              # L9729
+                st.p1 = st.t1e & 0x3F                      # L9730-9732
+                st.p2 = m68k.s16(st.t1e) >> 6              # L9733-9735
+                st.queued = 1                              # L9736
+                return                                     # L9737
+            # LAB_45296 (L9738) : egal -> LAB_452EE (L9763)
+        else:
+            # ---- LAB_45298 (L9740-9762) : nouvelle course, sur `p2a`
+            # ECART : `p2a` nul -> l'asm lit le bloc a l'adresse 8.
+            cible = (sim.peeps[st.p2a].block
+                     if 0 <= st.p2a < PEEP_SLOTS else 0)    # L9745-9747
+            if pl.magnet_to != cible:                      # L9748
+                st.act = 0x05                              # L9749
+                st.p1 = cible & 0x3F                       # L9750-9753
+                st.p2 = cible >> 6                         # L9754-9757
+                st.t1e = cible                             # L9758-9759
+                st.t1c = 2                                 # L9760
+                st.queued = 1                              # L9761
+                return                                     # L9762
+            # LAB_452EE (L9763)
+
+        # ---- LAB_452EE (L9763-9775) : releve si une commande attend
+        if pl.command != 0:                                # L9768-9769
+            st.act = 0x0E                                  # L9770
+            st.p2 = 0x01                                   # L9771
+            st.p1 = 0                                      # L9772
+            st.queued = 1                                  # L9773
+        # LAB_45314 (L9774-9775) : retour.
+
+    def _aimant_fort(self, st, pl, po, pa, pe) -> None:
+        """La branche forte de ``_set_devil_magnet`` : L9776-9897.
+
+        Appelle quand le peep vise a au moins 6000 points de vie. Deux
+        masques y sont testes sur ``power_mask`` (champ ``+0x0E``) :
+        ``BTST #2,($F,A2)`` = bit 10 = ``$400``, ``BTST #1,($F,A2)`` =
+        bit 9 = ``$200``.
+        """
+        sim = self.g.sim
+
+        # ---- LAB_45318 (L9776-9857)
+        # L9777-9778 : `TST.L D4 / BEQ LAB_453F6` - pas d'aimant ennemi.
+        # L9780-9784 : `pa.life <= pe.life + $1F4` -> `BLE LAB_453F6`.
+        # L9785-9796 : `command[autre] != 0` -> `BNE LAB_453F6`.
+        releve = (pe is not None
+                  and pa.life > pe.life + 0x1F4            # L9780-9784
+                  and po.command == 0)                    # L9785-9796
+        # Les trois tests ci-dessus sautent a LAB_453F6 (L9778 / L9784 /
+        # L9796) : LAB_45318 n'est ouvert que par `releve`. L9797-9798
+        # `BTST #2,($F,A2)` = bit 10 du mot +0x0E = $400, puis `BEQ
+        # LAB_453F2` - un retour direct, **pas** LAB_453F6.
+        if releve:
+            if not (st.power_mask & 0x400):               # L9797-9798
+                return                                    # LAB_453F2 (L9856)
+            if pl.command != 0:                           # L9799-9804
+                st.act = 0x0E                             # L9805
+                st.p2 = 0x01                              # L9806
+                st.p1 = 0                                 # L9807
+                st.queued = 1                             # L9808
+                return                                    # L9809 -> LAB_453F2
+            # LAB_45380 (L9810-9855) : les deux aimants doivent diverger.
+            if pl.magnet_to == po.magnet_to:              # L9825-9827
+                return                                    # LAB_453F2 (L9856)
+            st.act = 0x05                                 # L9828
+            st.p1 = po.magnet_to & 0x3F                   # L9839-9841
+            st.p2 = po.magnet_to >> 6                     # L9849-9854
+            st.queued = 1                                 # L9855
+            return                                        # LAB_453F2 (L9856)
+
+        # ---- LAB_453F6 (L9858-9897)
+        # L9859-9860 : `BTST #1,($F,A2)` = bit 9 du mot +0x0E = $200.
+        if not (st.power_mask & 0x200):
+            return                                        # LAB_45480 (L9896)
+        # ECART : `strongest` nul -> l'asm lit le bloc a l'adresse 8.
+        cible = (sim.peeps[st.strongest].block
+                 if 0 <= st.strongest < PEEP_SLOTS else 0)  # L9865-9867
+        if pl.magnet_to != cible and st.t1c == 0:          # L9867-9870
+            st.act = 0x05                                 # L9871
+            st.p1 = cible & 0x3F                          # L9872-9875
+            st.p2 = cible >> 6                            # L9876-9879
+            st.t1e = cible                                # L9880-9881
+            st.t1c = 2                                    # L9882
+            st.queued = 1                                 # L9883
+            return                                        # L9884 -> LAB_45480
+        # LAB_4545A (L9885-9895)
+        if pl.command != 0:                               # L9890-9891
+            st.act = 0x0E                                 # L9892
+            st.p2 = 0x01                                  # L9893
+            st.p1 = 0                                     # L9894
+            st.queued = 1                                 # L9895
+        # LAB_45480 (L9896-9897) : retour.
 
     def do_action(self, tribe: int, arg2: int, code: int) -> None:
         """``_do_action`` (L18376-19004), **par morceaux**.
@@ -702,7 +844,7 @@ class PowerEngine:
             "_do_action code %d : handler %s non transcrit" % (code, non_transcrit[code]))
 
     def ai_choose(self, tribe: int) -> None:
-        """``_set_devil_magnet`` puis ``_devil_effect`` (L3256-3259).
+        """``_set_devil_magnet`` puis ``_devil_effect`` (L3252-3268).
 
         .. code-block:: none
 
@@ -737,10 +879,10 @@ class PowerEngine:
         st = sim.stats[tribe]
         if st.queued:                        # asm L3256 : TST.W (8,A0) / BNE
             return
-        self.set_devil_magnet(tribe)        # L3257 — inerte, cf. docstring
+        self.set_devil_magnet(tribe)        # L3257-3260 : JSR L3259
         if st.queued:
             return
-        self.devil_effect(tribe)            # L3258
+        self.devil_effect(tribe)            # L3267-3268 : JSR L3268
 
     def ai_choose_invented(self, tribe: int) -> None:
         """L'heuristique **avant** la Phase 42, conservee pour comparaison.

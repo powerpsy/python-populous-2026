@@ -10,7 +10,8 @@
    * les populations restent dans des bornes plausibles ;
    * la vie d'un peep ne depasse jamais le plafond `0x7D00` (32000) ;
    * `no_peeps` ne depasse jamais `MAX_PEEPS` (208) ;
-   * `map_who` ne renvoie jamais un index hors de la table des peeps ;
+   * `map_who` ne renvoie jamais un index hors de la table physique
+     (212 fiches : `PEEP_SLOTS`, et non `MAX_PEEPS`) ;
    * la mana reste dans `[plancher, 0x7FFFFFFF]`.
 
  Usage :
@@ -25,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from populous.constants import MAX_PEEPS                    # noqa: E402
+from populous.constants import MAX_PEEPS, PEEP_SLOTS       # noqa: E402
 from populous.game import Game                              # noqa: E402
 from populous.sim import ST_EXPLORER                        # noqa: E402
 
@@ -61,10 +62,14 @@ def une_partie(seed: int, ground: int, tours: int) -> dict:
             if p.state == ST_EXPLORER:
                 assert p.life > 0, "explorateur mort (graine %d)" % seed
 
-        # `map_who` contient l'index + 1 : jamais hors table
+        # `map_who` contient l'index + 1 : jamais hors table physique.
+        # Borne haute 0xD3 = 211 et non 208 : `_do_place_funny` ecrit
+        # `map_who = idx + 1` (L8971-8977) pour les fiches 0xD1/0xD2,
+        # les seules parcourues par la boucle L9009-9011. Valeurs
+        # observees en execution : 210 et 211.
         for cell, who in enumerate(sim.map.who):
             if who:
-                assert 1 <= who <= MAX_PEEPS, \
+                assert 1 <= who <= 0xD3, \
                     "map_who[%d]=%d hors table (graine %d)" % (cell, who, seed)
 
         for pl in sim.players:

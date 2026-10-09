@@ -4368,6 +4368,151 @@ reellement refernces - plus `_main`, qui est **mentionnee** dans un
 docstring sans etre transcrite : c'est un plafond, pas une acquisition, et
 aucun alias n'a ete declare pour elle. `PLANIFIE` reste vide.
 
+### Phase 57 - `_stats` : level.dat, les pointeurs, l'init `.data`
+
+Trois blocs tranches l'un apres l'autre, chacun verifie par execution.
+
+#### 57a - `level.dat` et les trois extrema
+
+`populous/conquest.py` est reecrit : les champs sont `threshold`,
+`ai_period`, `enemypow`, `yourpow`, `mode`, `terrain`, `yourpop`,
+`enemypop`, `seed`, et `seed` est un MOT (L388-391), pas un octet. La
+propriete `powers` vaut `(col << 3) | 7` (L407-423). `load_conquest`
+(`game.py`) pose `set_ground` **avant** les quatre ecritures de `_stats`,
+et la mana de depart n'est plus inventee : L1070 vaut toujours 399.
+
+`sim.py` gagne le bloc de debut de tour (L3313/3317/3321 : `p2a`, `p26`,
+`strongest` remis a nul), les trois locaux `vie_max` / `age_max` /
+`age_min` (L3335 / L3330 / L3341) et le bloc des trois extrema apres
+`map.who[p.block] = i + 1` (L3679-3763) : chaque extremum range dans
+`stats[1 - peep.tribe]` (L3694-3701), c'est-a-dire la fiche de
+l'**autre** tribu. Les trois comparaisons gardent les trois sensibilites
+du 68000 - `BGE` signe (L3685), `BHI` non signe (L3714), `BLS` non signe
+(L3746).
+
+#### 57b - `_set_devil_magnet`, la branche `LAB_45196`
+
+La derniere branche non transcrite de `populous/` tombe. Le test de periode
+(L9611-9643) et tout `LAB_45196` (L9648-9897) sont ecrits dans
+`powers.py::set_devil_magnet`, plus un nouveau helper `_aimant_fort`
+(L9776-9897) pour la branche forte. Trois lectures y sont corrigees en
+cours de route - les trois sont du genre a passer inapercues en relecture :
+
+.. code-block:: none
+
+    L9622-9623  DIVU #$5A / SWAP  ->  le mot bas est le RESTE de la
+                division, donc `game_turn % 90`, et non `game_turn // 90` ;
+    L9616-9617  `CMP.W D1,D0 / BLT LAB_4515A`  ->  l'action directe est le
+                cas `total < seuil`, pas l'inverse ;
+    L9798       `BEQ LAB_453F2`  ->  quand `releve` est vrai mais que le bit
+                `$400` est nul, on RETOURNE sans passer par `LAB_453F6`.
+
+La sentinelle `p26` est corrigee au passage : `st.p26 < 0` au lieu de
+`st.p26 == 0` - L9398 teste un pointeur, et chez nous `0` est un index
+valide (`p2a` passe aussi a `-1` a l'init).
+
+Deux ecarts assumes, marques dans le code et non caches :
+
+* `strongest` ou `p2a` nuls : l'asm derobe le bloc de peep a l'adresse 8,
+  soit un octet d'adresse fixe ;
+* `magnet[t]` hors de `_peeps` (en guerre il vaut `$0820`) : l'asm lit une
+  fiche au-dela de la table.
+
+Dans les deux cas le port substitue `block = 0`, la convention deja
+utilisee en `powers.py:505`.
+
+Nouveau controle `tools/check_devil.py` : une **reecriture independante**
+du listing, exprimee comme le desassemblage - dispatcher d'etiquettes et
+sauts explicites, aucun code partage avec `populous/` - confrontee au port
+sur 621 etats de tribu : 21 cas cibles (un par chemin de sortie) et 600
+aleatoires. Les 13 chemins de sortie sont couverts, les six champs que la
+routine peut ecrire (`act`, `p1`, `p2`, `queued`, `t1c`, `t1e`) sortent
+identiques, et les 56 cas d'ECART sont comptes separement.
+
+#### 57c - l'init `.data` de `_stats`
+
+Le `.data` du binaire (L24171-24230) initialise les deux fiches avant
+toute partie. Aucune de ces valeurs n'etait dans le port :
+
+.. code-block:: none
+
+    stats[0] : threshold 1 (L24184), power_mask $FFFF (L24186), period 1 (L24188)
+    stats[1] : threshold 5 (L24222), power_mask $FFFF (L24224), period 3 (L24226)
+    LAB_518A7 : flags = $10 (L24311-24312, DC.B $10)
+
+Sans `power_mask = $FFFF`, `ai_choose` (L9365-9396) et les branches
+`$400` / `$200` de `LAB_45196` etaient **mortes** hors Conquest : le
+coup de fil pose en dialogue etait le bon. `check_level.py` passe de 24
+a 31 controles.
+
+#### Trois corrections de lecture, trouvees par execution
+
+1. `one_block_flat` avait la polarite **inversee** : `if not (flags & 0x04):
+   return`. L9174-9175 fait `BTST #2,(LAB_518A7) / BEQ LAB_44BE2` et
+   `LAB_44BE2` est le corps : il ne s'execute que si le bit 2 est nul.
+   Corrige.
+2. En guerre le port ecrivait `pl.magnet = 0x0820`. L3426-3432 ecrit
+   `LAB_52DE6` / `LAB_52DF6`, c'est-a-dire **`magnet_to`** - le centre de
+   la carte, plus les deux miroirs `_god_magnet` / `_devil_magnet` - et
+   non l'indice du peep vise. Corrige.
+3. Les bornes d'index de peep passent de `MAX_PEEPS` (208) a `PEEP_SLOTS`
+   (212) aux trois endroits de `powers.py` qui resolvent une fiche a
+   partir de `map_who` ou d'un aimant. La preuve vient de `stress.py`,
+   qui echouait sur les graines 112 et 260 avec `map_who = 210` : valeur
+   **legitime**, produite par `_do_place_funny` (`map_who = idx + 1`,
+   L8971-8977, pour les fiches 0xD1/0xD2, soit 210 et 211). L'invariant
+   du test est corrige aussi : borne `0xD3` et non `MAX_PEEPS`.
+
+#### Verification
+
+.. code-block:: none
+
+    tools/check_devil.py       : 13/13 chemins, 621 cas, 0 ecart
+    tools/check_level.py       : 31/31 controles
+    tools/autopilot.py 59 0 3  : 68/68 controles
+    tools/check_funny.py       : 40/40 controles
+    tools/check_render.py      : OK - 9 vrais ecarts (seuil 60)
+    tools/check_assets.py      : OK
+    tools/check_mana.py        : 0 ecart (56 essais do_action)
+    tools/check_dispatch.py    : controles verts (codes 1, 12, 13)
+    tools/smoke_sim.py         : 5000 tours, map_who sur peep mort = []
+    tools/stress.py 2000 8     : 8/8 parties robustes
+    tools/coverage.py          : 157/393 (39,9 %), 62 alias, 95 citations,
+                                 0 PLANIFIE
+
+La couverture **ne bouge pas**, et c'est a dire : `_set_devil_magnet` etait
+deja declare en alias. Ce qui change n'est pas le compteur, c'est que le
+corps de la routine passe d'un `[APPROX]` a une transcription ligne a
+ligne. `PLANIFIE` reste vide.
+
+#### Ce que la Phase 57 ne transcrit pas
+
+* **Le depart de `_stats`.** Le `.data` ecrit aussi `act = $61`,
+  `p1 = $62`, `p2 = $63`, `can_build` 0/1, `queued` 1/1 et `colour` 5/1
+  (L24172-24229), plus `+7` vaut 0 pour la tribu 0 et 1 pour la tribu 1
+  (`LAB_516AB` / `LAB_516D9`, lu seulement en L18742-18743). La boucle de
+  depart ajoute L11256-11259 (`can_build[_not_player] = 1`) et
+  L12762-12767 (`_player = 0`, `_not_player = 1`, `stats[1].can_build = 1`,
+  `stats[0].can_build = 0`, `stats[0].queued = 1`, `stats[1].queued = 0`).
+  Le port pose `can_build = 1` pour les **deux** tribus (`game.py:155`) :
+  le joueur emet donc des relevements automatiques quand ses peeps se
+  noient, ce que l'original ne fait pas.
+* **La periode du `queued`.** L17934-17951 ne remet `queued = 0` que si
+  `can_build == 1` **et** `game_turn % period == 0` (`DIVU (LAB_516B4)`,
+  L17939-17944). Le port l'efface a chaque tour dans `do_queued` :
+  `period` est donc toujours sans effet, malgre son init. `act` lui est
+  consomme par la boucle de messages (L17953-17975) puis remis a zero par
+  `_clear_send` (L18234-18254).
+* **La conversion de l'aimant.** L3358-3424 appelle `_set_magnet_to` puis
+  efface `magnet[t]` a chaque tour, une fois que le peep vise a bouge ; le
+  port ne le fait qu'a la mort du peep (`zero_population`).
+* **`_game_mode`** (L425-427) et **`_in_conquest`** (`$FFFF`, L24314).
+* **Le decalage d'une commande dans `tick()`.** L'ordre du port - bloc IA
+  (L3252-3273), puis `CLR.L` (L3313), puis bloc record (L3679) - differe de
+  l'ordre du listing : `ai_choose` lit donc les valeurs du tour precedent
+  pour `p2a` / `p26` / `strongest`. Corriger demanderait de reordonner
+  `tick()`, ce qui sort de la portee tranchee en dialogue. Trace ici.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -4379,11 +4524,7 @@ aucun alias n'a ete declare pour elle. `PLANIFIE` reste vide.
 * **Samples d'origine** : la logique audio est complete et fidele (Phase 10),
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
-* **Marqueurs `[APPROX]`** : il n en reste **qu'un**, la branche `LAB_4516`
-  de `_set_devil_magnet` (`powers.py`). `_do_place_funny` a ete transcrit
-  en Phase 56 (suite). Tout le reste de `populous/` est transcrit, ou hors
-  portee de facon documentee (2441 lignes de liaison serie / options -
-  codes 2, 7, 8).
+* **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
 * **Trois ecarts de `_place_people`** (Phase 56) : `weapons = 1` (L7065) et
   `frame = 0x00FF` (L7053) au lieu des valeurs du port, et `target = 0`
   (L7069) au lieu de `-1` (convention du port, documentee). Les deux premiers

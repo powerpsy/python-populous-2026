@@ -189,7 +189,8 @@ class Game:
         """Charge le palier de conquete ``n`` (1..99) et reconstruit la partie.
 
         ``seed = (in_conquest & 7) + graine`` et ``sol = terrain`` (§5.2 de
-        ``docs/game_logic.md``). ``start_mana`` donne la mana de depart.
+        ``docs/game_logic.md``). Les quatre ecritures de `_setup_display`
+        (L407-423) y sont posees.
         Renvoie ``False`` si ``level.dat`` est absent.
         """
         levels = load_levels()
@@ -198,10 +199,30 @@ class Game:
         lv = levels[max(0, min(len(levels) - 1, n - 1))]
         self.conquest = lv
         self.conquest_no = n                 # le palier courant, pour l'ecran
+        # L388-391 : `seed = (in_conquest & 7) + conq_08_seed`. `conq_08`
+        # est un MOT (octets 8-9) - `lv.seed`, et non plus `data[3]`.
         self.seed = (lv.number & 7) + lv.seed
+        # L395-402 : `conq_05_terrain` puis `_load_ground`. Attention a
+        # l'ordre : `set_ground` regenere le relief **et** reinstantie
+        # `self.sim`, donc les quatre ecritures de L407-423 doivent suivre,
+        # sinon elles tomberaient sur la fiche qui vient d'etre jetee.
         self.set_ground(lv.terrain)
-        for pl in self.sim.players:
-            pl.mana = lv.start_mana * 100
+        sim = self.sim
+        # _setup_display, L407-423 : les ecritures conditionnees au mode
+        # conquest (`_in_conquest != -1`). Colonnes 0 et 1 : tribu 1 seule.
+        #   L407-408  stats[1].threshold  = _conquest[0]
+        #   L410-411  stats[1].period     = conq_01_speed
+        #   L414-418  stats[1].power_mask = (conq_02_enemypow << 3) | 7
+        #   L419-423  stats[0].power_mask = (conq_03_yourpow  << 3) | 7
+        sim.stats[1].threshold = lv.threshold
+        sim.stats[1].period = lv.ai_period
+        sim.stats[1].power_mask = (lv.enemypow << 3) | 7
+        sim.stats[0].power_mask = (lv.yourpow << 3) | 7
+        # L'asm n'a **aucune** mana de depart par niveau : L1070 pose
+        # $18F = 399 pour les deux tribus, et `conq_08` n'est lu que L390,
+        # comme graine. L'ancienne formule `start_mana * 100` venait de la
+        # colonne 8-9 lue comme deux octets de mana - elle disparait.
+        # L425-427 (`_game_mode = conq_04_mode`) reste a transcrire.
         return True
 
 # ---------------------------------------- saisie du numero (asm L11942)
