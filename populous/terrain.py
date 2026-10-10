@@ -55,11 +55,13 @@ class Terrain:
 
     __slots__ = ("alt", "blk", "disp_alt", "bk2", "steps", "who",
                  "build_count", "xmin", "xmax", "ymin", "ymax",
-                 "seed", "ground")
+                 "seed", "ground", "t1a", "t18")
 
     def __init__(self, seed: int = 0, ground: int = 0):
         self.seed = seed & 0xFFFF
         self.ground = ground
+        self.t1a = [0, 0]                  # `_clear_map` L1099, par joueur
+        self.t18 = [0, 0]                  # `_clear_map` L1121, par joueur
         self.alt = [0] * N_VERTS
         self.blk = bytearray(N_CELLS)
         self.disp_alt = bytearray(N_CELLS)
@@ -106,11 +108,20 @@ class Terrain:
         self.who = bytearray(N_CELLS)
         self.build_count = 0
         self.xmin = self.xmax = self.ymin = self.ymax = 0
+        # `_clear_map` L1088-1121 : par joueur, `t1a` (+0x1A) = `below(3)`
+        # (L1097 `DIVS #3 / SWAP`) puis `t18` (+0x18) = `t1a + below(5) + 1`
+        # (L1116-1121), et `t12` (+0x12) remis a zero (L1124-1125).
+        # `Terrain` ne porte pas `_stats` : les tirages restent ici et
+        # `game.py` les recopie dans `sim.stats[k]`. Sans eux `t1a = t18 = 0`
+        # et `_devil_effect` (L9431-9441) verrait une porte toujours ouverte
+        # sur le bloc `act = 4`.
+        self.t1a = [0, 0]
+        self.t18 = [0, 0]
         if rng is not None:
-            # 2 tirages par joueur (stats[i].+0x1A puis .+0x18), 2 joueurs.
-            for _ in range(2):
-                rng.below(3)
-                rng.below(5)
+            for k in range(2):
+                a = rng.below(3)               # t1a, L1097-1099
+                self.t1a[k] = a
+                self.t18[k] = a + rng.below(5) + 1   # t18, L1116-1121
 
     # ---------------------------------------------------------- _raise_point
     def raise_point(self, x: int, y: int) -> int:

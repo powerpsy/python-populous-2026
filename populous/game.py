@@ -120,6 +120,7 @@ class Game:
         # `_one_block_flat` (L9148) lit les altitudes de sommet, qui sont dans
         # le terrain et pas dans `GameMap`.
         self.sim.terrain = self.terrain
+        self._sync_level_stats()
         self.powers = PowerEngine(self)
         self.sound = SoundEngine()
         self.music = MusicEngine(self.sound)
@@ -1535,6 +1536,19 @@ class Game:
         self.colours = map_colours(ren.header)
         return True
 
+    def _sync_level_stats(self) -> None:
+        """``_clear_map`` L1088-1121 : `t1a` / `t18` recopies dans `_stats`.
+
+        `Terrain.clear` **consomme** les deux tirages par joueur - il faut
+        le faire pour que la suite de la sequence du RNG reste identique -
+        mais `Terrain` ne porte pas `_stats`. Les voici donc dans la fiche,
+        ou `_devil_effect` les lit (L9431-9441 : la porte du bloc
+        `act = 4` est `t1a <= t12 <= t18`).
+        """
+        for k in (0, 1):
+            self.sim.stats[k].t1a = self.terrain.t1a[k]
+            self.sim.stats[k].t18 = self.terrain.t18[k]
+
     def set_ground(self, g: int) -> None:
         self.ground = g
         self.terrain, _ = build_map(self.seed, g)
@@ -1543,6 +1557,7 @@ class Game:
         self.sim = Sim(self.seed + 1, load_land(g),
                        map=self.terrain.game_map())
         self.sim.terrain = self.terrain
+        self._sync_level_stats()
         self._settle_peoples()
 
     def set_seed(self, s: int) -> None:

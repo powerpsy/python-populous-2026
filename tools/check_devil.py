@@ -14,14 +14,19 @@ cible par chemin de sortie, on applique les deux, et on compare les six
 champs que la routine peut ecrire : ``act``, ``p1``, ``p2``, ``queued``,
 ``t1c``, ``t1e``.
 
-Trois points sont verifies a part :
+Quatre points sont verifies a part :
 
 1. ``DIVU #$5A`` + ``SWAP`` (L9622-9623) : le registre contient le **reste**
    de la division, donc ``game_turn % 90`` et pas ``game_turn // 90`` ;
 2. ``BLT LAB_4515A`` (L9616-9617) : l'action directe est le cas
    ``total < seuil``, et non l'inverse ;
 3. ``BEQ LAB_453F2`` (L9798) : quand ``releve`` est vrai mais que le bit
-   ``$400`` est nul, on **retourne** - LAB_453F6 n'est pas atteint.
+   ``$0004`` est nul, on **retourne** - LAB_453F6 n'est pas atteint.
+4. les deux masques de ``power_mask`` sont des ``BTST`` sur un octet.
+   Le 68000 est gros-boutiste : ``($F,A2)`` est le **deuxieme** octet
+   du mot ``+0x0E``, donc ``BTST #2`` = bit 2 du mot = ``$0004`` et
+   ``BTST #1`` = ``$0002``. Ils etaient ecrits ``$0400`` / ``$0200``,
+   soit le swap octets, jusqu'a la Phase 60 (comme dans ``powers.py``).
 
 Les deux ecarts assumes du port (pointeur nul, fiche hors table) sont
 reperes par ``reference`` et comptes separement : le port et la reference
@@ -169,15 +174,15 @@ def reference(e):
 
         elif pc == "LAB_45318":
             # L9776-9798 : D4 nul / vie trop faible / commande ennemie
-            # sautent a LAB_453F6 ; sinon L9797 `BTST #2,($F,A2)` = bit 10
-            # du mot +0x0E = $400, et L9798 `BEQ LAB_453F2` = retour direct.
+            # sautent a LAB_453F6 ; sinon L9797 `BTST #2,($F,A2)` = bit 2
+            # du mot +0x0E = $0004, et L9798 `BEQ LAB_453F2` = retour direct.
             pe, pa = env["pe"], env["pa"]
             releve_b = (pe is not None
                         and pa[2] > pe[2] + 0x1F4
                         and e["command_other"] == 0)
             if not releve_b:
                 pc = "LAB_453F6"
-            elif not (e["power_mask"] & 0x400):
+            elif not (e["power_mask"] & 0x0004):
                 return t, ecarts, "4798"
             else:
                 pc = "L9810"
@@ -194,7 +199,7 @@ def reference(e):
 
         elif pc == "LAB_453F6":
             # L9858-9897
-            if not (e["power_mask"] & 0x200):
+            if not (e["power_mask"] & 0x0002):
                 return t, ecarts, "4860"
             cible, note = fiche(e["strongest_idx"], "strongest")
             if note:
@@ -282,7 +287,7 @@ def alea(rng, **sur):
     e["magto_own"] = rng.randint(0, 4095)
     e["magto_other"] = rng.randint(0, 4095)
     e["power_mask"] = rng.choice(
-        (0x0000, 0x0007, 0x0200, 0x0400, 0x0600, 0xFFFF,
+        (0x0000, 0x0007, 0x0002, 0x0004, 0x0006, 0xFFFF,
          rng.randint(0, 0xFFFF)))
     e["t1c"] = rng.choice((0, 0, 1, 2))
     e["t1e"] = rng.randint(0, 4095)
@@ -382,35 +387,35 @@ def cibles():
     c.append(dict(mag_own=1, life_own=100, t1c=0, magto_own=1234,
                   p2a_idx=5, p2a=1234, command_own=0))   # 452EE
     # --- LAB_45318 : le peep vise a >= 6000 points de vie
-    # cond fausse (pas d'aimant ennemi) et bit 9 nul -> LAB_453F6 -> 4860
+    # cond fausse (pas d'aimant ennemi) et bit 1 nul -> LAB_453F6 -> 4860
     c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0000))
     # cond fausse (vie ennemie trop haute) -> 4860
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=5600,
                   power_mask=0x0000))
-    # cond vraie (vie ennemie basse, aucune commande ennemie), bit 10 nul
+    # cond vraie (vie ennemie basse, aucune commande ennemie), bit 2 nul
     # -> retour direct (L9798), **pas** LAB_453F6
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=0,
                   command_other=0, power_mask=0x0000, t1c=1))    # 4798
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=5000,
-                  command_other=0, power_mask=0x0200, t1c=1))    # 4798
+                  command_other=0, power_mask=0x0002, t1c=1))    # 4798
     # LAB_45380
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=0,
-                  command_other=0, power_mask=0x0400, command_own=9))
+                  command_other=0, power_mask=0x0004, command_own=9))
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=0,
-                  command_other=0, power_mask=0x0400, command_own=0,
+                  command_other=0, power_mask=0x0004, command_own=0,
                   magto_own=3000, magto_other=3000))
     c.append(dict(mag_own=1, life_own=6000, mag_other=2, life_other=0,
-                  command_other=0, power_mask=0x0400, command_own=0,
+                  command_other=0, power_mask=0x0004, command_own=0,
                   magto_own=3000, magto_other=3001))
-    # LAB_453F6 (bit 9)
-    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0200,
+    # LAB_453F6 (bit 1)
+    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0002,
                   t1c=0, magto_own=3000, strongest_idx=9, strongest=2500))
-    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0200,
+    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0002,
                   t1c=0, magto_own=3000, strongest_idx=-1))
-    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0200,
+    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0002,
                   t1c=1, magto_own=3000, strongest_idx=9, strongest=2500,
                   command_own=1))
-    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0200,
+    c.append(dict(mag_own=1, life_own=6000, mag_other=0, power_mask=0x0002,
                   t1c=1, magto_own=3000, strongest_idx=9, strongest=2500,
                   command_own=0))
     # tous les cas ci-dessus passent le test de periode, sauf les deux

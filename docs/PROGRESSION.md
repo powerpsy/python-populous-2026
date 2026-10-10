@@ -4856,6 +4856,131 @@ n'est pas `$FFFF`, et merite son propre controle.
 `check_render` ne couvre que la fenetre 8x8 du rendu ; les compteurs de
 Phase 59 ne s'y voient pas.
 
+### Phase 60 - `_devil_effect` : chute, `act = 4`, `state == 1`
+
+Phase 59 concluait : « Les huit masques de `powers.py` portent encore
+l'erreur petit-boutiste ... Laisse volontairement pour une phase separee -
+la correction change le comportement de l'IA en mode Conquest ». Elle est
+faite, et la confrontation au listing L9300-9522 en a fait surgir trois
+autres ecarts structurels. `powers.py:devil_effect` est retranscrit ligne a
+ligne.
+
+#### Les dix masques
+
+Le 68000 est gros-boutiste : `BTST #n` sur un octet memorise, et `(-6,A5)`
+est le **premier** octet du mot range par L9315, `(-5,A5)` le second.
+
+.. code-block:: none
+
+    L9316   BTST #0,(-6,A5)   -> $0100    (port : $0001)
+    L9349   BTST #7,(-5,A5)   -> $0080    (port : $8000)
+    L9365   BTST #5,(-5,A5)   -> $0020    (port : $2000)
+    L9409   BTST #6,(-5,A5)   -> $0040    (port : $4000)
+    L9429   BTST #4,(-5,A5)   -> $0010    (absent)
+    L9434   BTST #3,(-5,A5)   -> $0008    (absent)
+    L9440   BTST #6,(-5,A5)   -> $0040    (absent)
+    L9505   BTST #3,(-5,A5)   -> $0008    (port : $0800)
+    L9797   BTST #2,($F,A2)   -> $0004    (check_devil : $0400)
+    L9859   BTST #1,($F,A2)   -> $0002    (check_devil : $0200)
+
+Huit corriges dans `powers.py`, deux dans la reference de `check_devil.py`
+(les cas cibles `rng pool` `0x0600` comprises). Le controle `L9510-9511`
+`MOVE.W (-6,A5),D0 / AND.W #$0050` lit le mot entier : il ne bouge pas, et
+c'est lui qui donne seule la numerotation.
+
+#### Ecart 1 : une branche qui echoue ne rend pas la main
+
+L'epilogue est `LAB_44D76` (L9310-9313 : `MOVEA.L (A7)+,A2 / UNLK A5 /
+RTS`). Les six `BRA LAB_44D76` (L9347, 9363, 9396, 9418, 9491, 9522) sont
+les **seuls** retours. Tout `BEQ`/`BLE` de test pointe vers le **label
+suivant**, pas vers l'epilogue :
+
+.. code-block:: none
+
+    L9317  BEQ  LAB_44DE4     L9326  BLE  LAB_44DE4     L9343  BLE  LAB_44DE4
+    L9350  BEQ  LAB_44E1E     L9359  BLE  LAB_44E1E
+    L9366  BEQ  LAB_44E8C     L9372  BEQ  LAB_44E8C     L9382  BLE  LAB_44E8C
+
+Le port faisait `return` des que le seuil n'etait pas franchi : les
+intentions 2 a 6 etaient inaccessibles des qu'un bit superieur etait
+active. Exemple concret, `power_mask = $0180` et `mana = 42 000`
+(`> $41999`, `< $80999`) : l'original rate le seisme, puis declenche
+`p2 = 4` (le deluge) ; l'ancien port rendait la main.
+
+**Une exception**, qui n'est pas une chute : dans l'intention 3, un aimant
+**valide** avec le mana trop bas rend la main (L9391 `BLE LAB_44E88`, et
+`LAB_44E88` est l'epilogue). Seuls les echecs du test (bit nul, magnet nul,
+vie `<= $0BB8`) retombent sur l'intention 4.
+
+#### Ecart 2 : le bloc `act = 4` existe
+
+`LAB_44ED8` (L9419-9491) etait declare inatteignable depuis la Phase 42
+(`fac19f8`) au motif que `t1a = t18 = t12 = 0`. Deux raisons, dont une
+factuelle :
+
+* **`t1a` et `t18` sont aleatoires.** `_clear_map` (L1088-1121) tire
+  `t1a = newrand() % 3`, puis `t18 = t1a + (newrand() % 5) + 1`, et remet
+  `t12 = 0` (L1124-1125). `Terrain.clear` **consommait** les deux tirages
+  par joueur - il fallait le faire pour garder la suite du RNG identique -
+  mais ne les stockait pas. Ils sont desormais dans `terrain.t1a/t18` et
+  recopies dans `sim.stats[k]` par `Game._sync_level_stats()`, appele apres
+  chaque `build_map` (init et changement de sol).
+* **meme a zero la porte est ouverte.** `t1a = t12 = t18 = 0` donne
+  `t1a <= t12 <= t18` : le bloc ne se ferme que par le bit 3 (quand
+  `t12 < t1a`) ou le bit 6 (quand `t12 > t18`), L9431-9441.
+
+Entree complete : `mana > 5 499` **et** `BTST #4` (L9429), puis le decrit
+ci-dessus, puis deux variables **differentes** - `magnet[1-tribu] - 1`
+(L9455) et `magnet[tribu] - 1` (L9462), la Phase 42 parlait de « deux
+variables qui recoivent la meme valeur ». `idx1 == -1` abandonne, `idx2 == -1`
+part tout de suite, sinon il faut `life[idx1] > life[idx2]` (L9475).
+Sortie : `t12 += 1`, `act = 4`, `p1 = block & $3F`, `p2 = ASR.W #6(block)`.
+
+`act = 4` est la **4e entree de `_do_action`** (table `LAB_4C16A`, L19012)
+: `LAB_4BC46` -> `___do_flood` (L18581-18585). Le port savait faire
+`do_flood`, il ne pouvait pas l'atteindre par l'IA.
+
+#### Ecart 3 : `CMPI.B #$01,(A0)` teste `state`
+
+L9502-9503 `MOVEA.L ($26,A2),A0 / CMPI.B #$01,(A0)` lit le **premier octet
+de la fiche de peep** pointee par `p26` - la disposition de `_peeps` est
+confirmee par `LAB_53018` (`life`, +4) et `LAB_5301C` (`block`, +8) - donc
+`peeps[p26].state == 1`, soit `ST_VILLAGER`. Le port ne testait rien a cet
+endroit et substituait `p26 != 0`, teste en realite bien avant a L9398.
+
+`p26` reste un **indice** dans le port alors que l'asm y met un pointeur :
+ecart declare, deja marque en Phase 42, il est reporte a part.
+
+#### Verification
+
+* `tools/check_devil_effect.py` (nouveau) : reference independante ecrite
+  en labels depuis le listing (`LAB_44DE4`, `LAB_44E1E`, `LAB_44E8C`,
+  `LAB_44ED8`, `LAB_44F16`, `LAB_44F2A`, `LAB_44F90`, `LAB_44FCA`,
+  `LAB_4500E`, `LAB_45026`), `_do_computer_effect` neutralise pour ne
+  juger que la structure. **620 cas** (20 cibles + 600 aleatoires),
+  **8/8** chemins de sortie, **0 ecart**. Les huit cas cibles couvrent une
+  chute (1)->(2) sur la mana et sur `good_pop`, une chute (3)->(4), les deux
+  sorties de l'aimant, `p26` nul, `life[idx1] > life[idx2]` dans les deux
+  sens, `idx1 == -1`, `t12 < t1a` et le filtre `$0050`.
+* `tools/autopilot.py` **68/68**, `tools/check_render.py` **9 vrais ecarts**
+  (residu attendu inchange), `tools/check_assets.py` OK,
+  `tools/check_funny.py` OK, `tools/check_level.py` **41/41**,
+  `tools/check_devil.py` **13/13** (621 cas, 57 ecarts assumes) -
+  `tools/check_makelevel.py` OK.
+* `tools/stress.py 2000 8` **8/8 parties robustes**, `tools/smoke_sim.py` OK.
+* `tools/coverage.py` : **163/564 routines** (inchange). `PLANIFIE` reste vide.
+
+#### Ouvert
+
+* `t12` n'est remis a zero que par l'intention 4 (L9417) et incrémente par
+  les intentions 5 et 6 (L9477, L9520) : rien d'autre ne le recale. Vérifie
+  au passage que `_clear_map` L1124-1125 (`t12 = 0`) est bien couvert par
+  `Tribe.__init__`, pas par un rechargement de niveau.
+* `check_render` ne couvre que la fenetre 8x8 du rendu ; le bloc `act = 4`
+  ne s'y voit pas.
+* Le mode **Conquest** reste le seul ou `power_mask != $FFFF` : c'est la,
+  et seulement la, que les dix masques corrigenes changent quelque chose.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

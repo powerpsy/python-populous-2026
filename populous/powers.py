@@ -23,7 +23,7 @@ from .constants import (
     BLK_ROCK3, BLK_SWAMP, BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
     COST_FLOOD, COST_KNIGHT, COST_MAGNET, COST_QUAKE, COST_RAISE, COST_SWAMP,
     COST_VOLCANO, COST_WAR, PEEP_SLOTS, SUB_FLOOD,
-    SUB_KNIGHT, SUB_WAR, TEND_X, TEND_Y,
+    ST_VILLAGER, SUB_KNIGHT, SUB_WAR, TEND_X, TEND_Y,
 )
 
 MAX_OFF = 0x38                       # _xoff/_yoff bornes a 56
@@ -377,92 +377,174 @@ class PowerEngine:
     def devil_effect(self, tribe: int) -> None:
         """``_devil_effect`` (L9300-9522) : la decision majeure de l'IA.
 
-        **Transcription**, et non interpretation. Quatre intentions, dans
-        l'ordre exact du listing ; chacune rend la main si son seuil n'est
-        pas franchi.
+        **Transcription**, et non interpretation. Six intentions, dans
+        l'ordre exact du listing.
+
+        La regle de lecture, qui change tout : **seule une branche qui
+        reussit rend la main.** L'epilogue est ``LAB_44D76`` (L9310-9313 :
+        ``MOVEA.L (A7)+,A2 / UNLK A5 / RTS``) et les six ``BRA LAB_44D76``
+        (L9347, 9363, 9396, 9418, 9491, 9522) sont les seuls retours.
+        Une branche qui **echoue** saute au label suivant : L9317, L9326 et
+        L9343 pointent tous vers ``LAB_44DE4`` - le ``BTST #7`` suivant -
+        et non vers l'epilogue. Rendre la main des que le seuil n'est pas
+        franchi fait sauter les intentions 2 a 6.
 
         ==============  ==========  =========================================
         bit du masque   action      condition
         ==============  ==========  =========================================
-        0               `p2 = 3`    mana > 80 999 **et** la tribu domine
+        8               `p2 = 3`    mana > 80 999 **et** la tribu domine
                                     `good_pop`
-        15              `p2 = 4`    mana > 41 999 (inondation)
-        13              `p2 = 5`    mana > 8 000 et la case visee par
-                                    l'aimant est habitée (`life > $0BB8`)
-        14              `act = 6`   mana > 10 500 et `p26 != 0`
-        11              `act = 3`   mana > 5 500 et `p26` designe la case 1
+        7               `p2 = 4`    mana > 41 999 (inondation)
+        5               `p2 = 5`    mana > 8 000 et l'aimant designe un
+                                    peep encore vivant (`life > $0BB8`)
+        6               `act = 6`   mana > 10 500 et `p26` designe un peep
+        4               `act = 4`   mana > 5 500, `t1a <= t12 <= t18`
+                                    sauf si le bit 3 / le bit 6 ferme la
+                                    porte : **inondation** (`_do_flood`)
+        3               `act = 3`   mana > 5 500, `peeps[p26].state == 1`
+                                    et (`t12 < t1a` ou `masque & $50 == 0`)
         ==============  ==========  =========================================
 
-        Trois blocs du listing sont morts, et c'est **mesuré** :
+        **Ces bits sont ceux du mot `+0x0E`, gros-boutiste.** `power_mask`
+        est un mot ; les six tests sont des ``BTST`` sur un **octet**
+        memorise. Sur un 68000, ``BTST #n,(W)`` porte sur l'octet de `W`
+        (bits 15-8) et ``BTST #n,(W+1)`` sur le suivant (bits 7-0) :
 
-        * le bloc ``act = 4`` (L9476-9491) est inatteignable — les deux
-          variables qui devraient differer recoivent la meme valeur ;
-        * les tests ``t12`` contre ``t1a`` et ``t18`` (L9431-9441) ne filtrent
-          rien : les deux branches convergent sur ``LAB_44FCA`` ;
-        * le seuil ``$84`` et le bit 12 non plus : ``LAB_44FCA`` est atteint
-          par les deux issues.
+        .. code-block:: none
 
-        Ils sont donc **absents** de cette transcription. Les remettre
-        reviendrait a inventer un filtre que le listing n'applique pas.
+            L9316  BTST #0,(-6,A5)   -> bit  8      $0100
+            L9349  BTST #7,(-5,A5)   -> bit  7      $0080
+            L9365  BTST #5,(-5,A5)   -> bit  5      $0020
+            L9409  BTST #6,(-5,A5)   -> bit  6      $0040
+            L9429  BTST #4,(-5,A5)   -> bit  4      $0010
+            L9434  BTST #3,(-5,A5)   -> bit  3      $0008
+            L9440  BTST #6,(-5,A5)   -> bit  6      $0040
+            L9505  BTST #3,(-5,A5)   -> bit  3      $0008
+            L9510  MOVE.W (-6,A5),D0 / AND.W #$0050 -> mot entier $0050
+
+        Le dernier est le controle : il lit le **mot entier**, il donne
+        donc seul la numerotation, et il ne peut pas etre confondu avec
+        un octet. Jusqu'a la Phase 60 les masques etaient le swap octets
+        de la valeur juste, soit l'hypothese « octet bas d'abord » ;
+        `sim.py` avait corrige ses deux sites en Phase 59, `powers.py` en
+        Phase 60.
+
+        **Deux ecarts assumes**, marques dans le corps :
+
+        * `p26` est un **pointeur de peep** dans l'asm (L3735 y range
+          `(-16,A5)`, l'adresse d'une fiche). Notre `Tribe.p26` est un
+          indice, donc ``TST.L ($26,A2)`` (L9398) est rendu par
+          ``p26 < 0``. En revanche ``CMPI.B #$01,(A0)`` (L9503) lit le
+          **premier octet de la fiche**, qui est `state` (+0) : ce test
+          etait absent, il demande un villageois ;
+        * hors table : l'asm lit sans borne, le port substitue la fiche 0.
         """
         sim = self.g.sim
         st = sim.stats[tribe]
         if st.queued:                                    # L9308-9309
             return
         pl = sim.players[tribe]
+        other = sim.players[1 - tribe]                  # L9331-9340 `good_pop[1-tribu]`
         mana = pl.mana
-        m = st.power_mask
+        m = st.power_mask                                # L9315
 
-        # (1) BTST #0,(-6,A5) -> bit 0 du masque
-        if m & 0x0001:                                   # L9316-9347
-            if not mana > self.TH_QUAKE:
-                return
-            if not pl.pop > sim.players[sim.not_player].pop:
-                return
-            st.act = 0x0E
-            st.p2 = 0x03
-            st.queued = 1
-            return
+        def fiche(idx):
+            """Fiche `idx` ; hors table l'asm lit au hasard, on prend la 0."""
+            return sim.peeps[idx] if 0 <= idx < PEEP_SLOTS else sim.peeps[0]
 
-        # (2) BTST #7,(-5,A5) -> bit 15 du masque
-        if m & 0x8000:                                   # L9349-9363
-            if not mana > self.TH_FLOOD:
-                return
-            st.act = 0x0E
-            st.p2 = 0x04
-            st.queued = 1
+        # ------------------------------------------------------------------
+        # (1) LAB_44D7C - BTST #0,(-6,A5) -> bit 8 du mot ($0100)
+        # L9317 `BEQ LAB_44DE4`, L9326 `BLE LAB_44DE4`, L9343 `BLE
+        # LAB_44DE4` : les trois echecs tombent sur le BTST #7 suivant.
+        # Seul L9347 (`BRA LAB_44D76`) rend la main.
+        # ------------------------------------------------------------------
+        if (m & 0x0100                                   # L9316
+                and mana > self.TH_QUAKE                 # L9326
+                and pl.pop > other.pop):                 # L9343
+            st.act = 0x0E                                # L9344
+            st.p2 = 0x03                                 # L9345
+            st.queued = 1                                # L9346
             return
 
-        # (3) BTST #5,(-5,A5) -> bit 13 du masque : l'aimant
-        if m & 0x2000:                                   # L9365-9396
-            j = pl.magnet - 1
-            if pl.magnet == 0 or not (0 <= j < PEEP_SLOTS):
-                return
-            if sim.peeps[j].life <= 0x0BB8:              # CMPI.W #$0BB8
-                return
-            if mana > self.TH_MAGNET:                   # L9387-9394
-                st.act = 0x0E
-                st.p2 = 0x05
-                st.queued = 1
+        # (2) LAB_44DE4 - BTST #7,(-5,A5) -> bit 7 ($0080)
+        # L9350 `BEQ LAB_44E1E`, L9359 `BLE LAB_44E1E`.
+        if (m & 0x0080                                   # L9349
+                and mana > self.TH_FLOOD):               # L9359
+            st.act = 0x0E                                # L9360
+            st.p2 = 0x04                                 # L9361
+            st.queued = 1                                # L9362
             return
 
-        # (4) LAB_44E8C : les deux effets informatiques
-        if st.p26 < 0:                                  # L9398-9399
+        # (3) LAB_44E1E - BTST #5,(-5,A5) -> bit 5 ($0020) : l'aimant
+        # L9366 `BEQ LAB_44E8C` (bit nul), L9372 `BEQ LAB_44E8C`
+        # (magnet nul) et L9382 `BLE LAB_44E8C` (vie trop faible) : echec
+        # = branche suivante. Un aimant valide avec le mana trop bas, lui,
+        # **retourne** : L9391 `BLE LAB_44E88`, et LAB_44E88 est l'epilogue.
+        if m & 0x0020:                                   # L9365
+            # L9371-9372 `TST / BEQ` = `magnet != 0`, puis L9377-9382
+            # `peeps[magnet-1].life > $0BB8`.
+            if (pl.magnet != 0
+                    and fiche(pl.magnet - 1).life > 0x0BB8):
+                if mana > self.TH_MAGNET:                # L9391
+                    st.act = 0x0E                        # L9392
+                    st.p2 = 0x05                         # L9393
+                    st.queued = 1                        # L9394
+                return                                   # LAB_44E88
+
+        # (4) LAB_44E8C - BTST #6,(-5,A5) -> bit 6 ($0040)
+        # **Ecart** : `TST.L ($26,A2)` teste le pointeur, pas un indice.
+        if st.p26 < 0:                                   # L9398-9399
+            return                                       # -> LAB_45026
+        if mana > self.TH_VPC and (m & 0x0040):          # L9407 / L9409
+            st.act = 0x06                                # L9411
+            self.do_computer_effect(tribe, st)           # L9414
+            st.queued = 1                                # L9416
+            st.t12 = 0                                   # L9417
             return
-        if mana > self.TH_VPC and (m & 0x4000):          # L9404-9418
-            st.act = 0x06
-            self.do_computer_effect(tribe, st)
-            st.queued = 1
-            st.t12 = 0
-            return
-        # LAB_44FCA
-        if mana > self.TH_ATTACK and (m & 0x0800):        # L9497-9506
-            # L9507-9512 : `t12 >= t1a` ET `(masque & $50) != 0` -> on s'arrete
-            if st.t12 >= st.t1a and (m & 0x0050):
+
+        # (5) LAB_44ED8 - le bloc `act = 4` (L9419-9491)
+        # L9428 `BLE LAB_44FCA` et L9430 `BEQ LAB_44FCA` ne sont pas des
+        # retours : ils rejoignent la sixieme intention.
+        if mana > self.TH_ATTACK and (m & 0x0010):       # L9428 / L9429
+            # L9431-9441 : `t1a <= t12 <= t18`, ferme par le bit 3 quand
+            # `t12 < t1a` et par le bit 6 quand `t12 > t18`.
+            ouvert = True
+            if st.t12 < st.t1a and (m & 0x0008):         # L9433-9435
+                ouvert = False
+            elif st.t12 > st.t18 and (m & 0x0040):       # L9439-9441
+                ouvert = False
+            if ouvert:                                   # LAB_44F2A
+                # L9443-9455 `magnet[1-tribu] - 1`, L9456-9462 `magnet[tribu] - 1`
+                i1 = sim.players[1 - tribe].magnet - 1
+                i2 = pl.magnet - 1
+                # L9463-9464 : pas d'aimant ennemi -> LAB_44FCA.
+                # L9465-9466 : pas d'aimant propre -> LAB_44F90, act = 4
+                # tout de suite. L9467-9475 : sinon il faut que l'aimant
+                # ennemi soit plus en vie que le notre.
+                if i1 != -1:
+                    if i2 == -1 or fiche(i1).life > fiche(i2).life:
+                        st.t12 += 1                      # L9477
+                        st.act = 0x04                    # L9478
+                        blk = fiche(i1).block            # L9479-9490
+                        st.p1 = blk & 0x3F
+                        st.p2 = m68k.s16(blk) >> 6
+                        return
+
+        # LAB_44FCA - la derniere intention
+        # L9501 `BLE LAB_45026`, L9503-9504 `CMPI.B #$01,(A0) / BNE` -
+        # le premier octet de la fiche designee par `p26` vaut 1, soit
+        # `state == ST_VILLAGER` - et L9506 `BEQ LAB_45026`.
+        if (mana > self.TH_ATTACK                        # L9501
+                and 0 <= st.p26 < PEEP_SLOTS
+                and sim.peeps[st.p26].state == ST_VILLAGER   # L9503
+                and (m & 0x0008)):                       # L9505
+            # L9507-9512 : `t12 < t1a` passe ; sinon `masque & $50 != 0`
+            # mene a LAB_45026 sans rien faire.
+            if not (st.t12 < st.t1a) and (m & 0x0050):
                 return
             st.act = 0x03                                # L9514
-            self.do_computer_effect(tribe, st)
-            st.queued = 1
+            self.do_computer_effect(tribe, st)           # L9517
+            st.queued = 1                                # L9519
             st.t12 += 1                                  # L9520
 
     def do_computer_effect(self, tribe: int, st) -> None:
@@ -647,8 +729,8 @@ class PowerEngine:
 
         Appelle quand le peep vise a au moins 6000 points de vie. Deux
         masques y sont testes sur ``power_mask`` (champ ``+0x0E``) :
-        ``BTST #2,($F,A2)`` = bit 10 = ``$400``, ``BTST #1,($F,A2)`` =
-        bit 9 = ``$200``.
+        ``BTST #2,($F,A2)`` = bit 2 du mot = ``$0004``, et
+        ``BTST #1,($F,A2)`` = ``$0002``.
         """
         sim = self.g.sim
 
@@ -661,10 +743,10 @@ class PowerEngine:
                   and po.command == 0)                    # L9785-9796
         # Les trois tests ci-dessus sautent a LAB_453F6 (L9778 / L9784 /
         # L9796) : LAB_45318 n'est ouvert que par `releve`. L9797-9798
-        # `BTST #2,($F,A2)` = bit 10 du mot +0x0E = $400, puis `BEQ
+        # `BTST #2,($F,A2)` = bit 2 du mot +0x0E = $0004, puis `BEQ
         # LAB_453F2` - un retour direct, **pas** LAB_453F6.
         if releve:
-            if not (st.power_mask & 0x400):               # L9797-9798
+            if not (st.power_mask & 0x0004):               # L9797-9798
                 return                                    # LAB_453F2 (L9856)
             if pl.command != 0:                           # L9799-9804
                 st.act = 0x0E                             # L9805
@@ -682,8 +764,8 @@ class PowerEngine:
             return                                        # LAB_453F2 (L9856)
 
         # ---- LAB_453F6 (L9858-9897)
-        # L9859-9860 : `BTST #1,($F,A2)` = bit 9 du mot +0x0E = $200.
-        if not (st.power_mask & 0x200):
+        # L9859-9860 : `BTST #1,($F,A2)` = bit 1 du mot +0x0E = $0002.
+        if not (st.power_mask & 0x0002):
             return                                        # LAB_45480 (L9896)
         # ECART : `strongest` nul -> l'asm lit le bloc a l'adresse 8.
         cible = (sim.peeps[st.strongest].block
