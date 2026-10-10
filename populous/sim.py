@@ -464,36 +464,73 @@ class Game:
 
     # ------------------------------------------------------ _place_people
     def place_people(self, tribe: int, block: int, magnet: int) -> int | None:
-        """Crée un peep (asm $43164). Renvoie son index, ou ``None``."""
-        if self.no_peeps >= MAX_PEEPS:
+        """``_place_people`` (L6982-7087, asm $43164) : cree un peep.
+
+        Renvoie **son index**, ou ``None`` quand la table est pleine.
+        *Ecart de contrat* : l'asm rend le ``D0`` de l'``_set_frame`` de fin
+        (L7086) - un booleen 0/1 - et non l'index ; le port garde l'index,
+        dont se servent ``_settle_peoples`` et ``tools/check_makelevel.py``.
+
+        Les ecritures suivent l'ordre du listing :
+
+        =========  ========================================================
+        L6984-88   garde ``_no_peeps < 0xD0`` (``MAX_PEEPS`` = 208)
+        L6990-13   si ``magnet`` et ``_magnet[tribu] != 0`` : l'ancien
+                   aimante est tue (``_zero_population``) et son slot reutilise
+        L7019-22   ``w6 = 0``
+        L7023-26   ``life = $002D`` (45)
+        L7027-33   ``block``
+        L7034-41   ``_map_who[block] = j + 1``
+        L7042-45   ``tribe``
+        L7046-49   ``state = 2`` - ``ST_EXPLORER``
+        L7050-53   ``frame = $00FF``
+        L7054-57   ``offspring = 1``
+        L7058-61   ``prev_block = 0``
+        L7062-65   ``weapons = 1``
+        L7066-69   ``target`` : ``CLR.L`` ecrit **0**, le port ecrit **-1**
+                   (indice de peep vs pointeur) - ecart de convention deja
+                   declare
+        L7070-78   si ``magnet`` : ``_magnet[tribu] = j + 1``
+        L7080-86   ``_set_frame(peep)``
+        =========  ========================================================
+
+        ``spawn_block`` et ``make_level_res`` ne sont **pas** ecrits par
+        ``_place_people`` dans le listing ; le port les reinitialise quand
+        meme (un slot recycle garderait des valeurs obsoletes). Ecart
+        declare, compte a part par ``tools/check_place.py``.
+        """
+        if self.no_peeps >= MAX_PEEPS:                   # L6984-6988
             return None
-        if magnet:
-            idx = self.players[tribe].magnet
+        if magnet:                                       # L6990 `TST.W ($E,A5)`
+            idx = self.players[tribe].magnet             # L6998-7003
             if idx != 0:
-                j = idx - 1                             # l'ancien aimanté est tué
-                self.zero_population(j)
+                j = idx - 1                              # l'ancien aimante est tue
+                self.zero_population(j)                  # L7011
             else:
-                j = None
+                j = None                                 # LAB_431BE
         else:
             j = None
         if j is None:
-            j = self.no_peeps
+            j = self.no_peeps                            # LAB_431BE
             self.no_peeps += 1
 
         p = self.peeps[j]
-        p.tribe = tribe
-        p.w6 = 0
-        p.life = 0x2D                                    # 45
-        p.block = block
-        p.prev_block = 0
-        p.state = ST_EXPLORER                           # 0x02
-        p.offspring = 1                            # L7057 (`#$01`, fiche +0x02)
-        p.weapons = 0
-        p.target = -1
-        p.frame = 0
-        p.spawn_block = block
-        p.make_level_res = 0
-        self.map.who[block] = j + 1
+        p.w6 = 0                                         # L7019-7022
+        p.life = 0x2D                                    # L7023-7026
+        p.block = block                                  # L7027-7033
+        self.map.who[block] = j + 1                      # L7034-7041
+        p.tribe = tribe                                  # L7042-7045
+        p.state = ST_EXPLORER                            # L7046-7049
+        p.frame = 0x00FF                                 # L7050-7053
+        p.offspring = 1                                  # L7054-7057
+        p.prev_block = 0                                 # L7058-7061
+        p.weapons = 1                                    # L7062-7065
+        p.target = -1                                    # L7066-7069 ($0 en asm)
+        p.spawn_block = block                            # hors listing (declare)
+        p.make_level_res = 0                             # hors listing (declare)
+        if magnet:                                       # L7070-7078
+            self.players[tribe].magnet = j + 1
+        self.set_frame(p)                                # L7080-7086
         return j
 
     # ------------------------------------------------------ _set_magnet_to

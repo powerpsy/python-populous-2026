@@ -4981,6 +4981,82 @@ ecart declare, deja marque en Phase 42, il est reporte a part.
 * Le mode **Conquest** reste le seul ou `power_mask != $FFFF` : c'est la,
   et seulement la, que les dix masques corrigenes changent quelque chose.
 
+### Phase 61 - `_place_people` retranscrit, codes 7..10 branches
+
+`_place_people` (L6982-7087, `$43164`) est la routine qui cree un peep. Le
+port l'avait implementee en Phase 55, mais avec trois ecarts de valeurs et
+deux omissions. Les lignes du listing sont maintenant transcrites dans
+l'ordre du listing.
+
+**Ce qui change, et pourquoi**
+
+* `frame = $00FF` (L7053, `MOVE.W #$00ff,(LAB_53020,...)`) au lieu de `0`.
+  C'est neutre **a condition** de transcrire l'appel `_set_frame` de fin :
+  la branche `ST_EXPLORER` (L5732-5743) fait `frame = old + 1` puis
+  `if old >= 7: frame = 0`, donc `$00FF -> 0`. Le port ecrivait `0` et
+  sautait l'appel - meme octet, mais pour la mauvaise raison : sans l'appel,
+  `$00FF` laisserait `age = 255 - $20 = 223`, soit l'age 10
+  (`FRAME_AGE = $20`) au lieu de 0.
+* `weapons = 1` (L7065, `MOVE.B #$01,(3,A0,D0.L)`) au lieu de `0`.
+* L'ecriture `_magnet[tribu] = j + 1` (L7070-7078) manquait. Elle n'est
+  atteinte que si l'argument `magnet` est non nul : avec `_magnet[tribu]`
+  nul elle cree l'aimant, avec `_magnet[tribu] != 0` elle reaffirme la
+  valeur apres le `_zero_population`.
+* Les ecritures sont remises dans l'ordre du listing : `w6` (L7019),
+  `life` (L7023), `block` (L7027), `_map_who[block] = j + 1` (L7034),
+  `tribe` (L7042), `state` (L7046), `frame` (L7050), `offspring` (L7054),
+  `prev_block` (L7058), `weapons` (L7062), `target` (L7066).
+
+**Trois ecarts declares**, comptes a part par le controle : `target`
+(`CLR.L` ecrit `0`, le port ecrit `-1` - indice de peep contre pointeur,
+convention de la Phase 53), `spawn_block` / `make_level_res` (le port les
+reinitialise alors que L6982-7087 ne les touche pas - un slot recycle
+garderait des valeurs obsoletes), et la valeur de retour : l'asm rend le
+`D0` de `_set_frame` (0/1), le port rend l'index du peep, dont dependaient
+deja `_settle_peoples` et `tools/check_makelevel.py`.
+
+**Nouveau : les codes 7..10 de `_get_message` etaient morts.** `game.py`
+arme `st.act = 7` (icone `(0,0)`) et `st.act = 8` (icone `(1,1)`) depuis
+la Phase 44, mais `PowerEngine.dispatch` n'avait aucune branche pour 7..10
+- seulement un commentaire faux (« gere dans game.py », qui ne fait que
+*caler* l'action). La table `LAB_4B81A` de `_get_message` (L18210-18213)
+leur consacre quatre entrees :
+
+===========  ==========================  ==============================
+index        etiquette                   appel
+===========  ==========================  ==============================
+7            `LAB_4B5EA` (L18017)        `_place_people(0, x, y, 0)`
+8            `LAB_4B600` (L18025)        `_place_people(1, x, y, 0)`
+9            `LAB_4B618` (L18033)        `_place_people(0, x, y, 1)`
+10           `LAB_4B630` (L18041)        `_place_people(1, x, y, 1)`
+===========  ==========================  ==============================
+
+La tribu visee vient du **code**, pas du `D4` de la boucle de
+`_get_message` (arg1 est un literal 0/1). `x`/`y` sont `stats[D4].p1/p2`
+(L17960-17971). Chaque bloc se termine par `BRA LAB_4B84A` : ni test de
+succes, ni paiement, donc `ok = True` dans le port.
+
+**Controle** : `tools/check_place.py`, 501 cas de `_place_people`
+(24 cibles + 492 aleatoires) et 16 cas de `dispatch`. Il espionne
+`set_frame` **et** `zero_population` : comparer le resultat final ne
+suffirait pas, `frame = 0` sans l'appel donne exactement le meme octet.
+
+**Trouve en cours de route, ouvert en Phase 62** : l'armement des icones
+de `_zoom_map` (L1690-2100). `_get_message` lit l'action dans `_stats+0`
+(L17955-17958), or sur les 13 sites d'arment du listing seuls deux ecrivent
+directement `+0` (volcano `+0 = 6`, L1972 ; quake `+0 = 3`, L1989) ; les
+onze autres ecrivent `+0 = $0E` (ACT_ACTION) et le sous-code dans `+2`
+(`p2`), ce qui conduit a `_do_action` (table L19007-19023) et non a la
+table `LAB_4B81A`. L'icone `(0,0)` est donc `act = 14, p2 = 7` ->
+`LAB_4BC94` (menu Options, 122 lignes), pas « poser un peuple ». Le port
+n'en porte que 6, et les appariements sont au moins en partie faux.
+
+Verifications : `autopilot 59 0 3` 68/68 ; `check_render` 26 residu attendu
++ 9 vrai ecart ; `check_assets` OK ; `check_funny` OK ; `check_level` 41/41
+; `check_devil` 621 cas ; `check_devil_effect` 620 cas, 8/8 chemins ;
+`check_makelevel` OK ; `check_place` 501 + 16 cas, 3 ecarts declares ;
+`smoke_sim` OK ; `stress 2000 8` 8/8 ; `coverage` 163/564, `PLANIFIE` vide.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -4993,11 +5069,16 @@ ecart declare, deja marque en Phase 42, il est reporte a part.
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
-* **Trois ecarts de `_place_people`** (Phase 56) : `weapons = 1` (L7065) et
-  `frame = 0x00FF` (L7053) au lieu des valeurs du port, et `target = 0`
-  (L7069) au lieu de `-1` (convention du port, documentee). Les deux premiers
-  sont des ecarts reels : a corriger avec leurs propres controles, la portee
-  en ayant ete tranchee en Phase 56.
+* **L'armement des icones de `_zoom_map`** (L1690-2100, ouvert en Phase 61) :
+  le port ne porte que 6 des 13 sites d'arment, et les appariements sont au
+  moins en partie faux. `_get_message` lit l'action dans `_stats+0`
+  (L17955-17958), or onze arments sur treze ecrivent `+0 = $0E` et le
+  sous-code dans `+2` (`p2`) - ce qui conduit a `_do_action`, pas a la table
+  `LAB_4B81A`. L'icone `(0,0)` est `act = 14, p2 = 7` -> `LAB_4BC94`
+  (Options), pas « poser un peuple ». Restent egalement declares, et comptes
+  a part par `tools/check_place.py` : `target` (L7069, `CLR.L` = 0 contre
+  `-1` dans le port), `spawn_block` / `make_level_res` (hors listing), et la
+  valeur de retour de `_place_people` (D0 de `_set_frame` contre index).
 * **Cadence de la partie** : toute la chaine de croissance est verifiee
   exacte (Phases 16-18). L'ecart restant tient probablement au nombre de
   tours par seconde — l'asm ne fixe aucun rythme et tourne librement. Decide

@@ -18,9 +18,10 @@ import math
 
 from . import m68k  # noqa: E402
 from .constants import (
-    ACT_ACTION, ACT_LOWER, ACT_MAGNET, ACT_NOP, ACT_QUAKE, ACT_RAISE,
-    ACT_SWAMP, ACT_TREE, ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2,
-    BLK_ROCK3, BLK_SWAMP, BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
+    ACT_ACTION, ACT_LOWER, ACT_MAGNET, ACT_NOP, ACT_PLACE0, ACT_PLACE0_M,
+    ACT_PLACE1, ACT_PLACE1_M, ACT_QUAKE, ACT_RAISE, ACT_SWAMP, ACT_TREE,
+    ACT_VOLCANO, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
+    BLK_TRIBE0, BLK_TRIBE1, BLK_WATER, BK2_TREE,
     COST_FLOOD, COST_KNIGHT, COST_MAGNET, COST_QUAKE, COST_RAISE, COST_SWAMP,
     COST_VOLCANO, COST_WAR, PEEP_SLOTS, SUB_FLOOD,
     ST_VILLAGER, SUB_KNIGHT, SUB_WAR, TEND_X, TEND_Y,
@@ -314,7 +315,17 @@ class PowerEngine:
             # points (voir PROGRESSION).
             self.do_action(tribe, x, y)
             ok = True
-        # 7..10 : placer un peuple (place_people) — gere dans game.py
+        elif act in (ACT_PLACE0, ACT_PLACE1, ACT_PLACE0_M, ACT_PLACE1_M):
+            # L18017-18046, entrees LAB_4B828..LAB_4B82E de la table
+            # LAB_4B81A : la tribu visee vient du **code** (7/9 -> 0,
+            # 8/10 -> 1), le bit magnet de 9/10, et (x, y) sont
+            # `stats[D4].p1/p2` (L17960-17971) - donc `(x, y)` ici.
+            # Les quatre blocs font exactement un `_place_people` puis
+            # `BRA LAB_4B84A` : ni test de succes, ni paiement.
+            cible = 1 if act in (ACT_PLACE1, ACT_PLACE1_M) else 0
+            mag = 1 if act in (ACT_PLACE0_M, ACT_PLACE1_M) else 0
+            sim.place_people(cible, (y << 6) | x, mag)
+            ok = True
 
         # Libere l'action dans tous les cas : sinon une instruction que le
         # joueur n'a pas les moyens de payer resterait en attente indefiniment
