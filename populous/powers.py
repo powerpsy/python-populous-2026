@@ -818,13 +818,15 @@ class PowerEngine:
         ==========  =========================  ==============================
         0 et 14      defaut (renvoie 0)         fait
         1           `LAB_4B9EE` (23 l.)        **fait** — ecrit ``command``
-        2           `LAB_4BA34` (172 l.)       non lu (messages serie)
+        2           `LAB_4BA34` (172 l.)       non lu - liaison serie
+                                              (`_write_serial`/`_read_serial`)
         3           `LAB_4BC38` -> `_do_war`   **fait** — appelle `do_war`
         4           `LAB_4BC46` -> `_do_flood` **fait** — appelle `do_flood`
         5           `LAB_4BC54` -> `_do_knight` **fait** — appelle `do_knight`
         6           `LAB_4BC62` (16 l.)        **fait** — le bouton pause
-        7           `LAB_4BC94` (122 l.)       non lu
-        8           `LAB_4BE12` (214 l.)       non lu
+        7           `LAB_4BC94` (122 l.)       non lu - `_options` L13617
+        8           `LAB_4BE12` (214 l.)       non lu - `_game_options`
+                                              L12801
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
         11          `_rotate_all_map` (99 l.)   **fait** — pli max + arbres
@@ -944,10 +946,15 @@ class PowerEngine:
         # (0, 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15) sont transcrits et
         # sont retournes plus haut.
         non_transcrit = {
-            2: "LAB_4BA34", 7: "LAB_4BC94", 8: "LAB_4BE12",
+            # code -> (handler, ligne du handler, routine qu'il appelle)
+            2: ("LAB_4BA34", 18400, "_write_serial / _read_serial (liaison serie)"),
+            7: ("LAB_4BC94", 18607, "_options (L13617) : dialogue des options"),
+            8: ("LAB_4BE12", 18729, "_game_options (L12801) : mise en place"),
         }
+        handler, ligne, manque = non_transcrit[code]
         raise NotImplementedError(
-            "_do_action code %d : handler %s non transcrit" % (code, non_transcrit[code]))
+            "_do_action code %d : handler %s (L%d) non transcrit - il lui "
+            "faudrait %s" % (code, handler, ligne, manque))
 
     def ai_choose(self, tribe: int) -> None:
         """``_set_devil_magnet`` puis ``_devil_effect`` (L3252-3268).

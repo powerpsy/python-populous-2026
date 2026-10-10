@@ -5266,9 +5266,8 @@ attendu + 9 vrai ecart) ; `check_assets` OK ; `check_funny` OK ;
 (+4 par citation : `_set_mode_icons`, `_get_message`, `_do_action`,
 `bitfield_51645`).
 
-Ouvert par la phase : les codes 2, 7 et 8 de `_do_action`, que les
-entrees (0,0), (1,1) et (2,2) de la barre d'icones arment
-reellement. Les colonnes 7 et 8 de la palette tombent en Phase 64.
+Ouvert par la phase : rien. Colonnes 7 et 8 consommees en Phase 64,
+codes 2/7/8 nommes et gardes en Phase 65.
 
 ### Phase 64 - Colonnes 7 et 8 de la palette : deplacer la vue, pas lancer un sort
 
@@ -5346,6 +5345,53 @@ Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ;
 `check_devil_effect` 620, 8/8 chemins ; `check_makelevel` OK ;
 `smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ; `coverage` **172/564**.
 
+### Phase 65 - Les trois codes restants : nommes, dates, et tenus a l'ecart
+
+Les entrees `(0,0)`, `(1,1)` et `(2,2)` de la barre d'icones arment
+reellement les codes 7, 8 et 2 de `_do_action` (etabli en Phase 63). Les
+trois levent `NotImplementedError`. Rien de nouveau ici, mais trois choses
+ont ete ajoutees, parce qu'un code non transcrit qui passe pour un no-op est
+une faute, et qu'un code qui leve sans dire ou aller est un mur.
+
+**Le message porte maintenant la ligne du handler et la routine qu'il
+manque** :
+
+======  ===========  ======  ===========================================
+code    handler      ligne   il lui faudrait
+======  ===========  ======  ===========================================
+2       `LAB_4BA34`  18400   `_write_serial` / `_read_serial` (liaison serie)
+7       `LAB_4BC94`  18607   `_options` (L13617) : dialogue des options
+8       `LAB_4BE12`  18729   `_game_options` (L12801) : mise en place
+======  ===========  ======  ===========================================
+
+Ce que disent les handlers, lu une fois pour de bon :
+
+* **code 7** (`LAB_4BC94`) : garde d'abord que l'autre tribu n'ait pas
+  deja sa propre fiche en `act = $0E` (L18617-18628), puis `_options(player)`
+  si `p1 != 0`, `_options(_not_player)` sinon (L18634-18645), et bascule les
+  drapeaux serie. Le chemin solo est donc le `_options`.
+* **code 8** (`LAB_4BE12`) : uniquement si `tribe == _player`, remet
+  `_new_map = 0` puis appelle `_game_options()` - 800 lignes de dialogue -
+  avant de recopier onze drapeaux dans le message serie (L18738-18748).
+* **code 2** (`LAB_4BA34`) : la liaison serie, bout a bout.
+
+**Un controle les tient** : `tools/check_icons.py` section I arme chacun des
+trois codes par la fiche et verifie que `do_queued` **leve** - pas qu'il rend
+la main. Ajouter un `return` a la place du `raise` ferait echouer la suite,
+ce qui est exactement le garde-fou voulu.
+
+Les deux dialogues restent le gros morceau : `_options` et `_game_options`
+totalisent pres de 1300 lignes de listing, et le port n'a pour l'instant que
+`_requester` et `_text` comme briques de boite de dialogue.
+
+#### Verification
+
+`tools/check_icons.py` passe de 43 a **46 controles**. Suite complete au
+vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ; `check_assets` OK ;
+`check_funny` OK ; `check_level` 41/41 ; `check_place` 501 + 16 cas ;
+`check_devil` 621 ; `check_devil_effect` 620, 8/8 chemins ;
+`check_makelevel` OK ; `smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ;
+`coverage` **177/564** (+4).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -5358,6 +5404,12 @@ Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ;
 * **Samples d'origine** : la logique audio est complete et fidele (Phase 10),
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
+* **Codes 2, 7 et 8 de `_do_action`** : les entrees `(0,0)`,
+  `(1,1)` et `(2,2)` de la barre d'icones les arment reellement
+  (Phase 63) et ils levent (Phase 65). Il manque les deux dialogues :
+  `_options` (L13617, code 7) et `_game_options` (L12801, code 8) - pres
+  de 1300 lignes de listing - plus la liaison serie du code 2
+  (`LAB_4BA34`, L18400).
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit

@@ -435,6 +435,26 @@ def main() -> int:
           == [(7, 0, 0x12C0), (7, 1, 0x12C0), (8, 0, 0x12C0)],
           "toggles=%s" % sorted(g.icon_toggles))
 
+    print("\nI. les codes non transcrits levent (ils ne sont pas des no-ops)")
+    # (0,0), (1,1) et (2,2) de la barre d'icones arment reellement les codes
+    # 7, 8 et 2 (Phase 63) : le defaut de `do_action` doit lever, pas rendre
+    # la main en silence.
+    for col, row, code in ((0, 0, 7), (1, 1, 8), (2, 2, 2)):
+        st.act = 14
+        st.p2 = code
+        st.p1 = 1
+        leve = False
+        detail = ""
+        try:
+            g.powers.do_queued(g.sim.player)
+        except NotImplementedError as exc:
+            leve = True
+            detail = str(exc)
+        except Exception as exc:                    # pragma: no cover
+            detail = "%s: %s" % ( type(exc).__name__, exc)
+        check("icone (%d,%d) -> code %d : NotImplementedError"
+              % (col, row, code), leve, detail)
+
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0
 

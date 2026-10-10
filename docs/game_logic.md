@@ -877,6 +877,17 @@ def do_action(tribe, p1, p2):                       # L18376  $4B9E0
 
 Le retour non nul de `_do_action` déclenche `_clear_send` (ligne 18191‑18193).
 
+Les trois codes qui ne sont pas transcrits, avec ce qu'il leur manque :
+
+| code | handler | ligne | routine requise |
+|---|---|---|---|
+| 2 | `LAB_4BA34` | 18400 | `_write_serial` / `_read_serial` |
+| 7 | `LAB_4BC94` | 18607 | `_options` (L13617) - dialogue des options |
+| 8 | `LAB_4BE12` | 18729 | `_game_options` (L12801) - mise en place |
+
+Ils sont armes par les entrees `(0,0)`, `(1,1)` et `(2,2)` de la barre
+d'icones (L1729, L1795, L1820) et levent `NotImplementedError`.
+
 ## 4.5 Les effets
 
 ### `_do_magnet` (ligne 6769, `$42F34`) — coût 200
