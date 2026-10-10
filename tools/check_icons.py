@@ -455,6 +455,55 @@ def main() -> int:
         check("icone (%d,%d) -> code %d : NotImplementedError"
               % (col, row, code), leve, detail)
 
+    print("\nJ. `_mode` a l'init et survie aux codes non transcrits")
+
+    # ---- J1. `_mode = 2` (L1148, init some variables) -------------------
+    from populous.game import Game as Nouvelle
+    g2 = Nouvelle(seed, ground, zoom)
+    check("L1148 : `_mode = 2` a l'ouverture (le port valait 1)",
+          g2.sim.mode == 2, "_mode=%d" % g2.sim.mode)
+    # L963-967 : `_sculpt` ne tourne que si `_mode & 0x0E` ; en mode 2 le
+    # test passe, donc la souris designe une case des que `_ok_to_build`.
+    g2.sim.ok_to_build = 1
+    g2.mouse = (192, 120)
+    avant = (g2.sim.cur_x, g2.sim.cur_y)
+    g2.poll_mouse()
+    apres = (g2.sim.cur_x, g2.sim.cur_y)
+    check("L963-967 : mode 2 -> `_sculpt` tourne, une case est designee",
+          (g2.sim.cur_x, g2.sim.cur_y) != (0, 0),
+          "cur=(%d,%d) (etait %s)" % (g2.sim.cur_x, g2.sim.cur_y,
+                                      str(avant)))
+    del g2
+
+    # ---- J2. cliquer les trois icones non transcrites ne tue pas la ----
+    #          partie : `_safe_dispatch` signale et vide la fiche.
+    for col, row in ((0, 0), (1, 1), (2, 2)):
+        for mx in range(160, g.screen.get_width()):
+            for my in range(0, g.screen.get_height()):
+                u, v = g._uv(mx, my)
+                if (u > 0x112 and (u - 0x110) // 16 == col
+                        and (v - 0x20) // 16 == row):
+                    g.mouse = (mx, my)
+                    break
+            else:
+                continue
+            break
+        g.poll_mouse()
+        g._raw_left = True
+        g.poll_mouse()
+        g._raw_left = False
+        g.poll_mouse()
+        survivant = True
+        detail = ""
+        try:
+            for _ in range(5):
+                g.image()
+        except NotImplementedError as exc:
+            survivant = False
+            detail = str(exc)
+        check("barre (%d,%d) + 5 tours : la partie survit au code non transcrit"
+              % (col, row), survivant, detail)
+
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0
 

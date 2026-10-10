@@ -5392,6 +5392,72 @@ vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ; `check_assets` OK ;
 `check_devil` 621 ; `check_devil_effect` 620, 8/8 chemins ;
 `check_makelevel` OK ; `smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ;
 `coverage` **177/564** (+4).
+### Phase 66 - Deux defauts trouves en jouant, pas en relisant
+
+Cette phase est nee d'une partie reelle, pas d'une relecture de listing. Le
+premier jet du test ci-dessous tombait sur deux murs.
+
+#### 1. Cliquer `(0,0)`, `(1,1)` ou `(2,2)` de la barre d'icones tuait la partie
+
+Ces trois entrees arment reellement les codes 7, 8 et 2 de `_do_action`
+(Phase 63). Dans l'original, `_get_message` - appele **a chaque image**
+(L1011) - les dispatche aussitot et la boite de dialogue s'ouvre. Le port
+n'a pas les ~1300 lignes de `_options` (L13617) et `_game_options` (L12801) :
+le clic armait `act = 14` et un code dans `p2`, rien ne partait, et
+`_run_commands` le dispatchait **au tour suivant**, au milieu de `tick` -
+`NotImplementedError` en pleine boucle, partie perdue.
+
+Deux corrections :
+
+* `_do_actions` et `_run_commands` passent desormais par
+  `Game._safe_dispatch(tribu)`, qui signale l'erreur sur la sortie
+  d'erreur et vide la fiche comme `_clear_send` (L18234-18254). L'erreur
+  reste **visible**, elle ne tue plus la partie ;
+* un controle (section J) clique chacune des trois icones puis fait cinq
+  tours : la partie doit survivre.
+
+#### 2. `_mode = 1` a l'ouverture, la ou le listing met 2
+
+L1148, dans le bloc d'initialisation (`; init some variables`) :
+``MOVE.W #$0002,(_mode,A4)``. Le port valait 1. Trois consequences, toutes
+verifiables :
+
+* **L963-967** : la boucle d'image appelle ``_sculpt`` si
+  ``_mode & 0x0E != 0``, et `_interogate` sinon. Avec `mode = 1`, le test
+  est nul - ``_sculpt`` ne tournait **jamais**, donc la souris ne
+  designait aucune case de la carte ;
+* **L2743** : ``_interogate`` ne fait rien hors du mode 1 - donc 1 est bien
+  le mode survol, pas le mode sculptage ;
+* **L7309** : la garde de ``_sculpt`` exige ``mode != 2`` **ou**
+  ``_ok_to_build`` **ou** ``_paint_map``. Avec 2 - la valeur du listing - le
+  sculptage reste conditionne a un peep occupe (`state & $F8`, L15968-15981).
+  C'est voulu par l'original, pas un relachement du port.
+
+Corrige : ``self.mode = 2``. La suite complete reste au vert, ce qui veut
+dire qu'aucun controle ne dependait de cet ecart.
+
+#### Ce que le test montre, et ce qu'il ne montre pas
+
+Avec les deux corrections, une partie de 300 tours tourne seule (2 vivants
+au depart, 4 a l'arrivee, villes des deux cotes, mana des deux tribus), la
+mini-carte et le pave deplacent la vue, la palette arme le relief sans
+depenser, la barre d'icones bascule musique et effets, et les trois codes
+non transcrits sont signales sans arreter le jeu.
+
+**En revanche le clic sur la carte reste inoperant au depart**, et c'est
+fidele : ``_ok_to_build`` est cumulatif (jamais remis a zero apres
+l'init L613) et n'est pose que par un peep dont ``state & $F8`` est non nul
+- bataille, noyade, mort. Il suffit d'un conflit dans la partie pour
+debloquer le sculptage definitivement.
+
+#### Verification
+
+`tools/check_icons.py` passe de 46 a **51 controles** (section J). Suite
+complete au vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ;
+`check_assets` OK ; `check_funny` OK ; `check_level` 41/41 ; `check_place`
+501 + 16 cas ; `check_devil` 621 ; `check_devil_effect` 620, 8/8 chemins ;
+`check_makelevel` OK ; `smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ;
+`coverage` 177/564.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

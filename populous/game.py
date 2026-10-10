@@ -56,7 +56,7 @@ from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_ACTION, ACT_LOWER, ACT_MAGNET,  # noqa: E402
-                                ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
+                                ACT_NOP, ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
                                 ACT_TREE, ACT_VOLCANO, BLK_FLAT,
                                 MANA_VALUES, ST_BATTLE, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
@@ -470,7 +470,7 @@ class Game:
                 st.queued = 0
         self.powers.ai_choose(sim.not_player)
         for t in (sim.player, sim.not_player):
-            self.powers.do_queued(t)
+            self._safe_dispatch(t)
         # `sim.effect` n'est pose que dans deux cas rares ; on le recopie
         # dans le mot global `_effect`, que l'horloge audio consomme a la
         # fin de l'image (comme le fait l'asm, L19635).
@@ -1677,7 +1677,37 @@ class Game:
         sim = self.sim
         st = sim.stats[sim.player]
         if sim.tgt_dirty and st.act:
-            self.powers.dispatch(sim.player, st.act, st.p1, st.p2)
+            self._safe_dispatch(sim.player)
+
+    def _safe_dispatch(self, tribe: int) -> None:
+        """Execute la fiche ``stats[tribe]`` en survivant a un code non transcrit.
+
+        ``_get_message`` (L17707, appele **a chaque image** au L1011)
+        dispatche la fiche sans filet. Dans l'original, les entrees
+        ``(0,0)``, ``(1,1)`` et ``(2,2)`` de la barre d'icones ouvrent donc
+        leur boite de dialogue sur l'image du clic (Phase 63) ; le port n'a
+        pas les ~1300 lignes de ``_options`` (L13617) et ``_game_options``
+        (L12801), et un clic sur ces icones arme un code qui leve.
+
+        Deux consequences corrigees ici :
+
+        1. ``_do_actions`` ne declenche que sur ``tgt_dirty`` - une
+           commande de palette reste donc en fiche jusqu'au tour suivant ;
+        2. ``_run_commands`` la dispatchait a ce moment-la, au milieu de
+           ``tick``, et le ``NotImplementedError`` tuait la partie.
+
+        On signale l'erreur sur la sortie d'erreur et on vide la fiche
+        comme ``_clear_send`` (L18234-18254) : le jeu reste jouable et le
+        code manquant reste **visible**. Ce n'est pas un no-op.
+        """
+        st = self.sim.stats[tribe]
+        try:
+            self.powers.do_queued(tribe)
+        except NotImplementedError as exc:
+            print("[non transcrit] %s" % exc, file=sys.stderr)
+            st.act = ACT_NOP
+            st.p1 = 0
+            st.p2 = 0
 
     # ------------------------------------------------- _interogate (asm L2719)
     def interogate(self) -> None:

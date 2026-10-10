@@ -206,7 +206,9 @@ class Game:
         self.effect = 0          # code du dernier effet sonore à jouer
 
         # --- etats d'interface transcrits de l'asm -------------------------
-        self.mode = 1             # _mode : 1..3 = mode d'outil courant
+        self.mode = 2             # _mode : 2 a l'init (L1148), pas 1.
+                                # `mode & 0x0E` (L963) doit etre
+                                # non nul pour que `_sculpt` tourne.
         self.pointer = 0          # _pointer : curseur d'icone associe
         # `bitfield_51645` (0x51645) n'est pas un champ independant :
         # c'est l'octet **bas** du mot `_mode` (0x51644), comme le prouve
