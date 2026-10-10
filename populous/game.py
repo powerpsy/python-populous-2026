@@ -51,7 +51,7 @@ from populous import config  # noqa: E402
 from populous import m68k  # noqa: E402
 from populous.assets import load_pic, load_sprites  # noqa: E402
 from populous.assets import load_land as load_tiles  # noqa: E402
-from populous.config import DEFAULT_GROUND, DEFAULT_SEED, FPS  # noqa: E402
+from populous.config import DEFAULT_GROUND, DEFAULT_SEED  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
@@ -1568,17 +1568,22 @@ class Game:
         """La boucle d'image.
 
         .. note::
-           L'asm ne fixe aucun rythme : sa boucle reboucle sur `LAB_3E7E8`
-           sans attendre (Phase 18). Nous fixons donc un nombre d'images et
-           un nombre de tours par image — deux **parametres**, exposes dans
-           :mod:`populous.config`, parce que l'original ne les fixe pas non
-           plus.
+           Le rythme vient de :data:`populous.config.TURNS_PER_SECOND` et
+           :data:`populous.config.TURNS_PER_FRAME`. La boucle d'origine
+           reboucle sur `LAB_3E7E8` sans attendre, mais son basculement
+           d'ecran finit sur ``_show_screen`` (L19782-19790), qui tourne en
+           boucle sur ``INTREQR & $0020`` - le vblank. Un tour par image,
+           donc un plafond de 50 tours/s en PAL. Ici ``clock.tick`` prend
+           en charge ce plafond : ``0.0`` veut dire sans plafond.
 
            Le diviseur s'accumule en virgule flottante plutot qu'avec un
            compteur entier, afin que `TURNS_PER_FRAME` accepte n'importe
            quelle valeur (1.0, 3.0, 7.5...) sans derivation cumulative.
         """
         par_image = max(0.0, TURNS_PER_FRAME)
+        tps = max(0.0, config.TURNS_PER_SECOND)
+        # images par seconde ; 0.0 = sans plafond
+        img_s = tps / par_image if (tps > 0.0 and par_image > 0.0) else 0.0
         credit = 0.0
         while self.running:
             for ev in pygame.event.get():
@@ -1598,7 +1603,7 @@ class Game:
                              (0, 0))
             pygame.display.flip()
             self.frames += 1
-            self.clock.tick(FPS)
+            self.clock.tick(img_s)
         pygame.quit()
 
 
@@ -1607,19 +1612,21 @@ def main(argv: list[str]) -> None:
 
     .. code-block:: none
 
-        python -m populous.game [graine] [sol] [zoom] [tours_par_image]
+        python -m populous.game [graine] [sol] [zoom] [tours_par_image] [tours/s]
 
-    Le dernier argument est le levier de cadence (voir
-    :data:`populous.config.TURNS_PER_FRAME`). ``3.0`` donne 10 tours/s a
-    30 img/s, cadence plausible pour un Amiga. Les valeurs par defaut
-    viennent de :mod:`populous.config`, donc les modifier dans ce fichier
-    suffit dans la plupart des cas.
+    Les deux derniers arguments sont les leviers de cadence. Par defaut :
+    ``tours_par_image = 1.0`` (un tour par image, la regle du listing,
+    L681) et ``tours/s = 30.0``. ``0.0`` en tours/s enleve tout plafond,
+    ``50.0`` rejoue le plafond VBlank de la boucle d'origine. Voyez
+    :data:`populous.config.TURNS_PER_SECOND` pour la preuve au listing.
     """
     seed = int(argv[0]) if len(argv) > 0 else DEFAULT_SEED
     ground = int(argv[1]) if len(argv) > 1 else DEFAULT_GROUND
     zoom = int(argv[2]) if len(argv) > 2 else ZOOM
     if len(argv) > 3:
         config.TURNS_PER_FRAME = float(argv[3])
+    if len(argv) > 4:
+        config.TURNS_PER_SECOND = float(argv[4])
     Game(seed, ground, zoom).run()
 
 

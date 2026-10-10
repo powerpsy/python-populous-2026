@@ -1056,28 +1056,38 @@ Phase 17, plus rien dans la chaine de croissance n'est connu comme errone.
 
 #### Ce que cela revele
 
-Du coup, l'ecart restant s'explique probablement **autrement** qu'on le
-croyait : par la **comparaison entre tours et secondes reelles**.
+Du coup, l'ecart restant n'existait pas : c'etait la boucle d'image
+elle-meme qui n'avait pas ete lue jusqu'au bout. **Corrige en Phase 62.**
 
-Chez nous, un tour = une image a 30 img/s, donc 3200 tours = **107
-secondes**. Or l'asm ne fixe **aucun** rythme a la boucle : elle tourne
-liberement, bornee par la vitesse de rendu de la machine. Sur un Amiga
-7 MHz qui rend en logiciel un ecran 320x256 avec la fenetre en 8 passes,
-un rythme de **10 a 15 tours/s** est plausible — contre 30 chez nous.
+L'asm ne contient effectivement ni `Delay` ni `WaitTOF` dans la boucle de
+tour - elle reboucle sur `LAB_3E7E8` (L1013) sans attendre. Mais la
+derniere chose qu'elle fait avant les entrees est le basculement d'ecran
+(L761-762), et ce basculement **est** le tempo :
 
-A 10 tours/s, 3200 tours represente **5 minutes** de jeu : et la, atteindre
-les 208 habitants du plafond et 50 000 de population n'a plus rien
-d'anormal. Autrement dit une partie de notre port, lancee en conditions
-reelles, est probablement **deux a trois fois trop rapide** — mais ce n'est
-pas une erreur de transcription, c'est une question de **cadence**, et elle
-se reglera sur une cible de tours par seconde choisie explicitement, puis
-verifiee par execution.
+    ___swap_screens (L762)  ->  _swap_screens  L16743-16754
+                               _Setscreen     L16695-16739
+                               _show_screen   L19782-19790
 
-.. warning::
-   Ce raisonnement est une **hypothese** : la frequence reelle de la boucle
-   d'origine n'est pas mesurable depuis le listing, puisque le jeu ne la
-   fixe nulle part. Elle demande soit une mesure sur l'emulateur, soit un
-   choix de conception assume. **Non tranche.**
+    _show_screen:
+        COP1LCH = copper_list + 4
+    LAB_4CB92:  MOVE.W INTREQR,D0
+                ANDI.W #$0020,D0
+                BEQ.W  LAB_4CB92
+                RTS
+
+`$0020` dans `INTREQR` est le drapeau de l'interruption **vertical blank** :
+la routine publie la nouvelle liste de cuivre, puis tourne jusqu'au
+prochain vblank. C'est le seul tempo de la boucle. Le listing impose donc
+**un tour par image**, soit un plafond de **50 tours/s** en PAL
+(`SCREEN_W = 320`).
+
+L'hypothese « 10 a 15 tours/s, bornee par le rendu » qui suivait etait
+fausse : le rendu logiciel sur un Amiga 7 MHz ne peut qu'**abaisser** ce
+plafond, jamais le placer ailleurs. Cela n'empeche pas l'ecart mesure de
+tourner - la boucle d'origine ne tenait probablement pas ses 50 Hz, c'etait
+la machine qui l'arretait.
+
+C'est maintenant un parametre, et plus une constante : Phase 62.
 
 ### Phase 19 - L'interpretation materiel : le 68000 a des mots qui rebouclent
 
@@ -5057,6 +5067,75 @@ Verifications : `autopilot 59 0 3` 68/68 ; `check_render` 26 residu attendu
 `check_makelevel` OK ; `check_place` 501 + 16 cas, 3 ecarts declares ;
 `smoke_sim` OK ; `stress 2000 8` 8/8 ; `coverage` 163/564, `PLANIFIE` vide.
 
+### Phase 62 - Cadence parametrique : le tempo est dans le listing
+
+`config.FPS = 30` etait une constante d'arbitrage, accompagnee d'une
+explication qui se revele **fausse** : « l'asm ne fixe aucun rythme et tourne
+librement, 10 a 15 tours/s sont plausibles ». Le rythme est au contraire
+fixe, et il est dans le listing.
+
+**La preuve.** La boucle de tour (`_animate`, L502, `LAB_3E7E8` L556-L1013)
+ne contient ni `Delay` ni `WaitTOF`. Mais sa derniere action avant les
+entrees est le basculement d'ecran (L761-762) :
+
+    ___swap_screens (L762)  ->  _swap_screens  L16743-16754
+                               _Setscreen     L16695-16739
+                               _show_screen   L19782-19790
+
+    _show_screen:
+        COP1LCH = copper_list + 4
+    LAB_4CB92:  MOVE.W INTREQR,D0
+                ANDI.W #$0020,D0
+                BEQ.W  LAB_4CB92
+                RTS
+
+`$0020` dans `INTREQR` est le drapeau de l'interruption **vertical blank** :
+la routine publie la nouvelle liste de cuivre puis **attend le prochain
+vblank**. C'est le seul tempo de la boucle - donc le listing impose **un
+tour par image**, soit un plafond de **50 tours/s** en PAL
+(`SCREEN_W = 320`).
+
+`_waittof` (L19791-19797) ne l'explique pas : il *efface* ce drapeau avant
+d'attendre, et il n'est utilise que par le code serie (L11635/11645) et pour
+les quatre attentes de L14717-14720. Le seul autre `Delay()` du jeu est dans
+`_free_inter` (L245), chemin de sortie.
+
+Ce que le rendu coutait a 7 MHz en logiciel, c'est **abaisser** ce plafond,
+pas le placer ailleurs. D'ou la separation, tout en parametres :
+
+* `TURNS_PER_SECOND` (nouveau) - tours/s vises. `0.0` = sans plafond,
+  `50.0` = le plafond vblank d'origine, `30.0` = defaut, conserve pour la
+  mise au point.
+* `TURNS_PER_FRAME` (existant) - tours par image. La regle du listing est
+  `1.0` : `_animate` appelle `_move_peeps` une seule fois (L681).
+* `FPS` disparait. `game.py` derive `img_s = TURNS_PER_SECOND /
+  TURNS_PER_FRAME` et le passe a `clock.tick`, `0.0` signifiant sans delai.
+
+CLI : `python -m populous.game [graine] [sol] [zoom] [tours_par_image]
+[tours/s]`.
+
+**Verifie par execution** (tete nue, SDL dummy, 1.2 s, seed 12345) :
+
+===================  =========  =========
+`TURNS_PER_SECOND`   images/s   tours/s
+===================  =========  =========
+`30.0`               29         30
+`50.0`               48         49
+`0.0`                340        341
+===================  =========  =========
+
+Le plafond de 50 est bien tenu, et `0.0` donne effectivement toute la
+puissance de la machine.
+
+`game.py` etait le seul consommateur de `FPS` : `check_render`,
+`check_assets`, `check_funny`, `check_level`, `check_place` et
+`tools/coverage.py` ne le lisent pas. Suite complete au vert :
+`autopilot 59 0 3` 68/68 ; `check_render` 26 residu attendu + 9 vrai ecart ;
+`check_assets` OK ; `check_funny` OK ; `check_level` 41/41 ; `check_devil`
+621 cas ; `check_devil_effect` 620 cas, 8/8 chemins ; `check_makelevel`
+OK ; `check_place` 501 + 16 cas, 3 ecarts declares ; `smoke_sim` OK ;
+`stress 2000 8` 8/8 ; `coverage` 167/564, `PLANIFIE` vide.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -5079,10 +5158,13 @@ Verifications : `autopilot 59 0 3` 68/68 ; `check_render` 26 residu attendu
   a part par `tools/check_place.py` : `target` (L7069, `CLR.L` = 0 contre
   `-1` dans le port), `spawn_block` / `make_level_res` (hors listing), et la
   valeur de retour de `_place_people` (D0 de `_set_frame` contre index).
-* **Cadence de la partie** : toute la chaine de croissance est verifiee
-  exacte (Phases 16-18). L'ecart restant tient probablement au nombre de
-  tours par seconde — l'asm ne fixe aucun rythme et tourne librement. Decide
-  d'une cible de tours/s, puis verifiee par execution. **Non tranche.**
+* **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
+  vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit
+  un tour par image et un plafond de 50 tours/s en PAL. `TURNS_PER_SECOND`
+  est le parametre unique (`0.0` = sans plafond, `50.0` = le plafond
+  d'origine) ; le defaut reste **30.0**, a monter quand on voudra rejouer le
+  rythme original. L'ancienne hypothese des « 10 a 15 tours/s » est
+  retiree : elle etait fausse.
 ---
 
 ## Note honnête sur l'équilibrage

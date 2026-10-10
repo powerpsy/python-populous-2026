@@ -31,25 +31,43 @@ SCREEN_H = 256
 ZOOM = 3
 
 # ------------------------------------------------------------------- cadence
-#: Images par seconde **affichees**.
+#: Nombre de tours de simulation par seconde. **Parametre.**
 #:
 #: .. note::
-#:    L'asm ne fixe **aucun** rythme : la boucle de tour reboucle sur
-#:    `LAB_3E7E8` (L1013) et n'attend rien. Le seul `Delay()` du jeu est dans
-#:    `_free_inter` (L245, chemin de sortie) et `_waitfor()` n'est appele que
-#:    par le code serie (L11653). La frequence reelle est donc celle de la
-#:    machine — sur un Amiga 7 MHz en rendu logiciel, de l'ordre de 10 a 15
-#:    tours/s. Elle n'est **pas mesurable** depuis le listing.
+#:    La boucle de tour ne contient aucun ``Delay`` ni ``WaitTOF`` : elle
+#:    reboucle sur `LAB_3E7E8` (L1013). Mais elle **est** rythmee par le
+#:    basculement d'ecran, la derniere chose faite avant les entrees
+#:    (L761-762) : ``___swap_screens`` -> ``_swap_screens`` (L16743-16754)
+#:    -> ``_Setscreen`` (L16695-16739) -> ``_show_screen`` (L19782-19790)::
 #:
-#: 30 tours/s : rapide mais tres pratique pour la mise au point et les tests.
-FPS = 30
+#:        COP1LCH = copper_list + 4
+#:    LAB_4CB92:  D0 = INTREQR ; D0 &= $0020 ; BEQ LAB_4CB92   ; RTS
+#:
+#:    ``$0020`` dans ``INTREQR`` est le drapeau d'interruption **vertical
+#:    blank** : la routine ecrit la nouvelle liste de cuivre, puis tourne
+#:    jusqu'au prochain vblank. C'est le seul tempo de la boucle - le
+#:    listing fixe donc **un tour par image**, soit un plafond de **50
+#:    tours/s** en PAL (``SCREEN_W = 320``). ``_waittof`` (L19791-19797),
+#:    qui *efface* ce drapeau avant d'attendre, n'est utilise que par le
+#:    code serie (L11635/11645) et pour les quatre attentes de L14717-14720.
+#:
+#:    Le rendu original (320x256 en 8 passes, logiciel, sur un Amiga 7 MHz)
+#:    ne tenait pas forcement ces 50 Hz : c'est alors la **machine** qui
+#:    faisait retomber le rythme, jamais le listing. D'ou ce parametre et
+#:    non une constante :
+#:
+#:    * ``0.0``  - sans plafond, le plus rapide que la machine accepte ;
+#:    * ``50.0`` - le plafond VBlank de la boucle d'origine ;
+#:    * ``30.0`` - la valeur par defaut, celle du port depuis sa creation,
+#:      retenue pour rester confortable a la mise au point.
+TURNS_PER_SECOND = 30.0
 
 #: Nombre d'images affichees entre deux tours de simulation.
 #:
-#: 1.0 = un tour par image (ce que nous faisons : `FPS` tours par seconde).
-#: 3.0 = 10 tours par seconde a 30 img/s, cadence plausible pour un Amiga.
-#: **Parametre** : c'est le levier a toucher en premier si la partie parait
-#: trop rapide ou trop lente.
+#: ``1.0`` = un tour par image, la regle du listing : ``_animate`` appelle
+#: ``_move_peeps`` une seule fois par tour (L681). ``3.0`` = un tour toutes
+#: les trois images, si le rendu ne suit pas le plafond de tours/s.
+#: **Parametre.**
 TURNS_PER_FRAME = 1.0
 
 #: Mode Conquest au demarrage. L'asm demarre sur l'ecran titre ; on commence

@@ -1130,6 +1130,11 @@ def animate():                                       # L502
     if game_turn == 0x1000:                           # L752  tour 4096
         do_place_funny(start_seed & 3)                # L755‑758
     show_the_shield() ; swap_screens()                # L761‑762
+    #   ^ tempo de la boucle : swap_screens → _swap_screens (L16743) →
+    #     _Setscreen (L16695) → _show_screen (L19782‑19790), qui publie la
+    #     liste de cuivre puis tourne sur `INTREQR & $0020` (vblank).
+    #     Un tour par image, plafond 50 Hz PAL. Phase 62.
+    # ── (E) entrées ──────────────────────────────────────────────
     # ── (E) entrées ──────────────────────────────────────────────
     keyboard()                                        # L764
     #   pavé numérique → défilement (scroll_n/nw/w/sw/ne/s/se/e)  L770‑833
