@@ -208,8 +208,11 @@ class Game:
         # --- etats d'interface transcrits de l'asm -------------------------
         self.mode = 1             # _mode : 1..3 = mode d'outil courant
         self.pointer = 0          # _pointer : curseur d'icone associe
-        self.ui_bits = 0          # bitfield_51645 : bit2 = "abaisser" arme,
-                                   #                     bit3 = "relever" arme
+        # `bitfield_51645` (0x51645) n'est pas un champ independant :
+        # c'est l'octet **bas** du mot `_mode` (0x51644), comme le prouve
+        # `MOVE.W #$0002,(_mode,A4)` (L1148) qui redonne exactement les
+        # deux octets initiaux. `mode & 04` = aimant arme, `mode & 08` =
+        # marais arme ; un `ui_bits` a part restait toujours nulle.
         self.ok_to_build = 0      # _ok_to_build (L7307)
         self.cur_x = 0            # _cur_x : case sous la souris (_sculpt)
         self.cur_y = 0            # _cur_y

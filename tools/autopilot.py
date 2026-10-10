@@ -146,10 +146,10 @@ def main() -> int:
     for col, row, lbl, attr, attendu in (
             (0, 3, "musique", "music_on", None),
             (0, 4, "effets", "effect_on", None),
-            (0, 0, "poser un peuple", "act", (7, 0x0E)),
-            (1, 1, "poser un peuple", "act", (8, 0x0E)),
-            (1, 3, "volcan", "act", (6, 0x0E)),
-            (2, 2, "abaisser", "act", (2, 0x0E))):
+            (0, 0, "poser (p2 7)", "act", (14, 7, 1)),
+            (1, 1, "poser (p2 8)", "act", (14, 8, 1)),
+            (1, 3, "horloge (p2 6)", "act", (14, 6, 1)),
+            (2, 2, "serie (p2 2)", "act", (14, 2, 1))):
         px = find_icon(col, row)
         if attendu is None:
             avant = getattr(g, attr)
@@ -160,10 +160,12 @@ def main() -> int:
                               % (attr, avant, getattr(g, attr))))
         else:
             press(g,*px)
-            results.append(ok("bouton (%d,%d) %s : act=%d tend=0x%02X"
-                              % (col, row, lbl, attendu[0], attendu[1]),
-                              (st.act, st.tend) == attendu,
-                              "act=%d tend=0x%02X" % (st.act, st.tend)))
+            results.append(ok("bouton (%d,%d) %s : act=%d p2=%d "
+                              "p1=%d" % (col, row, lbl, attendu[0],
+                                         attendu[1], attendu[2]),
+                              (st.act, st.p2, st.p1) == attendu,
+                              "act=%d p2=%d p1=%d"
+                              % (st.act, st.p2, st.p1)))
     shot(g, "04_barre_icones")
 
     # ------------------------------------------------ pave de defilement
@@ -201,20 +203,25 @@ def main() -> int:
     shot(g, "05_pave")
 
     # ---------------------------------------- palette d'outils (LAB_3F670)
-    print("\n6. Palette d'outils en bas a gauche (LAB_3F670..LAB_3FB26)")
+    print("\n6. Palette d'outils en bas a gauche (LAB_3F666, L1928-2133)")
     # le centre de la case (up, vp) est a l'ecran (16*(up-vp+1), 128+8*(up+vp))
-    # Les codes ecrits par la palette coincident exactement avec ACT_* :
-    #   1 = ACT_RAISE   2 = ACT_LOWER   3 = ACT_QUAKE   4 = ACT_SWAMP
-    #   5 = ACT_MAGNET  6 = ACT_VOLCANO 7/8 = poser un peuple
-    for up, vp, lbl, attendu in ((0, 0, "marais   (act 4)", (4, 0x0E)),
-                                 (1, 0, "seisme   (act 3)", (3, 0x0E)),
-                                 (2, 1, "aimant   (act 5)", (5, 0x0E)),
-                                 (3, 3, "relever  (act 1)", (1, 0x0E))):
+    # La palette n'arme pas une action de carte : elle ecrit `act` seul
+    # (volcan, seisme) ou `act = 14` + un code dans `p2` (_do_action).
+    for up, vp, lbl, attendu in (
+            (0, 0, "deluge   (act 14 p2 4)", (14, 4)),
+            (1, 0, "guerre   (act 14 p2 3)", (14, 3)),
+            (2, 1, "chevalier(act 14 p2 5)", (14, 5)),
+            (3, 3, "relief 0 (p2 1 p1 0)", (14, 1, 0))):
         px = (16 * (up - vp + 1), 128 + 8 * (up + vp))
         press(g,*px)
+        if len(attendu) == 3:
+            got = (st.act, st.p2, st.p1)
+        else:
+            got = (st.act, st.p2)
         results.append(ok("palette (%d,%d) %s" % (up, vp, lbl),
-                          (st.act, st.tend) == attendu,
-                          "act=%d tend=0x%02X" % (st.act, st.tend)))
+                          got == attendu,
+                          "act=%d p2=%d p1=%d"
+                          % (st.act, st.p2, st.p1)))
     shot(g, "06_palette")
 
     # -------------------------- selecteur de mode (LAB_3F8A0 / LAB_3F8F0)
@@ -317,7 +324,8 @@ def main() -> int:
                       "cur_screen=%s" % str(g.sim.cur_screen)))
     shot(g, "08_sculpt")
 
-    print("\n9. Le joueur arme une action puis vise une case")
+    print("\n9. La palette arme, le clic sur la carte execute "
+          "(asm L1932-2133 + L7452)")
     st = g.sim.stats[g.sim.player]
     pl = g.sim.players[g.sim.player]
     pl.mana = 300000
@@ -325,14 +333,17 @@ def main() -> int:
     g.sim.mode = 2                        # mode 2 = mode de sculptage
     g.sim.ok_to_build = 1
 
-    def clic_gauche():
-        """Un clic gauche complet : une seule image a ``left_button == 0``."""
+    def clic(bouton=1):
+        """Un clic complet : une seule image a ``left_button == 0``."""
         g.mouse = (192, 120)
-        g.poll_mouse()
-        g._raw_left = True
-        g.poll_mouse()
-        g._raw_left = False
-        g.poll_mouse()
+        g.poll_mouse()                    # image avant l'appui
+        if bouton == 1:
+            g._raw_left = True
+        else:
+            g._raw_right = True
+        g.poll_mouse()                    # image du clic
+        g._raw_left = g._raw_right = False
+        g.poll_mouse()                    # relachement
 
     g.mouse = (192, 120)
     g.sculpt()
@@ -346,22 +357,98 @@ def main() -> int:
 
     print("   case visee : (%d, %d)   sommet=%d   blk=0x%02X"
           % (cx, cy, sommet(), g.sim.map.blk[(cy << 6) | cx]))
-    actions = ((3, 3, "relever", 1, 10), (2, 1, "aimanter", 5, 200),
-               (1, 0, "seisme", 3, 2500), (0, 0, "marais", 4, 5000))
-    for up, vp, lbl, attendu, cout in actions:
-        v0, m0, e0 = sommet(), pl.mana, etat_blk()
-        g.palette(up, vp)                 # la palette arme l'action
-        armee = (st.act, st.tend) == (attendu, 0x0E)
-        clic_gauche()                     # le clic pose la cible et execute
-        v1, m1, e1 = sommet(), pl.mana, etat_blk()
-        diff = {k: (e0[k], e1[k]) for k in set(e0) | set(e1) if e0[k] != e1[k]}
-        results.append(ok("palette (%d,%d) arme « %s » (act=%d)"
-                          % (up, vp, lbl, attendu), armee,
-                          "act=%d tend=0x%02X" % (st.act, st.tend)))
-        results.append(ok("  clic : mana %d -> %d (cout %d)"
-                          % (m0, m1, cout), m0 - m1 == cout,
-                          "sommet %d -> %d, %d code(s) de case change(s)"
-                          % (v0, v1, len(diff))))
+    # ---- 9a. le sens du relief : la palette ecrit act=14, p2=1 -------
+    # p1 = dir, et `_do_action` code 1 (L18381-18403) recopie dir dans
+    # `command` et retrace la croix - sans depenser un sou de mana.
+    from populous.constants import TEND_X, TEND_Y
+    for up, vp, dir_l in ((3, 3, 0), (4, 3, 1), (5, 3, 2), (4, 4, 3)):
+        g.palette(up, vp)
+        arme = (st.act, st.p2, st.p1) == (14, 1, dir_l)
+        m0 = pl.mana
+        g.sim.players[0].command = 4   # aucune croix (L2455)
+        g.icon_toggles.clear()
+        g.powers.do_queued(g.sim.player)      # `_get_message` du port
+        m1 = pl.mana
+        cmd = g.sim.players[0].command
+        croix = (TEND_X[dir_l], TEND_Y[dir_l], 0x12C0) in g.icon_toggles
+        results.append(ok("palette (%d,%d) arme le relief dir=%d "
+                          "(act 14, p2 1, p1 %d)" % (up, vp, dir_l, dir_l),
+                          arme, "act=%d p2=%d p1=%d"
+                          % (st.act, st.p2, st.p1)))
+        results.append(ok("  -> command=%d, croix, mana inchangee"
+                          % dir_l,
+                          cmd == dir_l and m1 == m0 and croix,
+                          "command=%d croix=%s mana %d -> %d"
+                          % (cmd, croix, m0, m1)))
+
+    # ---- 9b. le clic choisit l'action (L7452-7561) -------------------
+    # Aucune icone d'armee : `act` = 4/5/1/2 vient du **clic**, pas de la
+    # palette. Cout 10 pour relever/abaisser, 5000/200 pour les autres.
+    g.sim.mode = 2
+    for bouton, act_att, lbl, delta in ((1, 1, "gauche", 1),
+                                        (3, 2, "droite", -1)):
+        v0, m0 = sommet(), pl.mana
+        clic(bouton)
+        v1, m1 = sommet(), pl.mana
+        results.append(ok("clic %s : act=%d, haut %+d, mana -10"
+                          % (lbl, act_att, delta),
+                          v1 == v0 + delta and m0 - m1 == 10,
+                          "sommet %d -> %d, mana %d -> %d, act=%d p1=%d p2=%d"
+                          % (v0, v1, m0, m1, st.act, st.p1, st.p2)))
+
+    # ---- 9c. palette (2,2) : sculptage bit 3 -> marais ----------------
+    g.sim.mode = 1
+    g.sim.paint_map = 1                     # garde de L2018-2032
+    g.palette(2, 2)
+    results.append(ok("palette (2,2) ouvre le sculptage : mode 9, "
+                      "pointeur 5",
+                      g.sim.mode == 9 and g.sim.pointer == 5,
+                      "mode=%d pointer=%d" % (g.sim.mode, g.sim.pointer)))
+    g.sim.paint_map = 0
+    m0 = pl.mana
+    clic(1)
+    m1 = pl.mana
+    results.append(ok("  clic -> marais (act 4, cout 5000) et bit 3 efface",
+                      m0 - m1 == 5000 and g.sim.mode == 1,
+                      "mode=%d mana %d -> %d act=%d"
+                      % (g.sim.mode, m0, m1, st.act)))
+
+    # ---- 9d. palette (6,2) : sculptage bit 2 -> aimanter --------------
+    g.sim.mode = 1
+    g.palette(6, 2)
+    results.append(ok("palette (6,2) : mode 5, pointeur = joueur+2",
+                      g.sim.mode == 5
+                      and g.sim.pointer == g.sim.player + 2,
+                      "mode=%d pointer=%d" % (g.sim.mode, g.sim.pointer)))
+    m0 = pl.mana
+    clic(1)
+    m1 = pl.mana
+    results.append(ok("  clic -> aimanter (act 5, cout 200) et bit 2 efface",
+                      m0 - m1 == 200 and g.sim.mode == 1,
+                      "mode=%d mana %d -> %d act=%d"
+                      % (g.sim.mode, m0, m1, st.act)))
+
+    # ---- 9e. les pouvoirs de la palette, executes par `_get_message` ---
+    for up, vp, lbl, attendu, cout in (
+            (1, 1, "volcan   (act 6)",  (6,), 10000),
+            (2, 0, "seisme   (act 3)",  (3,), 2500),
+            (2, 1, "chevalier(act 14)", (14, 5), 7500),
+            (0, 0, "deluge   (act 14)", (14, 4), 40000),
+            (1, 0, "guerre   (act 14)", (14, 3), 80000)):
+        m0, v0 = pl.mana, sommet()
+        g.palette(up, vp)
+        if len(attendu) > 1:
+            arme = (st.act, st.p2) == attendu
+        else:
+            arme = st.act == attendu[0]
+        g.powers.do_queued(g.sim.player)
+        m1, v1 = pl.mana, sommet()
+        results.append(ok("palette (%d,%d) %s puis `_get_message`"
+                          % (up, vp, lbl), arme,
+                          "act=%d p2=%d p1=%d" % (st.act, st.p2, st.p1)))
+        results.append(ok("  -> mana %d -> %d (cout %d)" % (m0, m1, cout),
+                          m0 - m1 == cout,
+                          "sommet %d -> %d" % (v0, v1)))
     shot(g, "09_actions")
 
     # --------------------------------- _show_the_shield (asm L2769) + jauges
@@ -484,13 +571,13 @@ def main() -> int:
                       "la ligne 7 revient au fond"))
     # l etat persistant : l icone reste inversee d une image a l autre
     g.icon_toggles.clear()
-    g.palette(3, 3)
-    results.append(ok("l icone armee est memorisee",
-                      (3, 3, 0x12C0) in g.icon_toggles,
+    g.palette(0, 0)            # L1935 : l'icone que le listing inverse
+    results.append(ok("l'icone cliquee est memorisee",
+                      (0, 0, 0x12C0) in g.icon_toggles,
                       "toggles = %s" % sorted(g.icon_toggles)))
-    g.palette(3, 3)
+    g.palette(0, 0)
     results.append(ok("re-cliquer la meme icone la desarme",
-                      (3, 3, 0x12C0) not in g.icon_toggles,
+                      (0, 0, 0x12C0) not in g.icon_toggles,
                       "toggles = %s" % sorted(g.icon_toggles)))
     shot(g, "12_toggle")
 

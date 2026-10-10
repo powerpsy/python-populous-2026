@@ -5136,28 +5136,156 @@ puissance de la machine.
 OK ; `check_place` 501 + 16 cas, 3 ecarts declares ; `smoke_sim` OK ;
 `stress 2000 8` 8/8 ; `coverage` 167/564, `PLANIFIE` vide.
 
+
+### Phase 63 - La palette d'outils : 9 entrees, et le clic qui choisit l'action
+
+Deux erreurs de fond dans le port, trouvees en relisant `_zoom_map`
+(L1658-2460) **en entier** et non plus seulement la zone que la Phase 61
+avait ouverte. Toutes les deux se voient a l'execution : l'une empechait
+de relever le terrain par la souris, l'autre rendait deux tiers de la
+palette inoperants.
+
+#### 1. La palette n'arme pas une action de carte
+
+Le port faisait de `(3,3)` un « relever » (`act = 1`), de `(0,0)` un
+« marais » (`act = 4`), etc. Le listing ne dit pas cela.
+
+`LAB_3F666` (L1928-2133), la table de saut de 9 entrees, n'ecrit que trois
+octets et d'une seule facon :
+
+* soit `act` seul - **6** (volcan, L1972) ou **3** (seisme, L1989), avec la
+  cible dans `p1`/`p2` ;
+* soit `act = 14` + un **code** dans `p2`, et `p1` laisse tel quel sauf
+  pour le relief.
+
+`act = 14` est la clef : `_get_message` (L17707, appele **a chaque image**
+au L1010) teste `_stats+0` (L17955-17958) et route `act == 14` vers
+`_do_action(tribu, p1, p2)` (L18185-18903) ; c'est alors `p2` qui indexe
+la table `LAB_4C16A` (L18378). Neuf entrees, trois formes :
+
+===========  =====  ======  =====  ==========================  =================
+(up, vp)      act    p1      p2    `_do_action` code            lignes
+===========  =====  ======  =====  ==========================  =================
+(0, 0)        14     —       4     deluge (5000)               L1942/1944
+(1, 0)        14     —       3     guerre (80000)              L1959/1961
+(1, 1)        6      xoff    yoff  volcan direct (10000)        L1972/1974/1976
+(2, 0)        3      xoff    yoff  seisme direct (2500)         L1989/1991/1993
+(2, 1)        14     —       5     chevalier (7500)             L2005/2007
+(2, 2)        —      —       —     sculptage bit 3, pointeur 5  L2012-2042
+(3, 3)        14     0       1     relief dir 0                 L2049/2051/2053
+(4, 3)        14     1       1     relief dir 1                 L2060/2062/2064
+(4, 4)        14     3       1     relief dir 3                 L2070/2072/2074
+(5, 3)        14     2       1     relief dir 2                 L2081/2083/L2085
+(6, 0..2)     —      —       —     selecteur de mode            L2088-2131
+===========  =====  ======  =====  ==========================  =================
+
+Le « relever » de l'ancien modele n'existe pas dans la palette. Les quatre
+entrees de relief ne font qu'une chose : `_do_action` code 1
+(L18381-18403) recopie `p1` dans `command[player]` (`LAB_52DE8`, stride 16)
+et retrace la croix `TEND_X/TEND_Y[p1]` (L2455-2522). Aucun cout, aucun
+modelage du terrain.
+
+Les colonnes 7 et 8 (L2134-2405) restent a transcrire.
+
+#### 2. C'est le **clic** qui choisit l'action
+
+`_sculpt` (L7452-7561) ecrit `act` ET la cible, une seule fois par clic
+(`_left_button == 0`, L7452) :
+
+======  ================================  ======  ========================
+test           ecrits                       cout    lignes
+======  ================================  ======  ========================
+`mode & 08`  act=4, p1=x-1, p2=y-1,          5000    L7454-7489
+`mode & 04`  act=5, p1=x-1, p2=y-1,           200    L7491-7526
+defaut       act=1, p1=x, p2=y                  10    L7527-7540
+clic droit    act=2, p1=x, p2=y (mode 2)        10    L7542-7561
+======  ================================  ======  ========================
+
+Le port n'ecrivait rien : il declarait un **ecart** - « le listing lit
+`(-1,A5)`, demi-mot haut de `cur_x`, donc toujours nul » - et laissait la
+palette poser l'action. Corriger la palette sans corriger `_sculpt`
+laissait `act = 14` en place apres un clic, ce qui partait sur
+`_do_action` code 7 - **non transcrit**. L'ecart est leve.
+
+#### 3. `bitfield_51645` n'etait pas un champ independant
+
+`_mode` est l'octet 0x51644, `bitfield_51645` l'octet 0x51645 - deux
+labels pour **un seul mot** : le listing fait `MOVE.W #$0002,(_mode,A4)`
+(L1148), ce qui ecrit `00` en 0x51644 et `02` en 0x51645, **exactement**
+les deux octets initiaux du `.data` (L24139-24142).
+
+Consequence en cascade :
+
+* `BTST #2,#3,(bitfield_51645,A4)` = `mode & 04` / `mode & 08` ;
+* `BSET #3` (L2040, apres `(2,2)`) = `mode = (mode & 3) | 8` : c'est
+  l'armement du marais ;
+* `BSET #2` (L2127, apres `(6,2)`) = `mode = (mode & 3) | 4` : c'est
+  l'armement de l'aimant ;
+* les deux `BCLR` (L7479, L7516) **desarment** apres usage.
+
+`sim.ui_bits`, un pseudo-champ reste a zero dans le port, a ete
+supprime : il rendait les deux branches inaccessibles et
+`_set_mode_icons` prenait donc **toujours** la troisieme branche - meme
+quand `(6,2)` venait de poser le bit 2. Les icones de rappel se
+retrouvaient fausses des qu'on quittait le mode sculptage.
+
+#### 4. `(9,A5)` est l'octet bas de d0
+
+L1733 ecrit `p1 = (9,A5)`. Avec `LINK A5,#-14`, l'appelant pousse son mot
+en A5+8..9 et le JSR empile l'adresse de retour en A5+4..7 : `(9,A5)` est
+le **dernier octet du mot pousse**, donc `d0` lui-meme. Le port avait lu
+`(d0 >> 8) & 0xFF`, toujours nul.
+
+#### 5. `_do_actions` delegue la fiche, pas une cible reconstruite
+
+Le lien entre l'action armee et le clic passait par `sim.tgt`, une
+**redite** de `p1`/`p2` (`LAB_516A5/6`, memes octets). Depuis que
+`_on_cell` les ecrit, `_do_actions` dispatch `(act, p1, p2)` comme
+`_get_message` - ce qui supprime la classe de bugs « action du palette
+executee sur la case d'un clic precedent ».
+
+Deux ecarts de timing restent assumables et documentes dans la docstring
+de `_do_actions` : le declenchement est subordonne a `tgt_dirty`, alors
+que l'asm declenche a chaque image ; une commande de palette attend donc
+la fin du tour (`do_queued`) au lieu de s'executer l'image suivante.
+
+#### Verification
+
+`tools/check_icons.py` (nouveau) : **33 controles**, tables ecrites
+directement depuis le listing et comparees a ce que la vraie fenetre
+produit - les 6 sites de la barre, les 9 entrees de la palette, le
+selecteur de mode, `_set_mode_icons`, les 4 ecritures de `_sculpt`, les 5
+couts de `_do_action`, et les 4 sens du relief.
+
+Suite complete au vert : `autopilot 59 0 3` **84/84** (les sections 4, 6
+et 9 reecrites sur le modele du listing) ; `check_render` OK (26 residu
+attendu + 9 vrai ecart) ; `check_assets` OK ; `check_funny` OK ;
+`check_level` 41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_makelevel` OK ;
+`smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ; `coverage` **171/564**
+(+4 par citation : `_set_mode_icons`, `_get_message`, `_do_action`,
+`bitfield_51645`).
+
+Ouvert par la phase : les colonnes 7 et 8 de la palette (L2134-2405),
+et les codes 2, 7 et 8 de `_do_action` - que les entrees (0,0), (1,1) et
+(2,2) de la barre arment reellement.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
   boite « TRY NUMBER » fonctionne, et l'ecran de fin fait avancer de palier
   (Phase 11). Touche `[` / `]` dans `python -m populous.game`.
-* **Le discours de fin** (`_read_lord`, `_draw_mouth`) : l'original fait
-  parler une bouche dessinee pendant l'ecran de victoire ; le fichier de
-  sprites de la bouche n'est pas localise.
+* **Le discours de fin** (`_read_lord`, `_draw_mouth`) : la bouche est **localisee et decodee**
+  (`extracted/mouths.pic`, 5040 octets -> 5 bitplanes x 320x252, et `assets/mouths.png`) ; ce qui
+  manque, c'est le deroule du cycle de palette de 16 entrees pendant l'ecran de victoire
+  (analyse faite, non branchee - cf. `populous/conquest_win.py`).
 * **Samples d'origine** : la logique audio est complete et fidele (Phase 10),
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
-* **L'armement des icones de `_zoom_map`** (L1690-2100, ouvert en Phase 61) :
-  le port ne porte que 6 des 13 sites d'arment, et les appariements sont au
-  moins en partie faux. `_get_message` lit l'action dans `_stats+0`
-  (L17955-17958), or onze arments sur treze ecrivent `+0 = $0E` et le
-  sous-code dans `+2` (`p2`) - ce qui conduit a `_do_action`, pas a la table
-  `LAB_4B81A`. L'icone `(0,0)` est `act = 14, p2 = 7` -> `LAB_4BC94`
-  (Options), pas « poser un peuple ». Restent egalement declares, et comptes
-  a part par `tools/check_place.py` : `target` (L7069, `CLR.L` = 0 contre
-  `-1` dans le port), `spawn_block` / `make_level_res` (hors listing), et la
-  valeur de retour de `_place_people` (D0 de `_set_frame` contre index).
+* **Les colonnes 7 et 8 de la palette** (L2134-2405) : les 9 premieres entrees et les 6 sites de
+  la barre d'icones sont transcrits et verifies en Phase 63 ; les dernieres entrees
+  (`LAB_3F924` / `LAB_3FB26`) restent a lire.
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit
   un tour par image et un plafond de 50 tours/s en PAL. `TURNS_PER_SECOND`

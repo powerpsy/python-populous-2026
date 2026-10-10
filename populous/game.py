@@ -55,8 +55,10 @@ from populous.config import DEFAULT_GROUND, DEFAULT_SEED  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
-from populous.constants import (ACT_LOWER, ACT_RAISE, ACT_TREE,  # noqa: E402
-                                BLK_FLAT, MANA_VALUES, ST_VILLAGER)
+from populous.constants import (ACT_ACTION, ACT_LOWER, ACT_MAGNET,  # noqa: E402
+                                ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
+                                ACT_TREE, ACT_VOLCANO, BLK_FLAT,
+                                MANA_VALUES, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
 from populous.render import (SCREEN_H, SCREEN_W, Renderer,  # noqa: E402
                              clamp_off, map_colours)
@@ -1044,45 +1046,69 @@ class Game:
         de ``_zoom_map`` le met aussitot a 2 et il faut le relacher), c'est
         donc exactement l'image du clic.
 
-        La cible est ecrite dans ``LAB_516A5/6[player]``, c'est-a-dire
-        ``(x, y)`` de la carte. Deux ecarts assumes par rapport au listing
-        tetracorp, tous deux documentes :
+        Le clic n'ecrit pas que la case : il ecrit ``act`` ET ``p1``/``p2``,
+        les trois octets ``_stats+0/+1/+2`` que ``_get_message`` lira
+        (L17953).  C'est ce qui explique pourquoi la palette (3,3) ne peut
+        armer relever : elle pose ``act = 14, p2 = 1`` (le **sens** du
+        relief), c'est le clic qui choisit l'action et la case.
 
-        1. Le listing ecrit ``MOVE.B (-1,A5),(0,A0,D0.L)`` pour la cible X, ce
-           qui lit le **demi-mot haut** de ``cur_x`` — toujours nul, puisque
-           ``cur_x < 64``. La cible serait donc systematiquement la colonne 0 ;
-           on prend ``cur_x`` entier, comme pour Y.
-        2. ``bitfield_51645`` n'est pas un champ independant : l'offset
-           ``A4+0x8257`` est immediatement apres ``_mode`` (0x8256), c'est
-           donc le **demi-mot haut** de ``_mode`` (bits 11 et 10). Ces deux bits
-           ne sont poses nulle part dans le listing, et la branche par defaut
-           ``LAB_43828`` ecrase ``stats.act`` avec 1 — ce qui supprimerait
-           toute action choisie a la palette. On ne l'ecrase donc que si l'un
-           de ces deux bits est reellement pose, ce qui reproduit le
-           comportement du jeu : la palette choisit l'action, le clic sur la
-           carte choisit la cible.
+        Trois points repris a la ligne :
+
+        1. ``(-1,A5)``/``(-3,A5)`` sont les octets **bas** des mots
+           ``cur_x``/``cur_y`` ecrits au L7409/L7415 (un mot en big-endian
+           occupe -2 puis -1).  Le port prenait ``cur_x`` entier en disant
+           que le listing lisait un demi-mot toujours nul : c'etait une
+           melecture, l'ecart est supprime.
+        2. ``bitfield_51645`` est l'octet bas de ``_mode`` (voir
+           ``set_mode_icons``) : ``BTST #3`` vaut donc ``mode & 08``
+           (marais arme par ``(2,2)``, L2040) et ``BTST #2`` vaut
+           ``mode & 04`` (aimant arme par ``(6,2)``, L2127).  Ces deux
+           bits ne sont poses que par la palette et sont effaces ici
+           (L7479, L7516) : les deux branches sont donc **inaccessible**
+           en l'etat, on les transcrit quand meme.
+        3. La branche par defaut (L7527-7540) pose ``act = 1`` sans test :
+           elle ecrase l'action eventuellement armee, donc apres un clic
+           sur la carte ``act`` ne peut plus valoir 14.
         """
         sim = self.sim
         st = sim.stats[sim.player]
         x, y = sim.cur_x, sim.cur_y
 
-        if self.left_button == 0:
-            if sim.mode & 0x0800:                  # bit 11 : relever arme
-                sim.mode &= ~0x0800
-                st.act, st.tend = 4, 0x0E
-            elif sim.mode & 0x0400:                # bit 10 : abaisser arme
-                sim.mode &= ~0x0400
-                st.act, st.tend = 5, 0x0E
-            sim.tgt[sim.player] = (x, y)
+        if self.left_button == 0:                  # L7452
+            if sim.mode & 0x08:                    # L7454 : marais arme
+                self.set_mode_icons(6, (sim.mode & 0x03) - 1)  # L7459-7461
+                st.act = ACT_SWAMP                 # L7466
+                st.p1 = (x - 1) & 0xFF             # L7467-7472
+                st.p2 = (y - 1) & 0xFF             # L7473-7478
+                sim.mode &= ~0x08                  # L7479
+                sim.pointer = sim.mode - 1         # L7480-7482
+                if sim.pointer == 1 and sim.player == 1:
+                    sim.pointer = 4                # L7483-7487
+            elif sim.mode & 0x04:                  # L7491 : aimant arme
+                self.set_mode_icons(6, (sim.mode & 0x03) - 1)  # L7496-7498
+                st.act = ACT_MAGNET                # L7503
+                st.p1 = (x - 1) & 0xFF             # L7504-7509
+                st.p2 = (y - 1) & 0xFF             # L7510-7515
+                sim.mode &= ~0x04                  # L7516
+                sim.pointer = sim.mode - 1         # L7517-7519
+                if sim.pointer == 1 and sim.player == 1:
+                    sim.pointer = 4                # L7520-7524
+            else:                                  # L7527
+                st.act = ACT_RAISE                 # L7531
+                st.p1 = x & 0xFF                   # L7535 `(-1,A5)`
+                st.p2 = y & 0xFF                   # L7539 `(-3,A5)`
+            sim.tgt[sim.player] = (st.p1, st.p2)
             sim.tgt_dirty = True
             return
 
         # ---- clic droit : LAB_43860 ---------------------------------------
         if (self.right_button == 0 and sim.mode == 2
                 and not (sim.flags & 0x08)):
-            self.right_button = 2
-            st.act = 2                             # action du bouton droit
-            sim.tgt[sim.player] = (x, y)
+            self.right_button = 2                  # L7549
+            st.act = ACT_LOWER                     # L7553
+            st.p1 = x & 0xFF                       # L7557
+            st.p2 = y & 0xFF                       # L7561
+            sim.tgt[sim.player] = (st.p1, st.p2)
             sim.tgt_dirty = True
 
     # --------------------------------------- _zoom_map (asm L1658, fin L1931)
@@ -1108,37 +1134,51 @@ class Game:
             self.xoff = clamp_off(u - 3)
             self.yoff = clamp_off(v - 3)
         elif u > 0x112:
-            # ---- 2. la barre d'icones â€” L1706-1824
-            col = (u - 0x110) // 0x10
-            row = (v - 0x20) // 0x10
-            if (col, row) == (0, 0):              # poser un peuple
-                self.toggle_icon(col, row, 0x17E4)
-                st.act, st.p1, st.tend = 7, d0, 0x0E
-            elif (col, row) == (0, 3):            # musique
-                # L1744-1756 : on bascule, puis si le mot est non nul on
-                # coupe tout le son.
-                self.toggle_icon(col, row, 0x17E4)
-                self.music_on ^= 1
-                if self.music_on:
-                    self.kill_effect(0, 4)
-            elif (col, row) == (0, 4):            # effets sonores
-                # L1768-1780, meme mecanique.
-                self.toggle_icon(col, row, 0x17E4)
-                self.effect_on ^= 1
-                if self.effect_on:
-                    self.kill_effect(0, 4)
-            elif (col, row) == (1, 1):            # poser un peuple (2e variante)
-                self.toggle_icon(col, row, 0x17E4)
-                st.act, st.tend = 8, 0x0E
-            elif (col, row) == (1, 3):            # volcan
-                st.tend, st.act = 0x0E, 6
-            elif (col, row) == (2, 2):            # abaisser
-                self.toggle_icon(col, row, 0x17E4)
-                st.act, st.tend = 2, 0x0E
+            # ---- 2. la barre d'icones - L1706-1824 ----------------------
+            # `DIVS` (L1711 / L1716) tronque **vers zero** : en sortie par
+            # le haut la case vaut 0 et non -1, d'ou une branche (0, 0) qui
+            # peut partir sur un clic qui n'est pas vraiment dans la barre.
+            col = m68k.divs_word(u - 0x110, 0x10)
+            row = m68k.divs_word(v - 0x20, 0x10)
+            if col == 0:                            # L1718
+                if row == 0:                        # L1722-1734 poser
+                    self.toggle_icon(col, row, 0x17E4)
+                    st.act = ACT_ACTION             # L1729
+                    st.p2 = 7                       # L1731 -> _do_action 7
+                    # L1733 lit `(9,A5)` : `LINK A5,#-14` laisse le mot
+                    # pousse par l'appelant (L988) en A5+8..9 et l'adresse
+                    # de retour en A5+4..7 - donc (9,A5) en est l'octet
+                    # **bas**, soit d0 tel quel (0 ou 1).
+                    st.p1 = d0 & 0xFF
+                elif row == 3:                      # L1736-1758 musique
+                    self.toggle_icon(col, row, 0x17E4)
+                    self.music_on ^= 1              # `_music_off` L1744-1750
+                    if self.music_on:               # L1751-1756
+                        self.kill_effect(0, 4)
+                elif row == 4:                      # L1760-1780 effets
+                    self.toggle_icon(col, row, 0x17E4)
+                    self.effect_on ^= 1
+                    if self.effect_on:
+                        self.kill_effect(0, 4)
+            elif col == 1:                          # L1784
+                if row == 1:                        # L1786-1798
+                    self.toggle_icon(col, row, 0x17E4)
+                    st.p2 = 8                       # L1795
+                    st.act = ACT_ACTION             # L1797
+                elif row == 3:                      # L1800-1805
+                    # **aucune** icone : le volcan arme ici se declenche
+                    # de lui-même a la fin de l'image (L1800-1805).
+                    st.act = ACT_ACTION             # L1803
+                    st.p2 = 6                       # L1805
+            elif col == 2:                          # L1809
+                if row == 2:                        # L1811-1822
+                    self.toggle_icon(col, row, 0x17E4)
+                    st.p2 = 2                       # L1820
+                    st.act = ACT_ACTION             # L1822
         elif v >= 0x92:
             # ---- 3. le pave de defilement â€” L1825-1927
-            vp = (v - 0x90) // 0x10
-            up = (u - 0x60) // 0x10
+            vp = m68k.divs_word(v - 0x90, 0x10)
+            up = m68k.divs_word(u - 0x60, 0x10)
             if 3 <= up <= 5 and 0 <= vp <= 2:
                 self.toggle_icon(up, vp, 0x12C0)
                 if up == 4 and vp == 1:           # centre : _view_who
@@ -1152,8 +1192,8 @@ class Game:
                     self.yoff = clamp_off(self.yoff + (1 if vp == 2 else 0)
                                           - (1 if vp == 0 else 0))
                 return self._zoom_map_end()
-            # ---- 4. la palette d'outils (LAB_3F666) â€” table de 9 entrees
-            self.palette((u - 0x60) // 0x10, vp)
+            # ---- 4. la palette d'outils (LAB_3F666) : 9 entrees
+            self.palette(up, vp)
         # ---- epilogue LAB_3FCB6 : bornage + anti-rebond
         self._zoom_map_end()
 
@@ -1182,108 +1222,174 @@ class Game:
     # Coordonnees a l'ecran du centre de chaque case (voir ``_uv``) :
     #     mx = 16*(up - vp + 1)      my = 128 + 8*(up + vp)
     def palette(self, up: int, vp: int) -> None:
-        """Une entree de la palette a ete cliquee.
+        """Une entree de la palette a ete cliquee - ``LAB_3F666`` (L1928-2133).
 
-        Chaque ecriture est celle de l'asm : ``stats+0`` est le **masque de
-        pouvoirs autorises** (``tend``), ``stats+2`` le **code d'action**. Ces
-        codes coincident exactement avec nos constantes ``ACT_*`` :
+        La table de saut ``LAB_3FC92`` (L2408-2417) est indexee par la
+        **colonne** ``up`` ; chaque branche teste ensuite ``vp``. Tout se
+        passe dans la fiche que ``_zoom_map`` vient d'ouvrir : ``st.act`` =
+        ``_stats+0``, ``st.p1`` = ``_stats+1``, ``st.p2`` = ``_stats+2`` -
+        les trois octets que ``_get_message`` relit en fin d'image
+        (L17953-17971).
 
-        Les codes ecrits dans ``stats+2`` coincident **exactement** avec nos
-        constantes ``ACT_*`` (asm L1989 ``$03`` = ``ACT_QUAKE``, L2007 ``$05``
-        = ``ACT_MAGNET``, etc.) :
+        Deux familles, et c'est la premiere grande lecon du listing :
 
-        ==========  ==========  =========================  ========
-        entree       stats+2     action (constante ACT_*)   cout
-        ==========  ==========  =========================  ========
-        (0, 0)       4           ACT_SWAMP   marais          5 000
-        (1, 0)       3           ACT_QUAKE   seisme          2 500
-        (1, 1)       -           tend = 0x06 seule          -
-        (2, 0)       -           mode : ``_mode |= 8``       -
-        (2, 1)       5           ACT_MAGNET  aimant            200
-        (2, 2)       -           mode : ``_mode |= 8``       -
-        (3, 3)       1           ACT_RAISE   relever            10
-        (4, 3)       1           ACT_RAISE   relever, dir 1     10
-        (4, 4)       1           ACT_RAISE   relever, dir 3     10
-        (5, 3)       1           ACT_RAISE   relever, dir 2     10
-        (6, 0)       -           ``_mode = 1``              -
-        (6, 1)       -           ``_mode = 2``              -
-        (6, 2)       -           ``_mode = (mode & 3) | 4`` -
-        (7, 0)       -           liste d'habitants du village
-        (8, 0)       -           liste d'habitants (2e tribu)
-        ==========  ==========  =========================  ========
+        * ``act = $0E`` (14) -> ``_get_message`` appelle
+          ``_do_action(tribu, p1, p2)`` (L18185-18190) et c'est **``p2``**
+          qui indexe la table ``LAB_4C16A`` (L18378) : 1 = outil de relief,
+          3 = guerre, 4 = deluge, 5 = chevalier, 7 = options, 8 = setup ;
+        * ``act = 3`` ou ``act = 6`` -> la table ``LAB_4B81A``
+          (L18202-18217) appelle directement ``_do_quake`` /
+          ``_do_volcano`` sur ``(p1, p2)``.
 
-        Les quatre icones ``(3,3) (4,3) (4,4) (5,3)`` ecrivent toutes
-        ``ACT_RAISE`` avec une **direction** differente dans ``stats+1``
-        (0, 1, 3, 2) : ce sont les quatre outils de relief directionnels.
+        =========  ====  ==============  ====  ==========================
+        (up, vp)   act   p1              p2    effet (ligne du listing)
+        =========  ====  ==============  ====  ==========================
+        (0, 0)     14    (9,A5) = 0      4     deluge            L1942
+        (1, 0)     14    inchange        3     guerre  (!paint)  L1959
+        (1, 1)     6     ``_xoff``       ``_yoff``  volcan       L1972
+        (2, 0)     3     ``_xoff``       ``_yoff``  seisme       L1989
+        (2, 1)     14    inchange        5     chevalier         L2005
+        (2, 2)     -     -               -     sculptage (garde) L2038
+        (3, 3)     14    0               1     relief, dir 0     L2049
+        (4, 3)     14    1               1     relief, dir 1     L2060
+        (4, 4)     14    3               1     relief, dir 3     L2070
+        (5, 3)     14    2               1     relief, dir 2     L2081
+        (6, 0..2)  -     -               -     selecteur de mode L2094
+        =========  ====  ==============  ====  ==========================
 
-        Les modes 2 et 3 (et 4) font tourner ``_sculpt`` : c'est la que la
-        souris designe une case. Le mode 1 est le mode normal, ou alone
-        ``_interogate`` s'occupe du survol des habitants.
+        Un octet que la branche n'ecrit **pas** garde la valeur de la
+        commande precedente : c'est le listing qui le veut (``LAB_3F6A0``
+        saute a l'epilogue sans jamais toucher a ``p1``, L1946).
+
+        ``(p1, p2)`` des branches volcan/seisme sont le **bas** octet des
+        mots ``_xoff``/``_yoff`` : ``LAB_52DDF`` = ``_xoff+1``,
+        ``LAB_52DE1`` = ``_yoff+1`` (L25313-25318, jamais ecrits sous ce
+        nom - ils ne sont modifies que par les ``MOVE.W (..., _xoff)``).
+        Le listing ne les lit qu'aux L1974/1976 et L1991/1993.
         """
         sim = self.sim
         st = sim.stats[sim.player]
 
-        if up == 0 and vp == 0:                  # LAB_3F670
-            self.toggle_icon(0, 0, 0x12C0)
-            st.act, st.tend = 4, 0x0E
-        elif up == 1 and vp == 0:                # LAB_3F6A4
-            if not sim.paint_map:
-                self.toggle_icon(1, 0, 0x12C0)
-                st.act, st.tend = 3, 0x0E
-        elif up == 1 and vp == 1:                # LAB_3F6DA
-            st.tend, st.p1, st.p2 = 0x06, 0, 0
-        elif up == 2 and vp == 0:                # LAB_3F71A
-            st.tend, st.p1, st.p2 = 0x03, 0, 0
-            sim.mode |= 0x08
-            sim.pointer = 5
-        elif up == 2 and vp == 1:                # LAB_3F758
-            self.toggle_icon(2, 1, 0x12C0)
-            st.act, st.tend = 5, 0x0E
-        elif up == 2 and vp == 2:                # LAB_3F78C
-            self.set_mode_icons(0, 6)
-            sim.mode |= 0x08
-            sim.pointer = 5
-        elif up == 3 and vp == 3:                # LAB_3F804
-            st.tend, st.p1, st.act = 0x0E, 0, 1
-            sim._tend[sim.player] = 1
-            self.set_tend_icons(3, 3)
-        elif up == 4 and vp == 3:                # LAB_3F82A
-            st.tend, st.p1, st.act = 0x0E, 1, 1
-            sim._tend[sim.player] = 2
-            self.set_tend_icons(4, 3)
-        elif up == 4 and vp == 4:                # LAB_3F850
-            st.tend, st.p1, st.act = 0x0E, 3, 1
-            sim._tend[sim.player] = 3
-            self.set_tend_icons(4, 4)
-        elif up == 5 and vp == 3:                # LAB_3F878
-            st.tend, st.p1, st.act = 0x0E, 2, 1
-            sim._tend[sim.player] = 0
-            self.set_tend_icons(5, 3)
-        elif up == 6 and vp in (0, 1):          # LAB_3F8A0 (vp 0 et 1)
-            # ``_mode = vp + 1`` tel quel (L2098-2100) : les deux cases
-            # donnent exactement les modes 1 et 2. Puis ``_pointer = vp``
-            # (L2115), sauf pour vp == 1 ou la regle speciale L2101-2112
-            # s'applique (MULS #3 puis +1, donc 4 chez le joueur 1, 1 sinon).
-            self.set_mode_icons(vp, 6)
-            sim.mode = vp + 1
-            sim.pointer = (4 if sim.player == 1 else 1) if vp == 1 else vp
-        elif up == 6 and vp == 2:               # LAB_3F8F0 : 4e mode
-            self.set_mode_icons(2, 6)
-            sim.mode = (sim.mode & 0x03) | 0x04
-            sim.pointer = sim.player + 2
-        elif up in (7, 8) and vp == 0:            # LAB_3F924 / LAB_3FB26
+        if up == 0:                                 # LAB_3F670
+            if vp == 0:                             # L1933
+                self.toggle_icon(up, vp, 0x12C0)    # L1935
+                st.act = ACT_ACTION                 # L1942
+                st.p2 = 4                           # L1944 -> _do_flood
+        elif up == 1:                               # LAB_3F6A4
+            if vp == 0 and not sim.paint_map:       # L1948 / L1950
+                self.toggle_icon(up, vp, 0x12C0)    # L1952
+                st.act = ACT_ACTION                 # L1959
+                st.p2 = 3                           # L1961 -> _do_war
+            elif vp == 1:                           # LAB_3F6DA, L1963
+                self.toggle_icon(up, vp, 0x12C0)    # L1965
+                st.act = ACT_VOLCANO                # L1972
+                st.p1 = self.xoff & 0xFF            # L1974 (LAB_52DDF)
+                st.p2 = self.yoff & 0xFF            # L1976 (LAB_52DE1)
+        elif up == 2:                               # LAB_3F71A
+            if vp == 0:                             # L1980
+                self.toggle_icon(up, vp, 0x12C0)    # L1982
+                st.act = ACT_QUAKE                  # L1989
+                st.p1 = self.xoff & 0xFF            # L1991
+                st.p2 = self.yoff & 0xFF            # L1993
+            elif vp == 1:                           # L1996
+                self.toggle_icon(up, vp, 0x12C0)    # L1998
+                st.act = ACT_ACTION                 # L2005
+                st.p2 = 5                           # L2007 -> _do_knight
+            elif vp == 2:                           # L2010
+                self.toggle_icon(up, vp, 0x12C0)    # L2012
+                # L2018-2032 : le sculptage n'est ouvert que si la tribu a
+                # le mana ET le bit du masque de pouvoirs, ou si
+                # `_paint_map` est deja pose.
+                if self._may_paint():
+                    self.set_mode_icons(up, vp)     # L2036
+                    sim.mode = (sim.mode & 0x03) | 0x08   # L2038-2041
+                    sim.pointer = 5                 # L2042
+        elif up == 3:                               # LAB_3F804
+            if vp == 3:                             # L2046
+                st.act = ACT_ACTION                 # L2049
+                st.p2 = 1                           # L2051
+                st.p1 = 0                           # L2053 (CLR.B)
+        elif up == 4:                               # LAB_3F82A
+            if vp == 3:                             # L2057
+                st.act = ACT_ACTION                 # L2060
+                st.p2 = 1                           # L2062
+                st.p1 = 1                           # L2064
+            elif vp == 4:                           # L2067
+                st.act = ACT_ACTION                 # L2070
+                st.p2 = 1                           # L2072
+                st.p1 = 3                           # L2074
+        elif up == 5:                               # LAB_3F878
+            if vp == 3:                             # L2078
+                st.act = ACT_ACTION                 # L2081
+                st.p2 = 1                           # L2083
+                st.p1 = 2                           # L2085
+        elif up == 6:                               # LAB_3F8A0
+            if vp in (0, 1):                        # L2089-2092
+                self.set_mode_icons(up, vp)         # L2094-2096
+                sim.mode = vp + 1                   # L2098-2100
+                if vp == 1:                         # L2101
+                    # L2103-2112 : `MULS #3` sur le joueur (1 si joueur 1,
+                    # 0 sinon), puis `ADDQ #1` -> 4 chez le joueur 1, 1
+                    # partout ailleurs.
+                    sim.pointer = 4 if sim.player == 1 else 1
+                else:                               # L2115
+                    sim.pointer = vp
+            elif vp == 2:                           # L2119
+                self.set_mode_icons(up, vp)         # L2121-2123
+                sim.mode = (sim.mode & 0x03) | 0x04  # L2125-2128
+                sim.pointer = sim.player + 2        # L2129-2131
+        elif up in (7, 8) and vp == 0:              # LAB_3F924 / LAB_3FB26
+            # Colonnes 7 et 8 : Phase 64 (L2134-2405).
             self.toggle_icon(up, vp, 0x12C0)
 
+    def _may_paint(self) -> bool:
+        """Garde du bouton ``(2, 2)`` de la palette - L2018-2032.
+
+        ``D1`` est le mot long ``LAB_52DF0[_player]``, c'est-a-dire la
+        **reserve de mana** du joueur (`Player.mana`, stride 16, L2021) ;
+        il faut ``D1 > LAB_51884`` (``$1388`` = 5000, L24296) **et** le bit
+        4 pose sur ``_stats[_player] + 0x0F``, c'est-a-dire le bit ``0x0010``
+        du masque de pouvoirs (``BTST #4`` L2028). Sinon, et dans tous les
+        cas, ``_paint_map`` suffit (L2030-2032).
+        """
+        sim = self.sim
+        st = sim.stats[sim.player]
+        if sim.players[sim.player].mana > 0x1388 and (st.power_mask & 0x0010):
+            return True
+        return bool(sim.paint_map)
+
     def set_mode_icons(self, x: int, y: int) -> None:
-        """``_set_mode_icons(x, y)`` (L2526-2551) : bascule l'icone ``(6,
-        _mode - 1)`` ou, si un des drapeaux de mode est pose, ``(2, 6)`` /
-        ``(2, 2)``."""
-        if self.sim.flags & 0x04:
-            self.toggle_icon(2, 6, 0x12C0)
-        elif self.sim.flags & 0x08:
+        """``_set_mode_icons(x, y)`` (L2526-2567).
+
+        Trois inversions mutuellement exclusives sur l'octet bas de
+        ``_mode``, puis **toujours** l'icone ``(x, y)`` demandee si
+        ``x >= 0`` (L2557-2564) - c'est par la que le selecteur ``(6, vp)``
+        retourne la case qu'on vient de cliquer.
+
+        ================  ==================  =====================
+        test              icone               ligne
+        ================  ==================  =====================
+        ``mode & 04``     ``(6, 2)``          L2528-2534
+        ``mode & 08``     ``(2, 2)``          L2538-2544
+        sinon             ``(6, _mode - 1)``  L2547-2554
+        ================  ==================  =====================
+
+        ``bitfield_51645`` n'est pas un champ a part : c'est l'octet
+        **bas** du mot ``_mode`` (0x51644 = ``_mode``, 0x51645 =
+        ``bitfield_51645`` ; ``MOVE.W #$0002,(_mode,A4)`` au L1148
+        redonne exactement les deux octets initiaux ``DS.B 1`` = 0 puis
+        ``DC.B $02``).  D'ou ``BTST #2`` = ``mode & 04``, et ``BSET #3``
+        (L2040) = ``mode = (mode & 3) | 8`` - deja fait par ``(2,2)``.
+        """
+        mode = self.sim.mode
+        if mode & 0x04:
+            self.toggle_icon(6, 2, 0x12C0)
+        elif mode & 0x08:
             self.toggle_icon(2, 2, 0x12C0)
         else:
-            self.toggle_icon(6, (self.sim.mode & 0x03) - 1, 0x12C0)
+            self.toggle_icon(6, mode - 1, 0x12C0)
+        if x >= 0:                                # L2557
+            self.toggle_icon(x, y, 0x12C0)        # L2559-2563
 
     def set_tend_icons(self, x: int, y: int) -> None:
         """``_set_tend_icons(x, y)`` (asm L2455).
@@ -1302,7 +1408,11 @@ class Game:
         Les positions sont en coordonnees de la grille isometrique
         (``col * 322 + row * 318 + masque``), comme dans ``_toggle_icon``.
         """
-        tend = self.sim._tend[  self.sim.player]
+        # L2457-2461 : la croix vient de `LAB_52DE8[_player]`, qui est
+        # `players[player].command` (ecrit par `do_action` code 1, L18402,
+        # et initialise a 1 au L1065). `sim._tend` n'existe pas dans le
+        # listing.
+        tend = self.sim.players[self.sim.player].command
         croix = {0: (3, 3), 1: (4, 3), 2: (5, 3), 3: (4, 4)}.get(tend)
         if croix is not None:
             self.toggle_icon(croix[0], croix[1], 0x12C0)
@@ -1407,19 +1517,25 @@ class Game:
         self._do_actions()
 
     def _do_actions(self) -> None:
-        """Execute l'action armee par la palette sur la case visee au clic.
+        """``_get_message`` (L17707, appelee chaque image au L1010).
 
-        L'original ecrit l'action dans ``_stats+2`` et la cible dans
-        ``LAB_516A5/6``, puis la boucle de messages (appellee en fin d'image,
-        L1010) fait le lien. Ici le lien est fait des la meme image, ce qui rend
-        le jeu reactif sans changer la logique.
+        La boucle de messages relit ``act``/``p1``/``p2`` dans la fiche
+        (L17953-17971) et appelle ``_do_action(tribe, p1, p2)`` : la case
+        visee n'est pas un argument a part, c'est ``p1``/``p2``.  Le lien
+        est fait ici meme image pour garder la reactivite du port.
+
+        Deux ecarts assumes :
+
+        1. le declenchement reste subordonne a ``tgt_dirty`` (un clic a
+           rempli la fiche) ; l'asm declenche a **chaque** image et la
+           palette attend donc la fin du tour, executee par ``do_queued``.
+        2. ``sim.tgt`` n'est plus qu'une redite de ``p1``/``p2`` (meme
+           octets, ``LAB_516A5/6``) : il reste la pour le debogage.
         """
         sim = self.sim
         st = sim.stats[sim.player]
         if sim.tgt_dirty and st.act:
-            x, y = sim.tgt[sim.player]
-            self.powers.dispatch(sim.player, st.act, x, y)
-            sim.tgt_dirty = False
+            self.powers.dispatch(sim.player, st.act, st.p1, st.p2)
 
     # ------------------------------------------------- _interogate (asm L2719)
     def interogate(self) -> None:

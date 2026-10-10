@@ -753,6 +753,80 @@ sinon on fait tourner `$34 → $32`, `$32 → $33`, sinon `$33 → $34`+1 ; on �
 
 **13 — enlever** : voir §3.4.
 
+### Les arments de l'interface : `_zoom_map` (ligne 1658, `$3F2F6`)
+
+`_get_message` ne choisit rien : elle lit trois octets de la fiche
+`_stats[player]` (`_stats+0` = `act`, `+1`/`+2` = `p1`/`p2`, L17955-17958) et
+aiguille. Qui les ecrit ? Deux routines seulement, appelees toutes deux
+depuis la boucle d'image (L963-1013).
+
+**La palette d'outils** `LAB_3F666` (L1928-2133), 9 entrees, atteinte quand
+`v >= $92` et que la case n'est pas dans le pave de defilement
+(`up > 5 ou up < 3 ou vp < 0 ou vp > 2`, L1838-1845) :
+
+| (up, vp) | `act` | `p1` | `p2` | effet | lignes |
+|---|---|---|---|---|---|
+| (0, 0) | 14 | - | 4 | `_do_flood` | 1942/1944 |
+| (1, 0) | 14 | - | 3 | `_do_war` (seulement si `!_paint_map`) | 1959/1961 |
+| (1, 1) | 6 | `_xoff & $FF` | `_yoff & $FF` | `_do_volcano` | 1972/1974/1976 |
+| (2, 0) | 3 | `_xoff & $FF` | `_yoff & $FF` | `_do_quake` | 1989/1991/1993 |
+| (2, 1) | 14 | - | 5 | `_do_knight` | 2005/2007 |
+| (2, 2) | - | - | - | sculptage : `mode = (mode & 3) | 8`, `_pointer = 5` | 2012-2042 |
+| (3, 3) | 14 | 0 | 1 | relief, direction 0 | 2049/2051/2053 |
+| (4, 3) | 14 | 1 | 1 | relief, direction 1 | 2060/2062/2064 |
+| (4, 4) | 14 | 3 | 1 | relief, direction 3 | 2070/2072/2074 |
+| (5, 3) | 14 | 2 | 1 | relief, direction 2 | 2081/2083/2085 |
+| (6, 0..2) | - | - | - | selecteur de mode | 2088-2131 |
+
+Un octet que la branche n'ecrit pas garde la valeur de la commande
+precedente (`LAB_3F6A0` saute a l'epilogue sans toucher a `p1`, L1946).
+
+`_xoff`/`_yoff` sont des **mots** ; les etiquettes `LAB_52DDF`/`LAB_52DE1`
+(L25313-25318) designent leur octet bas, seul lu (L1974/1976, L1991/1993).
+
+**La barre d'icones**, zone A `u > $112` (L1706) - `DIVS` vers zero, donc
+`col = (u-$110)/16`, `row = (v-$20)/16` (L1711/L1716) :
+
+| (col, row) | `act` | `p1` | `p2` | lignes |
+|---|---|---|---|---|
+| (0, 0) | 14 | `d0` | 7 | 1729/1731/1733 |
+| (1, 1) | 14 | - | 8 | 1795/1797 |
+| (1, 3) | 14 | - | 6 | 1803/1805 |
+| (2, 2) | 14 | - | 2 | 1820/1822 |
+
+`(9,A5)` est l'octet **bas** du mot pousse par l'appelant (L988) : avec
+`LINK A5,#-14`, ce mot occupe A5+8..9 et l'adresse de retour A5+4..7, donc
+`(9,A5)` = `d0` lui-meme.
+
+**Le clic sur la carte**, `_sculpt` (L7452-7561), une seule fois par clic
+(`_left_button == 0`, L7452) : c'est **le clic** qui choisit l'action, pas la
+palette.
+
+| test | ecrits | lignes |
+|---|---|---|
+| `mode & $08` | `act=4`, `p1=x-1`, `p2=y-1` | 7454-7489 |
+| `mode & $04` | `act=5`, `p1=x-1`, `p2=y-1` | 7491-7526 |
+| defaut | `act=1`, `p1=x`, `p2=y` | 7527-7540 |
+| clic droit, `mode == 2` | `act=2`, `p1=x`, `p2=y` | 7542-7561 |
+
+`p1`/`p2` sont `LAB_516A5/6[player]`, memes octets que `stats+1/+2`.
+
+`bitfield_51645` (0x51645, L24141) n'est **pas** un champ independant :
+`_mode` est l'octet 0x51644 (L24139) et le listing ecrit le **mot** -
+`MOVE.W #$0002,(_mode,A4)` (L1148) pose `00` puis `02`, exactement les deux
+octets initiaux du `.data`. D'ou `BTST #2` = `mode & $04`,
+`BTST #3` = `mode & $08`, et les `BSET #3` / `BSET #2` de la palette
+(L2040, L2127) qui arment marais et aimant ; les `BCLR` (L7479, L7516) les
+desarment apres usage. Ces bits ne sont poses **que** par la palette.
+
+**Le sens du relief** : le code 1 de `_do_action` (L18381-18403) remet la
+croix `_tend_x[p1]`/`_tend_y[p1]` (L2455-2522), puis ecrit
+`LAB_52DE8[tribu*16] = p1` (`command[player]`). Aucun cout, aucun modelage du
+terrain : choisir une direction n'est pas lever le sol.
+
+Les codes 2, 7 et 8 de `_do_action` - armes par (0,0), (1,1) et (2,2) de la
+barre - n'ont pas ete transcrits.
+
 ## 4.4 `_do_action` — seconde table (16 entrées, ligne 18376 `$4B9E0`, table 19008‑19023)
 
 ```python
