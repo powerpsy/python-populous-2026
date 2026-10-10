@@ -5266,9 +5266,85 @@ attendu + 9 vrai ecart) ; `check_assets` OK ; `check_funny` OK ;
 (+4 par citation : `_set_mode_icons`, `_get_message`, `_do_action`,
 `bitfield_51645`).
 
-Ouvert par la phase : les colonnes 7 et 8 de la palette (L2134-2405),
-et les codes 2, 7 et 8 de `_do_action` - que les entrees (0,0), (1,1) et
-(2,2) de la barre arment reellement.
+Ouvert par la phase : les codes 2, 7 et 8 de `_do_action`, que les
+entrees (0,0), (1,1) et (2,2) de la barre d'icones arment
+reellement. Les colonnes 7 et 8 de la palette tombent en Phase 64.
+
+### Phase 64 - Colonnes 7 et 8 de la palette : deplacer la vue, pas lancer un sort
+
+`LAB_3F924` (colonne 7) et `LAB_3FB26` (colonne 8) ne touchent jamais a
+`_stats` : elles n'arment aucune action. Elles deplacent la fenetre et
+choisissent quel habitant on suit - trois boutons du tableau de bord que le
+port laissait en simple inversion d'icone.
+
+============  =========================  =======================================
+entree        routine                   effet
+============  =========================  =======================================
+(7, 0)        `LAB_3F924`  L2134-2226   suit l'aimant
+(7, 1)        `LAB_3FA40`  L2227-2296   prochaine bataille
+(8, 0)        `LAB_3FB26`  L2297-2405   habitant suivant
+============  =========================  =======================================
+
+**(7, 0)** - l'icone s'inverse toujours (L2137). Le recentrage n'a lieu que
+sur l'image du clic **gauche** (`TST.W (8,A5)`, le mot pousse par l'appelant
+au L988). Puis deux chemins :
+
+* `_magnet[player] != 0` -> centre sur la case du peep aimantee
+  (`LAB_5301C` = `_peeps + 8`) et `_set_temp_view(_magnet[player])` ;
+* `_magnet[player] == 0` -> centre sur `LAB_52DE6`, c'est-a-dire
+  `_magnet_to` (la case visee par l'aimant), **sans** `_set_temp_view`.
+
+**(7, 1)** - balayage circulaire a partir de `_view_fight + 1`. Le terme est
+un tour complet : un octet `(-8,A5)` (L2260) note qu'on a deja passe une
+fois, et on sort des que le balayage repasse par `_view_fight + 1`. Le peep
+retenu a le **bit 3 de `state`** (`BTST #3`, L2264 = `ST_BATTLE`) et une vie
+non nulle (`TST.W` sur `LAB_53018` = `_peeps + 4`). Il ecrit `_view_fight`
+(L2285) puis `_set_temp_view(i + 1)`.
+
+**(8, 0)** - meme balayage sur `_view_people`, mais le **filtre depend du
+bouton** (L2345) :
+
+* clic gauche -> `TST.L (LAB_53022 + i*22)` (L2378), soit `_peeps + 14` :
+  le peep a une **cible** ;
+* clic droit -> `state == $01` (L2349), le villageois.
+
+Il faut de plus que le peep soit de la tribu du joueur (`LAB_53015` =
+`_peeps + 1`, L2335) et vivant.
+
+**Le `TST.W (8,A5)` du L2306 ne branche pas.** C'est une instruction isolee,
+residu sans effet : le premier jet du port en avait tire un
+`if not d0: return` qui empechait le clic droit de fonctionner. Le controle
+d'execution l'a attrape - la seule facon de le voir.
+
+**`_set_temp_view`** (L404ac) est enfin une methode du port : si
+`_view_timer` est nul, reculer `_view_who` dans `_old_view_who` ; remettre le
+compteur a 10 images ; ecrire `_view_who = who`. `_interogate` passe
+desormais par elle, ce qui corrige au passage un trou reel : la vue
+temporaire ecrivait dans un champ (`sim._temp_view`) que **personne ne
+lisait**, alors que le rendu suit `_view_who`. Deux champs ajoutes a la
+simulation : `view_fight` et `old_view_who`.
+
+Trois ecarts assumes, tous documents dans le code :
+
+1. `peeps[magnet - 1]` est indexe sans garde par l'asm sur les 208 fiches ;
+   le port verifie `0 <= idx < len(peeps)`.
+2. `TST.L (LAB_53022 + i*22)` teste le **long** de `_peeps + 14`, que le
+   port modelise en octet `target` avec la sentinelle `-1` (convention
+   deja declaree) : le test devient `p.target != -1`.
+3. `sim._temp_view` reste ecrit en redite de `view_who`, pour les controles
+   existants.
+
+#### Verification
+
+`tools/check_icons.py` passe de 33 a **43 controles** : section H, avec six
+peeps fabriques (un mort, un villageois, un temoin, un en bataille avec
+cible, un de l'autre tribu) pour isoler chacun des trois filtres.
+
+Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ;
+`check_assets` OK ; `check_funny` OK ; `check_icons` 43/43 ; `check_level`
+41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_makelevel` OK ;
+`smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ; `coverage` **172/564**.
 
 ### Reste a faire
 
@@ -5283,9 +5359,6 @@ et les codes 2, 7 et 8 de `_do_action` - que les entrees (0,0), (1,1) et
   mais les **echantillons** restent synthetises. Les retrouver demanderait le
   gestionnaire DOS `$3ED` qui relit le module d'origine.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
-* **Les colonnes 7 et 8 de la palette** (L2134-2405) : les 9 premieres entrees et les 6 sites de
-  la barre d'icones sont transcrits et verifies en Phase 63 ; les dernieres entrees
-  (`LAB_3F924` / `LAB_3FB26`) restent a lire.
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit
   un tour par image et un plafond de 50 tours/s en PAL. `TURNS_PER_SECOND`

@@ -267,9 +267,11 @@ def main() -> int:
         g.mouse = (x + 40, y + 40)
         g.left_button = 0
         g.right_button = 0x40
+        avant = g.sim.view_who
         g.interogate()
         results.append(ok("hors de la boite -> aucun changement",
-                          g.sim.view_who == 0))
+                          g.sim.view_who == avant,
+                          "view_who=%d (inchange)" % g.sim.view_who))
     shot(g, "07_survol")
 
     # ------------------------------ _sculpt : la souris designe une case

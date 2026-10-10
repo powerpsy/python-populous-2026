@@ -219,9 +219,11 @@ class Game:
         self.cur_screen = None    # (x, y) du curseur dessine (sprite 0x54)
         self.tgt = [(0, 0), (0, 0)]    # LAB_516A5/6[player] : case visee
         self.tgt_dirty = False         # une cible vient d etre posee
-        self.view_people = 0      # _view_people : village ouvert
-        self._temp_view = 0       # _set_temp_view : survol temporaire
+        self.view_people = 0      # _view_people (L25458) : habitant suivi
+        self.view_fight = 0       # _view_fight (L25456) : prochaine bataille
+        self._temp_view = 0       # `_view_who` du survol temporaire
         self._temp_timer = 0      # _view_timer : 10 images de reaffichage
+        self.old_view_who = 0     # _old_view_who (L25400) : sauvegarde
         # _weapons_order (asm L25460) : 11 mots, remplis a l'execution. L'asm
         # cherche (asm L2800-2811) l'indice i tel que weapons_order[i] ==
         # peep.weapons, i de 1 a 10 : c'est l'ordre d'affichage des armes dans

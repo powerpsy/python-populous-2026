@@ -827,6 +827,22 @@ terrain : choisir une direction n'est pas lever le sol.
 Les codes 2, 7 et 8 de `_do_action` - armes par (0,0), (1,1) et (2,2) de la
 barre - n'ont pas ete transcrits.
 
+Les colonnes 7 et 8 de `LAB_3F666` n'arment rien : elles deplacent la
+fenetre et le suivi.
+
+| (up, vp) | routine | effet | lignes |
+|---|---|---|---|
+| (7, 0) | `LAB_3F924` | suit l'aimant : centre sur la case du peep aimantee (`_peeps+8`) si `_magnet[player] != 0`, avec `_set_temp_view` ; sinon sur `LAB_52DE6` (= `_magnet_to`) | 2134-2226 |
+| (7, 1) | `LAB_3FA40` | balayage circulaire depuis `_view_fight+1`, retient `state & $08` et `life != 0`, ecrit `_view_fight` puis `_set_temp_view(i+1)` | 2227-2296 |
+| (8, 0) | `LAB_3FB26` | balayage depuis `_view_people+1` : clic gauche -> `TST.L (LAB_53022)` (le peep a une cible) ; clic droit -> `state == 1`. Tribu du joueur et vivants | 2297-2405 |
+
+Le `TST.W (8,A5)` du L2306 ne branche pas : residu sans effet. Les deux
+`TST.W (8,A5)` qui comptent (L2143, L2345) testent le **mot pousse par
+l'appelant** (L988), nul sauf sur l'image du clic gauche.
+
+`_set_temp_view` (L404ac) : si `_view_timer == 0`, `_old_view_who =
+_view_who` ; `_view_timer = 10` ; `_view_who = who`.
+
 ## 4.4 `_do_action` — seconde table (16 entrées, ligne 18376 `$4B9E0`, table 19008‑19023)
 
 ```python

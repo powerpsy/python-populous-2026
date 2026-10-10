@@ -314,6 +314,127 @@ def main() -> int:
               "command=%d croix=%s mana %d -> %d"
               % (g.sim.players[0].command, croix, m0, pl.mana))
 
+    print("\nH. colonnes 7 et 8 de la palette (L2134-2405)")
+    from populous.constants import ST_BATTLE, ST_EXPLORER, ST_VILLAGER
+    sim = g.sim
+    joueur = sim.player
+    pl = sim.players[joueur]
+    # six peeps : 1 mort, 2 villageois (tribu du joueur), 3 temoin vivant,
+    # 4 en bataille avec une cible, 5 de l'autre tribu
+    sim.no_peeps = 6
+    for j in range(len(sim.peeps)):
+        pj = sim.peeps[j]
+        pj.life = 0
+        pj.state = 0
+        pj.tribe = 1
+        pj.target = -1
+        pj.block = 0
+    sim.peeps[2].life = 100
+    sim.peeps[2].state = ST_VILLAGER
+    sim.peeps[2].tribe = joueur
+    sim.peeps[2].block = (20 << 6) | 30
+    sim.peeps[3].life = 10
+    sim.peeps[3].block = (5 << 6) | 12
+    sim.peeps[3].tribe = joueur
+    sim.peeps[4].life = 50
+    sim.peeps[4].state = ST_BATTLE
+    sim.peeps[4].tribe = joueur
+    sim.peeps[4].target = 3
+    sim.peeps[4].block = (10 << 6) | 40
+    sim.peeps[5].life = 80
+    sim.peeps[5].state = ST_VILLAGER
+    sim.peeps[5].block = (2 << 6) | 3
+
+    # ---- H1. (7,0) suivre l'aimant -------------------------------------
+    pl.magnet = 0
+    pl.magnet_to = (20 << 6) | 30
+    g.xoff, g.yoff, sim.view_who, sim._temp_timer = 0, 0, 0, 0
+    g.palette(7, 0, 1)
+    check("L2135-2224 : magnet == 0 -> centre sur magnet_to, sans _set_temp_view",
+          (g.xoff, g.yoff) == (27, 17) and sim.view_who == 0
+          and sim._temp_timer == 0,
+          "xoff/yoff=%s view_who=%d timer=%d"
+          % (str((g.xoff, g.yoff)), sim.view_who, sim._temp_timer))
+    pl.magnet = 4          # `_magnet` est un index + 1
+    g.xoff, g.yoff, sim.view_who, sim._temp_timer = 0, 0, 7, 0
+    g.palette(7, 0, 1)
+    check("L2149-2207 : magnet != 0 -> centre sur le peep et _set_temp_view",
+          (g.xoff, g.yoff) == (9, 2) and sim.view_who == 4
+          and sim._temp_timer == 10 and sim.old_view_who == 7,
+          "xoff/yoff=%s view_who=%d ancien=%d timer=%d"
+          % (str((g.xoff, g.yoff)), sim.view_who, sim.old_view_who,
+             sim._temp_timer))
+    g.xoff, g.yoff = 0, 0
+    g.palette(7, 0, 0)
+    check("L2143 : sans clic gauche, rien ne bouge",
+          (g.xoff, g.yoff) == (0, 0), "xoff/yoff=%s" % str((g.xoff, g.yoff)))
+
+    # ---- H2. (7,1) prochaine bataille ----------------------------------
+    for j in (1, 3, 5):
+        sim.peeps[j].state = 0
+    sim.view_fight = 0
+    g.xoff, g.yoff = 0, 0
+    g.palette(7, 1)
+    check("L2228-2290 : balaye depuis _view_fight+1, retient state & 08",
+          (g.xoff, g.yoff) == (37, 7) and sim.view_fight == 4
+          and sim.view_who == 5,
+          "xoff/yoff=%s view_fight=%d view_who=%d"
+          % (str((g.xoff, g.yoff)), sim.view_fight, sim.view_who))
+    sim.peeps[4].state = 0
+    g.xoff, g.yoff = 0, 0
+    check("L2236-2258 : sans bataille, rien ne bouge",
+          (g.xoff, g.yoff) == (0, 0) and sim.view_fight == 4,
+          "xoff/yoff=%s view_fight=%d" % (str((g.xoff, g.yoff)), sim.view_fight))
+    sim.peeps[4].state = ST_BATTLE
+
+    # ---- H3. (8,0) prochain habitant -----------------------------------
+    sim.view_people = 0
+    g.xoff, g.yoff = 0, 0
+    g.palette(8, 0, 1)
+    check("L2345-2370 : clic gauche -> peep avec une cible (TST.L LAB_53022)",
+          (g.xoff, g.yoff) == (37, 7) and sim.view_people == 4
+          and sim.view_who == 5,
+          "xoff/yoff=%s view_people=%d view_who=%d"
+          % (str((g.xoff, g.yoff)), sim.view_people, sim.view_who))
+    sim.view_people = 0
+    g.xoff, g.yoff = 0, 0
+    g.palette(8, 0, 0)
+    check("L2346-2370 : clic droit -> peep villageois (state == 1)",
+          (g.xoff, g.yoff) == (27, 17) and sim.view_people == 2
+          and sim.view_who == 3,
+          "xoff/yoff=%s view_people=%d view_who=%d"
+          % (str((g.xoff, g.yoff)), sim.view_people, sim.view_who))
+    sim.view_people = 0
+    for j in (2, 5):
+        sim.peeps[j].state = ST_EXPLORER
+    g.xoff, g.yoff = 0, 0
+    g.palette(8, 0, 0)
+    check("L2348-2350 : sans villageois, le clic droit ne trouve rien",
+          (g.xoff, g.yoff) == (0, 0) and sim.view_people == 0,
+          "xoff/yoff=%s view_people=%d" % (str((g.xoff, g.yoff)), sim.view_people))
+    sim.peeps[2].state = ST_VILLAGER
+    sim.peeps[5].state = ST_VILLAGER
+    for jj in range(len(sim.peeps)):
+        sim.peeps[jj].target = -1
+    sim.view_people = 0
+    g.xoff, g.yoff = 0, 0
+    g.palette(8, 0, 1)
+    check("L2378-2379 : aucun peep avec une cible -> clic gauche a vide",
+          (g.xoff, g.yoff) == (0, 0) and sim.view_people == 0,
+          "xoff/yoff=%s view_people=%d" % (str((g.xoff, g.yoff)),
+                                              sim.view_people))
+    sim.peeps[4].target = 3
+
+    # ---- H4. les trois icones sont bien inversees -----------------------
+    g.icon_toggles.clear()
+    g.palette(7, 0, 1)
+    g.palette(7, 1, 0)
+    g.palette(8, 0, 1)
+    check("L2137/L2230/L2300 : les trois icones (7,0)/(7,1)/(8,0)",
+          sorted([k for k in g.icon_toggles if k[2] == 0x12C0])
+          == [(7, 0, 0x12C0), (7, 1, 0x12C0), (8, 0, 0x12C0)],
+          "toggles=%s" % sorted(g.icon_toggles))
+
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0
 

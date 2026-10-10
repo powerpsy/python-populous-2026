@@ -58,7 +58,7 @@ from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
 from populous.constants import (ACT_ACTION, ACT_LOWER, ACT_MAGNET,  # noqa: E402
                                 ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
                                 ACT_TREE, ACT_VOLCANO, BLK_FLAT,
-                                MANA_VALUES, ST_VILLAGER)
+                                MANA_VALUES, ST_BATTLE, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
 from populous.render import (SCREEN_H, SCREEN_W, Renderer,  # noqa: E402
                              clamp_off, map_colours)
@@ -1193,7 +1193,7 @@ class Game:
                                           - (1 if vp == 0 else 0))
                 return self._zoom_map_end()
             # ---- 4. la palette d'outils (LAB_3F666) : 9 entrees
-            self.palette(up, vp)
+            self.palette(up, vp, d0)
         # ---- epilogue LAB_3FCB6 : bornage + anti-rebond
         self._zoom_map_end()
 
@@ -1221,7 +1221,7 @@ class Game:
     # bas-gauche, celle des outils de terrain et de pouvoirs.
     # Coordonnees a l'ecran du centre de chaque case (voir ``_uv``) :
     #     mx = 16*(up - vp + 1)      my = 128 + 8*(up + vp)
-    def palette(self, up: int, vp: int) -> None:
+    def palette(self, up: int, vp: int, d0: int = 0) -> None:
         """Une entree de la palette a ete cliquee - ``LAB_3F666`` (L1928-2133).
 
         La table de saut ``LAB_3FC92`` (L2408-2417) est indexee par la
@@ -1338,9 +1338,151 @@ class Game:
                 self.set_mode_icons(up, vp)         # L2121-2123
                 sim.mode = (sim.mode & 0x03) | 0x04  # L2125-2128
                 sim.pointer = sim.player + 2        # L2129-2131
-        elif up in (7, 8) and vp == 0:              # LAB_3F924 / LAB_3FB26
-            # Colonnes 7 et 8 : Phase 64 (L2134-2405).
-            self.toggle_icon(up, vp, 0x12C0)
+        elif up == 7:                               # LAB_3F924
+            if vp == 0:                             # L2135
+                self._palette_magnet(up, vp, d0)    # L2137-2226
+            elif vp == 1:                           # L2228
+                self._palette_fight(up, vp)         # L2228-2296
+        elif up == 8:                               # LAB_3FB26
+            if vp == 0:                             # L2298
+                self._palette_people(up, vp, d0)    # L2300-2405
+    def _palette_magnet(self, up: int, vp: int, d0: int) -> None:
+        """``LAB_3F924`` (L2134-2226) - colonne 7, ligne 0.
+
+        Suivre l'aimant. L'icone est inversee des qu'on la clique ; le
+        recentrage n'a lieu que sur l'image du clic gauche (`TST.W
+        (8,A5)` = le mot pousse par l'appelant, L988). Ensuite :
+
+        * ``_magnet[player] != 0`` -> centre sur la **case** du peep
+          aimante (``LAB_5301C`` = ``_peeps + 8``) et
+          ``_set_temp_view(magnet)`` ;
+        * ``_magnet[player] == 0`` -> centre sur la case visee par
+          l'aimant (``LAB_52DE6`` = ``_magnet_to``), sans
+          ``_set_temp_view``.
+
+        Les deux branches font ``- 3`` : la fenetre de 8 cases garde
+        3 cases de marge avant le centre.
+        """
+        self.toggle_icon(up, vp, 0x12C0)             # L2137-2142
+        if not d0:                                 # L2143
+            return                                 # LAB_3F98E
+        sim = self.sim
+        pl = sim.players[sim.player]
+        if pl.magnet:                              # L2149
+            idx = pl.magnet - 1
+            if not (0 <= idx < len(sim.peeps)):    # ECART : l'asm indexe
+                return                             # les 208 fiches sans
+            b = sim.peeps[idx].block                # LAB_5301C + i*22
+        else:                                      # LAB_3FA0A
+            b = pl.magnet_to                       # LAB_52DE6
+        self.xoff = (b & 0x3F) - 3                  # L2214-2223
+        self.yoff = (b >> 6) - 3
+        if pl.magnet:                              # L2205
+            self.set_temp_view(pl.magnet)
+
+    def _palette_fight(self, up: int, vp: int) -> None:
+        """``LAB_3FA40`` (L2227-2296) - colonne 7, ligne 1.
+
+        Prochaine bataille. Balayage circulaire a partir de
+        ``_view_fight + 1``, borne par un tour complet (l'octet
+        `(-8,A5)` du L2260) : on s'arrete des qu'on retombe sur la case
+        de depart. Le peep retenu a le **bit 3 de `state`** pose
+        (``ST_BATTLE``) et une vie non nulle.
+        """
+        self.toggle_icon(up, vp, 0x12C0)             # L2230-2235
+        sim = self.sim
+        n = sim.no_peeps
+        if n == 0:                                 # L2236
+            return
+        if sim.view_fight >= n:                     # L2238-2241
+            sim.view_fight = 0
+        i = sim.view_fight + 1                      # L2243-2245
+        tour = 0                                    # (-8,A5) L2246
+        while True:                                 # LAB_3FA86
+            if i >= n:                              # L2248-2251
+                i = 0
+            if sim.view_fight + 1 == i and tour:    # L2253-2258
+                return
+            tour = 1                                # L2260
+            p = sim.peeps[i]
+            if not (p.state & ST_BATTLE) or p.life == 0:
+                i += 1                              # LAB_3FB1A
+                continue
+            self.xoff = (p.block & 0x3F) - 3         # L2274-2284
+            self.yoff = (p.block >> 6) - 3
+            sim.view_fight = i                      # L2285
+            self.set_temp_view(i + 1)                # L2286-2290
+            return
+
+    def _palette_people(self, up: int, vp: int, d0: int) -> None:
+        """``LAB_3FB26`` (L2297-2405) - colonne 8, ligne 0.
+
+        Prochain habitant. Meme balayage circulaire que `(7,1)` mais
+        sur ``_view_people``, et le filtre depend du **bouton** :
+
+        * clic **gauche** (`d0 != 0`) -> "le long" de ``LAB_53022``
+          (``_peeps + 14``) est non nul, c'est-a-dire que le peep a
+          une **cible** ;
+        * clic **droit** (`d0 == 0`) -> `state == $01` (villageois).
+
+        Il faut de plus que le peep soit de la tribu du joueur
+        (``LAB_53015`` = ``_peeps + 1``) et vivant. Le ``TST.W
+        (8,A5)`` du L2306 ne branche pas : c'est un residu, il ne
+        teste rien ici - les deux boutons declenchent la recherche, ils
+        ne changent que le filtre.
+        """
+        self.toggle_icon(up, vp, 0x12C0)             # L2300-2305
+        sim = self.sim
+        n = sim.no_peeps
+        if n == 0:                                 # L2307
+            return
+        if sim.view_people >= n:                     # L2309-2312
+            sim.view_people = 0
+        i = sim.view_people + 1                      # L2314-2316
+        tour = 0                                    # L2317
+        while True:                                 # LAB_3FB6E
+            if sim.view_people + 1 == i:             # L2319-2321
+                if tour:                             # L2323-2324
+                    return
+            if i == n:                              # L2326-2329
+                i = 0
+            tour = 1                                # L2331
+            p = sim.peeps[i]
+            if p.tribe != sim.player:               # L2334-2338
+                i += 1
+                continue
+            if p.life <= 0:                         # L2341-2343
+                i += 1
+                continue
+            if d0:                                  # L2345 -> LAB_3FC26
+                if p.target == -1:                  # L2378-2379 `TST.L`
+                    i += 1                          # LAB_3FC86
+                    continue
+            elif p.state != ST_VILLAGER:            # L2348-2350
+                i += 1
+                continue
+            self.xoff = (p.block & 0x3F) - 3         # L2383-2393
+            self.yoff = (p.block >> 6) - 3
+            sim.view_people = i                      # L2365 / L2394
+            self.set_temp_view(i + 1)                # L2366-2370 / L2395
+            return
+
+    def set_temp_view(self, who: int) -> None:
+        """``_set_temp_view(who)`` (L404ac).
+
+        Trois instructions : si ``_view_timer`` est nul, reculer
+        ``_view_who`` dans ``_old_view_who`` ; remettre le compteur a
+        10 images ; ecrire ``_view_who = who``.  C'est la "vue
+        temporaire" : au bout des 10 images on revient a l'ancien
+        suivi.
+        """
+        sim = self.sim
+        if sim._temp_timer == 0:                   # L404ac-404ba
+            sim.old_view_who = sim.view_who
+        sim._temp_timer = 10                       # L404bc
+        sim.view_who = who                         # L404c2
+        sim._temp_view = who          # redite du port (lecteur
+                                    # historique de `_temp_view`)
 
     def _may_paint(self) -> bool:
         """Garde du bouton ``(2, 2)`` de la palette - L2018-2032.
@@ -1559,8 +1701,7 @@ class Game:
                     sim.view_who = who             # selection
                     sim._temp_timer = 0            # _view_timer = 0
                 else:                             # bouton droit enfonce
-                    sim._temp_view = who           # _set_temp_view(who)
-                    sim._temp_timer = 10           # 10 images d'affichage
+                    self.set_temp_view(who)       # `_set_temp_view`
                 return
 
     def _key(self, key: int) -> None:
