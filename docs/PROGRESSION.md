@@ -4651,6 +4651,211 @@ Deux morceaux restent **non transcrits**, et le sont dits comme tels :
     tools/stress.py 2000 8      : 8/8 parties robustes
     tools/coverage.py           : 160/393 - 63 alias declare - 0 a coder
 
+### Phase 59 - `_make_level` : le sculptage, et trois compteurs oublies
+
+#### Ce qui a ete transcrit
+
+`_make_level` (L9017-9144) est la routine par laquelle un **villageois**
+demande a l'Amiga de lui aplanir le relief. Elle n'est pas dans la boucle
+d'IA : elle est appelee depuis `_move_peeps`, branche villageois, et son
+rendu va dans `peeps[i]+0x14`. Jusqu'ici elle n'existait pas dans le port.
+
+.. code-block:: none
+
+    if power_mask bit0 == 0  or  flags bit2 != 0 :  return   (L9026-9029)
+    x = block & $3F ;  y = block >> 6 ;  centre = _alt[y*65+x]
+    pour (dx, dy) dans _a_flat, 81 paires, D6 de 0 a $A2 pas de 2 :
+        xx = x+dx ; yy = y+dy
+        si xx ou yy hors [0, $40] : suivant                    (L9062-9069)
+        idx = yy*64 + xx  (mot)                                (L9070-9073)
+        si map_blk[idx] == $2F et flags bit3 == 0 :
+            map_blk[idx] += 1          # $2F -> $30, en memoire
+            act=2 ; p1=xx ; p2=yy ; queued=1 ; return 0        (L9080-9092)
+        delta = centre - _alt[yy*65+xx]                        (L9093-9102)
+        si delta >  0 : act=1 ; queued=1 ; return 0            (L9103-9114)
+        si delta <  0 :                                         -> LAB_44B38
+        si delta == 0 et (blk == $42 ou blk == $35) :            -> LAB_44B38
+        sinon : suivant                                         (L9118-9125)
+        LAB_44B38 : si flags bit3 : suivant                    (L9127-9128)
+            act=2 ; queued=1 ; return 0                        (L9129-9138)
+    return 1                                                   (L9143-9144)
+
+`delta > 0` veut dire que le sommet du centre est **plus haut** que celui du
+voisin : on leve le voisin (`act = 1`). `delta < 0`, on le creuse. A
+altitude egale, seule une ruine (`$42`) ou un marais (`$35`) merite un
+creusement. Le bit 3 de `flags` bloque le creusement **et** les rochers, mais
+pas le releve : L9105 n'a pas de `BTST`.
+
+#### La table `_a_flat` : l'ordre des lignes de dx compte
+
+Les 162 octets de `_a_flat` (L25174-25185) forment un carre 9x9. Les
+lignes de `dx` n'y vont **pas** de -4 a +4 :
+
+.. code-block:: none
+
+    dx : -4, -3, +4, +3, -2, +2, -1, +1, 0
+    dy : -4 .. +4  (dans chaque ligne)
+
+La routine revient sur la **premiere** paire qui satisfait un test : l'ordre
+decide donc laquelle des 81 cases ouvre le terrain, et une reecriture "plus
+lisible" en parcourant dx de -4 a +4 ne donnerait pas le meme jeu. La table
+est donc transcrite telle quelle, et `tools/check_makelevel.py` la
+**redecodee depuis le listing a chaque execution** avant de la comparer a
+`populous/constants.A_FLAT` : un ecart de transcription sur l'ordre sauterait
+tout de suite.
+
+#### Les deux rendus de la porte d'entree
+
+`BTST #0,($F,A0)` lit l'octet `st+0x0F`. Sur un 68000 gros-boutiste, `+0x0E`
+= bits 15-8 et `+0x0F` = bits 7-0 : le test porte sur `power_mask & 1`. Le
+chemin bloque saute a `LAB_449F8` **sans ecrire D0**, qui vaut alors
+l'adresse `&stats[tribe]` (L9023). Le dispatch lit ce rendu par
+`TST.B ($14,A0)` (L3779) : seul compte la nullite. Le port rend donc `0xA4`
+ou `0xD2`, les octets bas de `$516A4` / `$516D2` au chargement tetracorp, et
+non `0` - ce qui declencherait un rappel a chaque tour. Ecart marque dans le
+code : le port n'a pas d'adresse a rendre.
+
+#### Le debordement `idx >= 4096`
+
+Les bornes `0..$40` de L9062-9069 sont **inclusives** : `xx == 64` ou
+`yy == 64` passe, et `idx = yy*64+xx` vaut alors jusqu'a 4160. Aucun test ne
+compare l'indice a 4096. La preuve que ce n'est pas un accident vient de la
+table `.bss` (L25431-25434) :
+
+.. code-block:: none
+
+    _map_blk   DS.L $400   ;56376
+    _map_alt   DS.L $400   ;57376      soit +$1000 octets
+
+Le 68000 lit donc, et `ADDQ.B #1` de L9082 **ecrit**, dans `_map_alt`. Le
+port reproduit ce enpoint avec le meme decalage (`_map_alt` = `map.alt`).
+`tools/check_makelevel.py` envoie un cas cible ou le rocher n'existe que
+dans `_map_alt[59]` et ou l'ecriture doit y tomber.
+
+#### Les trois globaux et les deux compteurs que `_make_level` lit
+
+La routine n'est pas seule : son appel est cadre par des etats poses
+ailleurs dans `_move_peeps`, et **trois** d'entre eux n'existaient pas dans
+le port.
+
+`_a_flat_block` et `_all_of_city` sont deux **globaux** (adresses fixes
+`$5C3A0` / `$5C3E6`), remis a zero a chaque appel de `_check_life`
+(L20970 / L20965) et lus ensuite par `_move_peeps` :
+
+.. code-block:: none
+
+    L3785  TST.W _a_flat_block / BEQ  -> la premiere branche de `_make_level`
+                                         est sautee si aucune case $0F n'est
+                                         adjacente au village
+    L4042  TST.W _a_flat_block / BNE  -> le village est repose (set_town(0))
+    L4047  CMPI.W #$09,_all_of_city / BGE -> idem, sauf grande ville enclavee
+
+Comme ce sont des globaux, un **retour premature** de `_check_life` garde
+l'accumulation partielle : ils ne peuvent pas devenir des variables locales
+rendues par la fonction. Portes dans `Game.__init__`, ecrits par
+`Game.check_life`, lus par `Game.move_peeps`. `tools/check_makelevel.py`
+verifie par execution le decalage 0 -> 1 -> 0 et le comptage 2 -> 1 -> 0
+(k=0 lit `bk2[centre]` lui-meme, le centre compte).
+
+Ensuite, la pression de construction, qui n'existait nulle part :
+
+.. code-block:: none
+
+    L3276-3289  (-32)[t] = good_castles[t] * 3 + good_towns[t]
+    L3806       CMPI.W #$0003,(-32)[t] / BGE  -> pas d'appel sur case submergee
+    L4361-4362  good_towns[t]   = LAB_52DEA[t*16] = town_count
+    L4366-4370  good_castles[t] = (-40,A5)[t]
+
+`good_towns` et `good_castles` sont les champs `+0x16` et `+0x14` de
+`_stats`, c'est-a-dire `Tribe.towns` et `Tribe.castles`. **Le port ne les
+ecrivait jamais.** La consequence est plus large qu'une simple porte :
+`_devil_effect` lit `total = st.towns + st.castles` (L9611-9612) pour decider de
+construire ou non une ville, et ce total valait **0 en permanence** - le
+seuil `threshold*2 + $0F` n'etait donc jamais atteint, et l'IA ne construisait
+jamais de ville. Les deux ecritures de fin de tour sont ajoutees, et la
+pression qui en decoule est testee par execution (pression 0 et 2 : appelee ;
+pression 3 : fermee).
+
+Enfin `(-40,A5)` - le compteur de "grandes villes", incremente a L3643-3644
+quand `score >= $0BEA` - n'etait pas non plus transcrit. Il devient la
+variable locale `big_town` de `move_peeps`, et c'est lui qui alimente
+`st.castles`.
+
+La pastille du village (L4016-4036) est cablee en meme temps : elle est
+dessinee quand `_toggle == 0` (`TST.W / BNE`), c'est-a-dire l'**inverse** des
+deux autres pastilles (L4186 et L4221, `BEQ`), et sa couleur vient de
+`stats[tribe].colour` et non des 15/8 des units.
+
+#### Deux ecarts de `_one_block_flat` corriges au passage
+
+`_one_block_flat` (L9148-9296) partage avec `_make_level` la meme porte
+`BTST #0,($F,A0)`. Deux erreurs de transcription s'y trouvaient :
+
+* **le masque** : `power_mask & 0x100` au lieu de `& 0x0001`. Voir plus bas ;
+* **la comparaison du mana** : `CMPI.L #$00000014,(LAB_52DF0+t*16)` est une
+  comparaison **LONG** signee, mais le port faisait `cmp_word_lt(to_word(mana),
+  0x14)` - troncature au mot bas, puis relecture en **signe**. Des que
+  `mana & $FFFF >= 32768` - ou vaut un multiple de 65536 - la routine sortait
+  a tort et l'explorateur cessait de sculpter le relief. Corrige en
+  `m68k.s32(pl.mana) < 0x14`.
+
+#### `power_mask` : pourquoi `& 0x100` etait faux
+
+Le 68000 est **gros-boutiste**. `BTST #n,(W)` lit un octet : `#n` est le bit
+`n` de cet octet. Pour un mot `W` :
+
+.. code-block:: none
+
+    byte a W     = bits 15-8   ->  BTST #n,(W)     ==  1 << (8 + n)
+    byte a W+1   = bits  7-0   ->  BTST #n,(W+1)   ==  1 << n
+
+Le listing place le mot `power_mask` dans `(-6,A5)` (L9315) et dans le champ
+`+0x0E` de la fiche. L'octet `($F,A0)` est donc le **deuxieme** octet, et
+`(-6,A5)` le premier :
+
+.. code-block:: none
+
+    L9026 / L9172   BTST #0,($F,A0)   -> $0001      (port : $0100)
+    L9316           BTST #0,(-6,A5)   -> $0100      (port : $0001)
+    L9349           BTST #7,(-5,A5)   -> $0080      (port : $8000)
+    L9365           BTST #5,(-5,A5)   -> $0020      (port : $2000)
+    L9409           BTST #6,(-5,A5)   -> $0040      (port : $4000)
+    L9505           BTST #3,(-5,A5)   -> $0008      (port : $0800)
+    L9797           BTST #2,($F,A2)   -> $0004      (port : $0400)
+    L9859           BTST #1,($F,A2)   -> $0002      (port : $0200)
+
+Chaque masque du port est exactement le **swap octets** de la valeur juste,
+soit l'hypothese "octet bas d'abord". Elle est contredite par le listing
+lui-meme : L9510-9511 lit le **mot entier** par `MOVE.W (-6,A5),D0` puis
+`AND.W #$0050,D0`, et le port avait `m & 0x0050` - juste. Les deux modeles
+ne peuvent pas coexister sur le meme champ.
+
+Corrige dans `sim.py` (les deux sites de `_make_level` et `_one_block_flat`,
+dont un nouveau). **Les huit masques de `powers.py` portent encore l'erreur
+petit-boutiste** : `check_devil.py` les partage dans sa reference et dans ses
+cas cibles. Laisse volontairement pour une phase separee - la correction
+change le comportement de l'IA en mode Conquest, la seule ou `power_mask`
+n'est pas `$FFFF`, et merite son propre controle.
+
+#### Verification
+
+* `tools/check_makelevel.py` (nouveau) - reference independante ecrite en
+  labels et sauts (`L9035`, `LAB_44AC8`, `LAB_44B38`...), aucune
+  reconnaissance partagee avec `populous/` : **812 cas** (12 cibles + 800
+  aleatoires), **5/5** chemins de sortie, plus les derives
+  (`_a_flat` redecode du listing, debordement `_map_alt`, `_check_life`
+  globaux, snapshot de fin de tour, porte de pression).
+* `tools/autopilot.py` **68/68**, `tools/check_render.py` **9 vrais ecarts**
+  (residu attendu inchange), `tools/check_assets.py` OK,
+  `tools/check_funny.py` OK, `tools/check_level.py` **41/41**,
+  `tools/check_devil.py` **13/13** (621 cas).
+* `tools/stress.py 2000 8` **8/8 parties robustes**, `tools/smoke_sim.py` OK.
+* `tools/coverage.py` : **163/564 routines**, dont **64 par alias declare**
+  (`_make_level` ajoute). `PLANIFIE` reste vide.
+
+`check_render` ne couvre que la fenetre 8x8 du rendu ; les compteurs de
+Phase 59 ne s'y voient pas.
+
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

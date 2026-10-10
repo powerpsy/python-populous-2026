@@ -40,6 +40,31 @@ OFFSET_VECTOR = [
 N_NEIGHBOURS = 17                  # ville      (CMP #$11, ligne 5937)
 N_BIG_NEIGHBOURS = 25              # grande ville (CMP #$19, lignes 5904/5978)
 
+# _a_flat, A4+$9704 (asm 25174-25185) : 162 octets = 81 paires (dx, dy).
+# Le 9x9 des sommets compares par `_make_level` (L9049-9070) : chaque
+# iteration lit `_a_flat[D6]` (dx) et `_a_flat[D6+1]` (dy), D6 avancant
+# de 2 jusqu'a $A2. Les **lignes** de dx n'vont pas de -4 a +4 dans
+# l'ordre : l'ordre du listing est
+#     -4, -3, +4, +3, -2, +2, -1, +1, 0
+# et les colonnes de dy vont toujours de -4 a +4. L'ordre compte : la
+# routine revient sur la premiere paire qui satisfait un test, donc il
+# decide laquelle des 81 cases « ouvre » le terrain. Valeurs extraites
+# des DC.L/DC.W par script (lecture big-endian), pas a l'oeil.
+A_FLAT = [
+    (-4, -4), (-4, -3), (-4, -2), (-4, -1), (-4, 0), (-4, 1), (-4, 2),
+    (-4, 3), (-4, 4), (-3, -4), (-3, -3), (-3, -2), (-3, -1), (-3, 0),
+    (-3, 1), (-3, 2), (-3, 3), (-3, 4), (4, -4), (4, -3), (4, -2),
+    (4, -1), (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (3, -4), (3, -3),
+    (3, -2), (3, -1), (3, 0), (3, 1), (3, 2), (3, 3), (3, 4), (-2, -4),
+    (-2, -3), (-2, -2), (-2, -1), (-2, 0), (-2, 1), (-2, 2), (-2, 3),
+    (-2, 4), (2, -4), (2, -3), (2, -2), (2, -1), (2, 0), (2, 1), (2, 2),
+    (2, 3), (2, 4), (-1, -4), (-1, -3), (-1, -2), (-1, -1), (-1, 0),
+    (-1, 1), (-1, 2), (-1, 3), (-1, 4), (1, -4), (1, -3), (1, -2),
+    (1, -1), (1, 0), (1, 1), (1, 2), (1, 3), (1, 4), (0, -4), (0, -3),
+    (0, -2), (0, -1), (0, 0), (0, 1), (0, 2), (0, 3), (0, 4),
+]
+N_A_FLAT = 81                      # CMP.W #$00a2 / D6 avance de 2 (L9141)
+
 # _to_offset, $0005180A (asm 24272-24273) : 8 directions, ordre N NE E SE S SO O NO
 TO_OFFSET = [-64, -63, 1, 65, 64, 63, -1, -65]
 

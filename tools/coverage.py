@@ -50,6 +50,7 @@ ALIAS: dict[str, str] = {
     "_set_devil_magnet": "Game.set_devil_magnet",
     "_do_place_funny": "Game.do_place_funny",
     "_check_life": "Game.check_life",
+    "_make_level": "Game.make_level",                # Phase 59 : L9017
     "_set_town": "Game.set_town",
     "_join_battle": "Game.join_battle",
     "_set_magnet_to": "Game.set_magnet_to",

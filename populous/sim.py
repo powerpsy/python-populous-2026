@@ -29,8 +29,9 @@ from __future__ import annotations
 
 from . import m68k
 from .constants import (
-    BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_SWAMP,
-    BLK_TRIBE0, BLK_WATER,
+    A_FLAT,
+    BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_RUINS,
+    BLK_SWAMP, BLK_TRIBE0, BLK_WATER,
     FRAME_AGE, FRAME_TOWN, FUNNY, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
     PEEP_SLOTS, BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
     ST_DROWNING,
@@ -191,6 +192,11 @@ class Game:
         self.serial_off = 0
         self.flags = 0x10        # LAB_518A7 (L24311-24312, DC.B $10) :
                                    # bit0 tue dans l'eau, bit2 gele l'IA
+        # Globaux remis a zero par `_check_life` (L20965 / L20970) puis lus
+        # par `_move_peeps` juste apres l'appel : L3785 / L4042 pour
+        # `a_flat_block`, L4047 pour `all_of_city`.
+        self.a_flat_block = 0
+        self.all_of_city = 0
         self.battle_won = [0, 0]
         # miroirs de `players[t].magnet_to` (asm A4+$ae78 / A4+$ae76)
         self.god_magnet = 0x820
@@ -323,7 +329,12 @@ class Game:
         own = tribe + 0x1F
         map_blk, map_bk2 = self.map.blk, self.map.bk2
         score = 0
-        all_of_city = 0
+        # `_all_of_city` (L20965, CLR.W a l'entree) et `_a_flat_block`
+        # (L20970, CLR.W a l'entree) sont des **globaux** : un retour
+        # premature garde l'accumulation partielle. On ne peut donc pas
+        # les passer en variables locales rendues par la fonction.
+        self.all_of_city = 0
+        self.a_flat_block = 0
         centre_bk2 = map_bk2[block]
 
         for k in range(N_NEIGHBOURS):
@@ -344,16 +355,24 @@ class Game:
 
             nb = block + off
             v = map_blk[nb]
-            if v == own or v == BLK_FLAT:
+            favorable = v == own                  # L20985-20986, BEQ LAB_4DDCC
+            if not favorable and v == BLK_FLAT:
+                favorable = True                  # L20987-20989
+                # L20989 `MOVE.W #$0001,_a_flat_block` : une case **libre
+                # et a plat** est adjacente au village. Ce global est lu
+                # ensuite par `_make_level` (L3785) et par la remise en
+                # place du village (L4042).
+                self.a_flat_block = 1
+            if not favorable and k == 0:
+                return 0                     # LAB_4DDA : centre non constructible
+            if favorable:
                 if m68k.test_word_eq_zero(score):
                     score = 0x32            # 50 a la premiere case favorable
                 score = m68k.add_word(score, 0x0F)    # +15 par case
-            elif k == 0:
-                return 0                     # LAB_4DDA : centre non constructible
 
             d1 = map_bk2[nb]
             if k < 9 and centre_bk2 == 0x2A and 0x29 <= d1 <= 0x2C:
-                all_of_city += 1
+                self.all_of_city += 1             # L21014 ADDI.W #1,_all_of_city
             elif k != 0 and 0x20 < d1 <= 0x2C:
                 return 0                     # LAB_4DE1E : enclave par un batiment
 
@@ -943,6 +962,20 @@ class Game:
         vie_max = [0, 0]
         age_max = [0, 0]
         age_min = [0x4E1F, 0x4E1F]
+        # (-32,A5), L3276-3289 : la « pression de construction », calculee
+        # en tete de tour a partir des snapshots du **tour precedent** :
+        #     (-32)[t] = good_castles[t] * 3 + good_towns[t]
+        # `good_castles` = `_stats+0x14` = `st.castles`, `good_towns` =
+        # `_stats+0x16` = `st.towns` ; les deux ne sont ecrits qu'en fin
+        # de tour (L4362 / L4370). Lu une seule fois, par `_make_level`
+        # a L3806 (`CMPI.W #$0003 / BGE`).
+        pressure = [self.stats[t].castles * 3 + self.stats[t].towns
+                    for t in (0, 1)]
+        # `(-40,A5)` (L3325-3326, `CLR.W`) : compteur de « grandes
+        # villes » par tribu, incremente a L3643-3644 quand `score >=
+        # $0BEA`. Il n'est lu nulle part dans le tour : c'est lui qui
+        # alimente `st.castles` en fin de tour (L4366-4370).
+        big_town = [0, 0]
 
         # (c) compacter les peeps morts en fin de tableau
         while self.no_peeps > 0 and self.peeps[self.no_peeps - 1].life <= 0:
@@ -1034,6 +1067,7 @@ class Game:
                 old_frame = p.frame
                 if score >= 0x0BEA:
                     p.frame = FRAME_TOWN                    # 42 grande ville
+                    big_town[p.tribe] += 1                  # L3642-3644
                 else:
                     p.frame = FRAME_AGE + score * 10 // 0x131
                     self.players[p.tribe].town_count += 1
@@ -1057,6 +1091,32 @@ class Game:
                     age_min[k] = age
                     self.stats[1 - k].p2a = i              # L3763
 
+                # L3766-3817 : `_make_level`, la porte d'entree du
+                # villageois. Trois garde-fous, dans l'ordre du listing :
+                #
+                #   L3766-3772  `stats[tribe].queued != 0`  -> tout sauter
+                #   L3774-3777  `_map_alt[block] == 0` ? non -> LAB_40C84
+                #   L3778-3786  aucun des trois motifs -> tout sauter
+                #
+                # `old_frame` est `(-46,A5)` : le **cadre d'avant** la mise
+                # a jour de L3646-3655 (L3636). Il est copie avant, pas
+                # apres — l'assembleur le range au meme endroit mais la
+                # valeur lue a L3783 est celle d'avant.
+                st = self.stats[p.tribe]
+                if st.queued == 0:
+                    if self.map.alt[p.block] == 0:          # TST.B _map_alt
+                        if (p.make_level_res == 0
+                                or p.frame != old_frame
+                                or self.a_flat_block != 0):  # L3779/L3783/L3785
+                            # L3794-3797 : le seul des trois appels dont le
+                            # rendu soit range dans `peep+0x14`.
+                            p.make_level_res = self.make_level(p.block,
+                                                               p.tribe)
+                    elif (pressure[p.tribe] < 3               # L3806, (-32,A5)
+                          and self.game_turn > 0xFA):         # L3808-3809
+                        # LAB_40C84 : resultat **jete**, +0x14 pas touche.
+                        self.make_level(p.block, p.tribe)
+
                 # tous les 8 tours : mana, armes, croissance, scission
                 if (self.game_turn & 7) == 0:
                     self.grow_peep(i, p, score)
@@ -1064,7 +1124,24 @@ class Game:
                     self.zero_population(i)
                     continue
 
-                if p.frame != old_frame:
+                # L4016-4036 : la pastille du village sur la mini-carte.
+                # **Polarite inverse** des deux autres pastilles : ici
+                # `TST.W _toggle / BNE -> sauter` (L4016-4017), donc le
+                # village ne se dessine que quand `_toggle == 0`, tandis
+                # que L4186 et L4221 font `BEQ`. L'alternance evite que
+                # les deux sorts de pastilles s'effacent a mi-parcours.
+                # La couleur vient de `stats[tribe].colour` (mot +0x20,
+                # `LAB_516C4`), pas des 15/8 des units.
+                if not self.toggle and (p.tribe == self.player
+                                        or self.serial_off):
+                    self.putpixel(p.block, self.stats[p.tribe].colour)
+
+                # L4037-4053 : le village est **repose** (arg = 0) si
+                # l'une des trois conditions tient ; sinon LAB_40FCE.
+                if (p.frame != old_frame                     # L4040-4041
+                        or self.a_flat_block != 0            # L4042-4043
+                        or (p.frame == FRAME_TOWN             # L4045-4046
+                            and self.all_of_city < 9)):       # L4047-4048
                     self.set_town(p, 0)
                 continue
 
@@ -1124,6 +1201,18 @@ class Game:
             # bataille en cours (asm L4269+)
             if p.state & ST_BATTLE:
                 self.do_battle(i)
+
+        # L4353-4373 : les deux snapshots de fin de tour. `good_towns`
+        # reçoit le compteur de villes simples et `good_castles` celui
+        # des grandes villes ; ce sont les champs `+0x16` et `+0x14` de
+        # `_stats`, relus au tour suivant (L3276-3289) pour fabriquer la
+        # pression `3*castles + towns` lue par `_make_level`. Sans cette
+        # copie, `st.towns + st.castles` — la condition de la decision
+        # de ville de `_devil_effect` (L9611-9617) — reste nulle pour
+        # toujours.
+        for t in (0, 1):
+            self.stats[t].towns = self.players[t].town_count   # L4361-4362
+            self.stats[t].castles = big_town[t]                # L4366-4370
 
     # -------------------------------------------------- cycle des 8 tours
     def grow_peep(self, i: int, p: Peep, score: int) -> None:
@@ -1512,6 +1601,130 @@ class Game:
         return 0x03E7                           # L4900
 
 
+    # ------------------------------------------------------- _make_level
+    def make_level(self, block: int, tribe: int) -> int:
+        """``_make_level`` (L9017-9144) : l'IA-emet une action de terrain.
+
+        La routine arpente les **81 sommets** d'une fenetre 9x9 autour de
+        ``block`` (table ``_a_flat``) et pose, pour la premiere case qui
+        merite une correction, ``st.act``/``st.p1``/``st.p2`` puis
+        ``st.queued = 1``. Elle rend 0 quand une action a ete posee, 1
+        quand les 81 cases n'ont rien donne.
+
+        .. code-block:: none
+
+            si power_mask bit0 == 0 ou flags bit2 != 0 : return (L9026-9029)
+            x = block & $3F ; y = block >> 6 ; centre = _alt[y*65+x]
+            pour chaque (dx, dy) dans _a_flat (81 paires, L9049) :
+                xx = x+dx ; yy = y+dy
+                si xx ou yy hors [0, $40] : suivant          (L9062-9069)
+                idx = yy*64 + xx  (mot)                       (L9070-9073)
+                si map_blk[idx] == $2F et flags bit3 == 0 :
+                    map_blk[idx] += 1      # rocher -> rocher2
+                    act=2 ; p1=xx ; p2=yy ; queued=1 ; return 0
+                delta = centre - _alt[yy*65+xx]  (mot)        (L9093-9102)
+                si delta > 0 : act=1 ; queued=1 ; return 0    (L9103-9114)
+                si delta < 0 :                                    -> lab_44b38
+                si delta == 0 et (blk == $42 ou blk == $35) :       -> lab_44b38
+                sinon : suivant                                   (L9118-9125)
+                lab_44b38 : si flags bit3 : suivant (L9127-9128)
+                    act=2 ; p1=xx ; p2=yy ; queued=1 ; return 0
+            return 1                                             (L9143-9144)
+
+        **L'ordre de ``_a_flat`` compte.** Les lignes de ``dx`` n'y vont
+        pas de -4 a +4 : l'ordre du listing est ``-4, -3, +4, +3, -2,
+        +2, -1, +1, 0`` et les colonnes de ``dy`` vont de -4 a +4. La
+        routine revient sur la **premiere** paire qui satisfait un test :
+        l'ordre decide donc laquelle des 81 cases ouvre le terrain.
+
+        ``delta > 0`` signifie que le sommet du centre est **plus haut**
+        que le voisin : on leve le voisin (``act = 1``). ``delta < 0`` :
+        on le creuse (``act = 2``). A altitude egale, un ruine (``$42``)
+        ou un marais (``$35``) merite aussi un ``act = 2``.
+        """
+        st = self.stats[tribe]
+
+        # L9026-9029 : deux tests, un seul chemin d'entree.
+        # `BTST #0,($F,A0)` lit l'octet a `st+0x0F` : sur un 68000
+        # gros-boutiste c'est l'octet **bas** du mot `power_mask` (+0x0E),
+        # donc `power_mask & 1`. `BTST #2,(LAB_518A7)` est le bit 2 de
+        # `flags` — le « gelez l'IA ». L'un ou l'autre bloque -> RTS.
+        if (st.power_mask & 0x0001) == 0 or (self.flags & 0x04):
+            # D0 vaut alors `&stats[tribe]` (L9023) : le dispatch rend
+            # 0xA4 / 0xD2 — octets bas de 0x516A4 / 0x516D2 au
+            # chargement tetracorp — et jamais 0. Le seul lecteur est
+            # `TST.B (peep+0x14)` (L3779) : seule la nullite compte,
+            # 0xA4 et 0xD2 se comportent donc comme 1. ECART marque :
+            # le port n'a pas d'adresse, on garde les octets du listing
+            # plutot que de rendre 0, ce qui declencherait un rappel a
+            # chaque tour.
+            return 0xA4 if tribe == 0 else 0xD2
+
+        x = block & 0x3F                                  # L9035-9037
+        y = m68k.asr_word(block, 6)                       # L9038-9040
+        terrain = self.terrain
+        centre = m68k.to_word(terrain.vertex(x, y))       # L9041-9047
+
+        # `_map_blk` ($56376, 4096 octets) est suivi dans le listing par
+        # `_map_alt` ($57376). Les bornes de L9062-9069 laissent passer
+        # xx == 64 ou yy == 64 : l'indice va alors jusqu'a 4160 et le
+        # 68000 lit, ou ecrit, `_map_alt[idx-4096]`. Aucun test ne
+        # compare l'indice a 4096.
+        blk = self.map.blk
+        alt_disp = self.map.alt                           # `_map_alt`
+
+        def lu(idx: int) -> int:
+            return blk[idx] if idx < MAP_CELLS else alt_disp[idx - MAP_CELLS]
+
+        for dx, dy in A_FLAT:                             # L9049, D6 de 0 a $A2
+            xx = x + dx
+            yy = y + dy
+            if xx < 0 or xx > 0x40 or yy < 0 or yy > 0x40:
+                continue                                 # L9062-9069
+            idx = m68k.to_word((yy << 6) + xx)            # L9070-9073
+            v = lu(idx)                                   # L9074-9076
+
+            if v == BLK_ROCK and not (self.flags & 0x08):  # L9076-9079
+                # L9080-9082 `ADDQ.B #1` : le rocher monte d'un cran
+                # (BLK_ROCK -> BLK_ROCK2) **avant** l'action, en
+                # memoire, puis act=2 sur la meme case.
+                if idx < MAP_CELLS:
+                    blk[idx] = (blk[idx] + 1) & 0xFF
+                else:
+                    alt_disp[idx - MAP_CELLS] = \
+                        (alt_disp[idx - MAP_CELLS] + 1) & 0xFF
+                st.act = 2                                # L9084
+                st.p1 = xx                                # L9086, MOVE.B D4
+                st.p2 = yy                                # L9088, MOVE.B D5
+                st.queued = 1                             # L9090
+                return 0
+
+            delta = m68k.s16(centre - m68k.to_word(
+                terrain.vertex(xx, yy)))                  # L9093-9102
+            if delta > 0:                                 # L9103-9104 BLE
+                st.act = 1
+                st.p1 = xx
+                st.p2 = yy
+                st.queued = 1
+                return 0
+
+            if delta < 0:                                 # L9116-9117 BLT
+                pass
+            elif v == BLK_RUINS or v == BLK_SWAMP:        # L9118-9125
+                pass
+            else:
+                continue                                 # L9125 -> LAB_44B68
+
+            if self.flags & 0x08:                         # L9127-9128
+                continue                                 # -> LAB_44B68
+            st.act = 2
+            st.p1 = xx
+            st.p2 = yy
+            st.queued = 1
+            return 0
+
+        return 1                                          # L9143-9144
+
     def one_block_flat(self, tribe: int, block: int) -> None:
         """``_one_block_flat`` (L9148-9296) : l'IA-emet une action de terrain.
 
@@ -1528,9 +1741,14 @@ class Game:
 
         Deux lectures qui ne vont pas de soi :
 
-        * ``BTST #0,($F,A0)`` lit le bit 0 de l'**octet +0x0F**, c'est-a-dire
-          le bit **8** du mot ``+0x0E`` — pas son bit 0. C'est le masque de
-          pouvoirs ``power_mask & 0x100``.
+        * ``BTST #0,($F,A0)`` lit le bit 0 de l'octet ``+0x0F``. Ce
+          ``+0x0F`` est le **deuxieme** octet du mot ``+0x0E`` : le 68000
+          est gros-boutiste, donc ``+0x0E`` = bits 15-8 et ``+0x0F`` = bits
+          7-0. Le test porte donc sur ``power_mask & 0x0001``. *(Le
+          commentaire initial affirmait « bit 8 », soit ``0x100`` : c'etait
+          l'hypothese d'un ordre petit-boutiste. Elle est contredite par
+          L9510-9511, qui lit le meme mot en entier par ``AND.W #$0050`` et
+          qui, lui, etait juste : les deux ne peuvent pas coexister.)*
 
         * ``LAB_52DEA`` est le champ **+6** du joueur, c'est-a-dire
           ``town_count`` : le listing sort donc des que la tribu compte plus
@@ -1567,11 +1785,17 @@ class Game:
         if st.queued:
             return                                    # L9157-9158
         pl = self.players[tribe]
-        if m68k.cmp_word_lt(m68k.to_word(pl.mana), 0x14):
+        # L9163-9164 : `CMPI.L #$00000014,(LAB_52DF0+t*16) / BLT` —
+        # comparaison **LONG** signee sur le champ `mana` (champ +12 du
+        # joueur, LONG). `to_word` + `cmp_word_lt` tronquait le mot bas et
+        # le relisait en signe : des que `mana & $FFFF >= 32768` — ou
+        # vaut un petit multiple de 65536 — la routine sortait a tort et
+        # l'explorateur cessait de sculpter le terrain.
+        if m68k.s32(pl.mana) < 0x14:
             return                                    # L9159-9164
         if m68k.cmp_word_gt(pl.town_count, 0x32):     # L9165-9170, champ +6
             return
-        if not (st.power_mask & 0x100):               # L9172-9173
+        if not (st.power_mask & 0x0001):               # L9172-9173, BTST #0
             return
         # L9174-9175 : `BTST #2,(LAB_518A7) / BEQ LAB_44BE2` - LAB_44BE2
         # est le corps : il ne s'execute que si le bit 2 est **nul**.
