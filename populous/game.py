@@ -1919,6 +1919,80 @@ class Game:
         self.left_button = 2                              # L13603
         self.compose()
 
+    def save_game(self, chemin: str) -> int:
+        """``_save_game(nom)`` (L17123-17373). **Rend 0 en cas de succes.**
+
+        L'inversion est celle du listing : `(-12,A5)` vaut 1 au depart
+        (L17126) et n'est mis a zero qu'apres le dernier `Write` reussi
+        (L17365). L'appelant teste donc `TST.W D0 ; BEQ` pour la reussite
+        (L46093).
+
+        Le nom recoit le suffixe `.GAM` comme dans le listing
+        (L17130-17153) : une seule fois, et cherche a partir de l'octet 4.
+
+        **ECART declare** : `Open(name, $3EE)` ouvrait le fichier en
+        lecture/ecriture, donc un fichier existant etait ecrase. Le port
+        ecrit en mode binaire truncant, ce qui a le meme effet.
+        """
+        from populous.savegame import nom_de_fichier
+        from populous.saveio import pack_moteur
+        nom = nom_de_fichier(chemin)
+        donnees = pack_moteur(self, nom)
+        try:
+            with open(nom, "wb") as f:            # `Open(name, $3EE)`
+                f.write(donnees)
+        except OSError:
+            return 1                             # LAB_4AE0A
+        return 0                                 # L17365
+
+    def load_game(self, chemin: str) -> bool:
+        """``_load_game(nom)`` (L17412-17691). Rend vrai si l'entete est bonne.
+
+        Apres les 25 lectures, la routine :
+
+        * appelle `load_ground(0, _ground_in)` sans regarder le retour
+          (L17586-17589) ;
+        * recalcule `not_player` depuis `player` (L17590-17595) ;
+        * redessine (`set_tend_icons`, `set_mode_icons`, `Setscreen`,
+          `draw_map`) ;
+        * **recalcule `_no_peeps`** : elle remonte depuis la fiche 207 tant
+          que `life == 0` (L17623-17638) - le nombre d'unites n'est donc pas
+          relu du fichier ;
+        * met a zero `act`, `p1` et `p2` des deux fiches (L17639-17649) ;
+        * appelle `get_heading` sur toute unite qui a une cible (L17650-17670) ;
+        * repose `_pointer` quand `_mode == 2` : `player == 1 ? 4 : 1`
+          (L17671-17682).
+        """
+        from populous.savegame import nom_de_fichier
+        from populous.saveio import unpack_moteur
+        nom = nom_de_fichier(chemin)
+        try:
+            with open(nom, "rb") as f:            # `Open(name, $3ED)`
+                donnees = f.read()
+        except OSError:
+            return False                         # LAB_4B226
+        if not unpack_moteur(self, donnees):     # L17453, LAB_4B21C
+            return False
+        self.load_ground(self.sim.ground_in)     # L17586-17589
+        self.set_tend_icons(-1, -1)              # L17597-17603
+        self.set_mode_icons(-1, -1)
+        sim = self.sim
+        i = 0xCF                                  # L17623 : 207
+        while i >= 0 and sim.peeps[i].life == 0:
+            i -= 1
+        sim.no_peeps = i + 1                     # L17636-17638
+        for t in (0, 1):                         # L17639-17649
+            sim.stats[t].act = 0
+            sim.stats[t].p1 = 0
+            sim.stats[t].p2 = 0
+        for k in range(sim.no_peeps):            # L17650-17670
+            p = sim.peeps[k]
+            if p.target != 0:
+                sim.get_heading(k)
+        if sim.mode == 2:                        # L17671-17682
+            sim.pointer = 4 if sim.player == 1 else 1
+        return True
+
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).
 

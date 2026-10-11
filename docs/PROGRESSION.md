@@ -5891,6 +5891,79 @@ Reste pour cette phase : le paquetage reel (`Game.save_game` /
 `Game.load_game`), le navigateur de `_save_load` (L10493), `_get_a_dir`,
 `_sort` et `_get_name`. Le format etant desormais pose, les lignes 12 et 13
 du dialogue *GAME SETUP* restent bloquees jusqu'a la fin.
+### Phase 72 (2/2) - `save_game` et `load_game` : la sauvegarde fonctionne
+
+Le format etait pose en 72 (1/2) ; ici on le remplit et on le relit.
+`populous/saveio.py` fait le pont entre les 25 blocs et les objets Python.
+
+**L'aller-retour est verifie par execution** - c'est la seule preuve qui
+vaille pour un format binaire. `tools/check_save_roundtrip.py` (: **36
+controles**) construit une partie non triviale, produit le fichier, **casse
+tout** ce qui peut l'etre (les 4225 sommets, les quatre cartes, les 211
+fiches, les deux fiches de tribu, les neuf scalaires), recharge, et compare.
+
+**Deux trouvailles que seule l'ecriture revele.**
+
+* `peeps+0x00` est un **octet**, pas un mot. J'avais d'abord pose `state`
+  sur 16 bits, ce qui recouvrait `tribe` a l'octet +1 et vidait la tribu de
+  chaque unite a l'aller-retour. Les bits 3 et 7 de `peep+0x00` sont la
+  bataille et le compte a rebours (game_logic 9.3) : ce sont des bits, pas un
+  mot.
+* Le nom de fichier se suffixe sur le **nom complet**, et le test se fait a
+  l'octet 4. Sur un chemin tel que `C:\\...\\essai` cela marche ; mais
+  `ab.GAM` devient `ab.GAM.GAM`, parce que le test porte sur `name[4:]` et non
+  sur une extension. Fidele, et le controle le verifie.
+
+**Ce que `_load_game` fait du fichier, et que le controle verifie aussi** :
+
+* `_no_peeps` n'est **pas** relu : la routine remonte depuis la fiche 207
+  tant que `life == 0` (L17623-17638) ;
+* `act`, `p1` et `p2` sont mis a zero dans les deux fiches (L17639-17649) -
+  le controle compare donc le paquet a la donnee sauvee, ces trois octets
+  effaces ;
+* `get_heading` est appele sur chaque unite dont la cible est non nulle
+  (L17650-17670) - prouve par un espion, pas par une comparaison, puisque
+  la cible peut ne pas changer ;
+* `_pointer` vaut 4 pour le joueur 1 quand `_mode == 2` (L17671-17682).
+
+**Le checksum du terrain est ecrit, relu, et jamais compare.** `_save_game`
+le calcule (L17161-17189) et l'ecrit en dernier champ ; `_load_game` le relit
+dans `_land_checksum` (L17579) - et c'est tout. Il n'y a aucun `CMPI.W` sur ce
+champ dans toute la routine. Une sauvegarde d'un terrain corrompu se recharge
+donc sans levee. Releve et marque ; ce n'est pas un oubli du port.
+
+**Le port gagne deux champs** que le listing manipule et que le port
+ignorait : `_ground_in` (borne a 0..3, L396-399) et `_land_checksum`.
+
+**Quatre ECART declares**, tous dans `saveio.pack_moteur` :
+
+* `_start_seed` est ecrit depuis `self.seed` - le port n'a qu'un mot de
+  graine (les deux sont egaux juste apres `load_conquest`, L430) ;
+* `_magnet` ($20, seize mots) : le port n'en nomme que six par joueur, les
+  dix derniers mots sont a zero ;
+* `_conquest` ($A), `_battle_won`, `_level_number` et `_score` : quatre
+  champs que le port ne suit pas, ecrits a zero ;
+* la 212e fiche de `_peeps` n'est pas dans le fichier : le listing n'en ecrit
+  que 211 pour $1222 octets, le port en a 212.
+
+Le fichier fait toujours **29 646 octets**, ce que le controle verifie : le
+format est bit-compatible avec le listing.
+
+#### Verification
+
+`check_savegame` 48/48 (format relu dans le listing) ;
+`check_save_roundtrip` **36/36** (aller-retour) ; suite inchangee :
+`autopilot` 84/84 ; `check_icons` 53/53 ; `check_game_setup` 26/26 ;
+`check_game_setup_modal` 45/45 ; `check_set_options` 21/21 ;
+`check_set_options_modal` 20/20 ; `check_options` 17/17 ;
+`check_options_modal` 12/12 ; `check_checkcancel` 11/11 ; `check_level`
+41/41 ; `check_place` 501 + 16 ; `check_devil` 621 ; `check_devil_effect`
+620, 8/8 ; `check_render` OK ; `check_makelevel` OK ; `stress 2000 8` 8/8.
+
+**Reste pour cette chaine** : le navigateur de `_save_load` (L10493), qui est
+ce qui relie `save_game`/`load_game` aux lignes 12 et 13 du dialogue *GAME
+SETUP*. Passer par la boite de dialogue ou par un appel direct ne change rien
+au format ; c'est l'ecran des douze emplacements qui manque.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

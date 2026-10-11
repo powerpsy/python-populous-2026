@@ -221,6 +221,14 @@ class Game:
         # mutuellement exclusives. L425-427 l'ecrit depuis
         # `conq_04_mode` au chargement d'un palier.
         self.game_mode = 0
+        # `_ground_in` (L396-399) : l'index du terrain en cours de jeu,
+ # borne a 0..3. Le port ne le suivait pas ; il est ecrit et
+ # relu par `_save_game` / `_load_game` (L17289, L17529).
+        self.ground_in = 0
+        # `_land_checksum` (L17189) : somme de controle du terrain,
+ # ecrite en dernier champ du fichier de sauvegarde et relue au
+ # chargement (L17579). **Jamais comparee** - cf. Phase 72.
+        self.land_checksum = 0
         # Les onze coches de cet ecran sont, comme celles de
         # `GAME SETUP`, un etat vivant : `_set_options` les
         # recalcule a chaque ouverture (L13386-13446).
