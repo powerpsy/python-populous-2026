@@ -5691,6 +5691,64 @@ restaure les quatre champs) ; `check_game_setup` 26/26 ;
 Reste ouvert, et c'est le dernier des seize codes : la liaison serie du
 **code 2** (`LAB_4BA34`, L18400, entree `(2,2)`), qui appelle
 `_write_serial` / `_read_serial`.
+### Phase 70 - le code 2 : `LAB_4BA34` rend la main, et les seize codes sont transcrits
+
+Dernier des seize codes de la table de `_do_action` (L18376). Il s'ouvre sur
+**deux instructions** :
+
+```python
+if _serial_off:                     # L18405-18406  TST.W / BNE.W LAB_4C19C
+    return
+```
+
+Avec la correction de la Phase 69 - `serial_off = 1` pose par L12768 pour un
+jeu a un joueur - **c'est le chemin que prend la totalite des parties** : le
+handler rend la main sans rien ecrire ni lire, et l'icone `(2,2)` de la barre
+est sans effet visible. Ce chemin-la est desormais transcrit, et c'est le
+seul que le port puisse atteindre.
+
+La branche a deux Amiga reste non transcrite et leve `NotImplementedError`,
+en nommant la routine :
+
+* gardes `LAB_516A6[...] == 2` puis `_stats[...] == $0E` (L18416-18428) ;
+* emission (L18430-18468) : `_get_a_message`, puis `_write_serial(&_message[k],
+  1, 1)` pour chaque octet non nul, un dernier appel pour le terminateur
+  `$65`, puis remise a zero ;
+* reception (L18470-18606) : `_requester(d_screen, $28, $3C, $100, $50,
+  _end_ok, 0)` - **sept** arguments avec `_end_cancel` **nul**, c'est la voie
+  "OK seul" de la routine (`LAB_45744`), celle ou `end_ok.x1` est bien ecrit
+  (L10246) - puis une boucle de 100 octets de `_read_serial`, chacun rendu
+  par `_text(d_screen, k*8 + $30, $4C, &_message[k])`.
+
+Au passage, `do_action` n'a plus de table `non_transcrit` : un code inconnu
+leve desormais "`le code %d n'existe pas dans la table de L18376`", ce qui
+distingue un code reel non transcrit d'un code impossible.
+
+**Les seize codes de `_do_action` sont transcrits.** Ce qui reste non transcrit
+n'est plus du code de la table mais des **routines appelees en aval**, qui
+levent et sont nommees dans le message : `_two_players` (L11265),
+`_show_world` (L12190), `_set_options` (L13362), `_save_load` (L10493),
+`_ground_in`, `_write_serial` (L20141) et `_read_serial` (L20080).
+
+#### Verification
+
+`tools/check_icons.py` : **53 controles** (section I reecrite, J2 exige
+maintenant que la partie tourne *et* que rien ne bouge, J renomme). Les
+nouveaux controles : `serial_off = 1` au depart, code 2 sans effet quand la
+liaison est coupee, code 2 levant quand elle est active.
+
+Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_icons` 53/53 ;
+`check_game_setup` 26/26 ; `check_game_setup_modal` 46/46 ;
+`check_options` 17/17 ; `check_options_modal` 12/12 ; `check_checkcancel`
+11/11 ; `check_level` 41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_render` / `check_assets` /
+`check_funny` / `check_makelevel` OK ; `smoke_sim` 3 000 tours ;
+`stress 2000 8` 8/8 ; `coverage` **194/564**.
+
+La suite de la table est donc achevee. Le travail se deplace desormais sur les
+routines appelees en aval, dont la plus grosse est `_save_load` (L10493) :
+elle seule debloquerait trois lignes du dialogue *GAME SETUP* (12, 13 et
+l'display de `_show_world` pour la ligne 9).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -5708,8 +5766,9 @@ Reste ouvert, et c'est le dernier des seize codes : la liaison serie du
   (Phase 63) et ils levent (Phase 65). Il manque les deux dialogues :
   `_options` (L13617, code 7) et `_game_options` (L12801, code 8) - pres
   de 1300 lignes de listing - plus la liaison serie du code 2
-  (`LAB_4BA34`, L18400). Le code 7 est tombe en Phase 68 et
-  le code 8 en Phase 69 : il ne reste que lui.
+  (`LAB_4BA34`, L18400). **Les seize codes sont desormais
+  transcrits** : le 7 en Phase 68, le 8 en Phase 69, le 2 en
+  Phase 70.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit

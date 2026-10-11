@@ -818,7 +818,7 @@ class PowerEngine:
         ==========  =========================  ==============================
         0 et 14      defaut (renvoie 0)         fait
         1           `LAB_4B9EE` (23 l.)        **fait** — ecrit ``command``
-        2           `LAB_4BA34` (172 l.)       non lu - liaison serie
+        2           `LAB_4BA34` (172 l.)       **fait** - no-op si `serial_off`
                                               (`_write_serial`/`_read_serial`)
         3           `LAB_4BC38` -> `_do_war`   **fait** — appelle `do_war`
         4           `LAB_4BC46` -> `_do_flood` **fait** — appelle `do_flood`
@@ -942,13 +942,30 @@ class PowerEngine:
             sim.cheat = arg2 + 1                   # L19001-19002
             return
 
-        # Seuls codes encore joignables ici : 2. Les quatorze autres
-        # (0, 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15) sont transcrits et
-        # sont retournes plus haut.
-        non_transcrit = {
-            # code -> (handler, ligne du handler, routine qu'il appelle)
-            2: ("LAB_4BA34", 18400, "_write_serial / _read_serial (liaison serie)"),
-        }
+        # Aucun code n'est entierement non transcrit ici : les seize le sont
+        # sur le chemin que le port peut atteindre. Les branches serie
+        # (codes 2 et 8) leve `NotImplementedError`, en nommant la routine.
+        if code == 2:                             # LAB_4BA34, L18404
+            # L18405-18406 : `TST.W (_serial_off,A4)` puis `BNE` vers la
+            # sortie. Avec la liaison serie **coupee** - le cas d'un seul
+            # joueur, `serial_off = 1` pose par L12768 - le handler rend la
+            # main immediatement, sans rien ecrire ni lire. C'est le chemin
+            # que prend la totalite des parties, et il est transcrit.
+            if sim.serial_off:
+                return
+            # L18416-18428 : gardes `LAB_516A6[...] == 2` puis
+            # `_stats[...] == $0E` ;
+            # L18430-18468 : la branche d'emission - `_get_a_message`, puis
+            # `_write_serial(&_message[k], 1, 1)` octet par octet jusqu'au
+            # zero, et un dernier appel pour le terminateur `$65` ;
+            # L18470-18606 : la branche de reception, qui ouvre
+            # `_requester(d_screen, $28, $3C, $100, $50, _end_ok, 0)` - sept
+            # arguments, `_end_cancel` nul, la voie "OK seul" de la routine -
+            # puis boucle `_read_serial` sur 100 octets (`$64`).
+            raise NotImplementedError(
+                "_do_action code 2 : liaison serie active, emission "
+                "`_write_serial` (L20141) et reception `_read_serial` "
+                "(L20080) - il faudrait un second Amiga")
         if code == 8:                             # LAB_4BE12, L18729
             # L18733 : le drapeau de changement de terrain est efface avant
             # d'ouvrir la boite.
@@ -987,10 +1004,8 @@ class PowerEngine:
             # port - le clic vient de l'icone (0,0), pas d'un message serie.
             self.g.options(sim.player if arg2 else sim.not_player)
             return
-        handler, ligne, manque = non_transcrit[code]
         raise NotImplementedError(
-            "_do_action code %d : handler %s (L%d) non transcrit - il lui "
-            "faudrait %s" % (code, handler, ligne, manque))
+            "_do_action : le code %d n'existe pas dans la table de L18376" % code)
 
     def ai_choose(self, tribe: int) -> None:
         """``_set_devil_magnet`` puis ``_devil_effect`` (L3252-3268).

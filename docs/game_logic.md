@@ -882,13 +882,14 @@ Les trois codes qui ne sont pas transcrits, avec ce qu'il leur manque :
 
 | code | handler | ligne | routine requise |
 |---|---|---|---|
-| 2 | `LAB_4BA34` | 18400 | `_write_serial` / `_read_serial` |
+| 2 | `LAB_4BA34` | 18400 | **fait** — no-op quand `_serial_off != 0`, sinon liaison série |
 | 7 | `LAB_4BC94` | 18607 | `Game.options` (`_options`, L13617) - **fait** |
 | 8 | `LAB_4BE12` | 18729 | `Game.game_setup` (`_game_options`, L12801) - **fait** |
 
-Le code 2 est arme par l'entree `(2,2)` de la barre d'icones (L1820) et leve
-`NotImplementedError`. Les codes 7 et 8 sont armes par `(0,0)` (L1729) et
-`(1,1)` (L1795) et sont transcrits.
+Les **seize** codes de la table sont donc transcrits. L'entree `(2,2)` de la
+barre arme le code 2 (L1820), `(0,0)` le code 7 (L1729) et `(1,1)` le code 8
+(L1795) ; l'icone `(2,2)` est sans effet visible en un seul joueur, parce que
+le handler rend la main sur `TST.W _serial_off ; BNE` (L18405-18406).
 
 `_options` (L13617, `$48188`) est le handler du **code 7** de `_do_action`
 (L18607-18728), arme par l'entree `(0,0)` de la barre d'icones. Boucle
@@ -931,6 +932,34 @@ a partir de `_option_text` (L24363) : `+0` x, `+2` y, `+4` largeur du test,
 `+6` la chaine (40 octets, octet 0 = la coche). Elle est transcrite dans
 `populous/options.py` et verifiee par `tools/check_options.py`, qui la relit
 dans le listing.
+
+## 4.4 ter Le code 2 — `LAB_4BA34` (L18404) — la liaison série
+
+Deux instruction ouvrent le handler :
+
+```python
+if _serial_off:                     # L18405-18406  TST.W / BNE.W LAB_4C19C
+    return
+```
+
+`_serial_off` valant **1** en un seul joueur (L12768), **c'est le chemin que
+prend la totalité des parties** : le code 2 est un no-op, et l'icone `(2,2)`
+de la barre ne fait rien. C'est transcrit tel quel.
+
+Reste la branche à deux Amiga, non transcrite — elle lève
+`NotImplementedError` :
+
+* gardes `LAB_516A6[...] == 2` puis `_stats[...] == $0E` (L18416-18428) ;
+* **émission** (L18430-18468) : `_get_a_message(_message)`, puis
+  `_write_serial(&_message[k], 1, 1)` pour chaque octet non nul, un dernier
+  appel pour le terminateur `$65`, puis remise à zéro ;
+* **réception** (L18470-18606) : `_requester(d_screen, $28, $3C, $100, $50,
+  _end_ok, 0)` — **sept** arguments avec `_end_cancel` **nul**, c'est-à-dire la
+  voie « OK seul » de la routine (`LAB_45744`, où `end_ok.x1` est bien écrit,
+  L10246, contrairement à la voie avec CANCEL) ; puis une boucle de 100
+  octets (`CMPI.W #$0064`) de `_read_serial`, chacun rendu par
+  `_text(d_screen, k*8 + $30, $4C, &_message[k])`, `$65` marquant la fin,
+  enfin une attente de clic et `_check_cancel`.
 
 ## 4.4 bis `_game_options` — ligne 12801 (`$47722`) — le dialogue *GAME SETUP*
 
@@ -1542,10 +1571,12 @@ Ce que l'on sait *pour certain* :
   utilisent ce champ comme `y` (§4.4) : le comportement machine est certain,
   l'intention d'origine ne l'est pas.
 * `_do_action` sous‑commandes 7 (ligne 18607) et 8 (`LAB_4BE12`, ligne 18729) :
-  **transcrites** (phases 68 et 69). Restent non transcrites, et elles leve
-  `NotImplementedError` : `_two_players` (L11265), `_show_world` (L12190),
-  `_set_options` (L13362), `_save_load` (L10493) et `_ground_in`, que
-  `_game_options` appelle depuis six de ses dix-sept lignes.
+  **transcrites** (phases 68 et 69). Les seize codes de la table le sont
+  maintenant. Restent non transcrites des **routines appelées en aval**, qui
+  lèvent `NotImplementedError` et sont nommées dans le message :
+  `_two_players` (L11265), `_show_world` (L12190), `_set_options` (L13362),
+  `_save_load` (L10493), `_ground_in`, et `_write_serial` (L20141) /
+  `_read_serial` (L20080) pour la liaison série.
 * `_end_game` cas 5 (`LAB_4883E`) : non relu.
 * `peep+0x0C == 0x2A (42)` : utilisé comme marqueur « grande ville » par `_set_town`
   (ligne 5946) et filtré dans `_end_game` (ligne 14128). Le lien exact entre ce champ

@@ -435,28 +435,45 @@ def main() -> int:
           == [(7, 0, 0x12C0), (7, 1, 0x12C0), (8, 0, 0x12C0)],
           "toggles=%s" % sorted(g.icon_toggles))
 
-    print("\nI. les codes encore non transcrits levent (pas des no-ops)")
-    # (2,2) de la barre d'icones arme le code 2, seul code encore non
-    # transcrit. Le code 7 - entree (0,0) - est transcrit depuis la Phase 68
-    # (`Game.options`), le code 8 - entree (1,1) - depuis la Phase 69
-    # (`Game.game_setup`).
-    for col, row, code in ((2, 2, 2),):
-        st.act = 14
-        st.p2 = code
-        st.p1 = 1
-        leve = False
-        detail = ""
-        try:
-            g.powers.do_queued(g.sim.player)
-        except NotImplementedError as exc:
-            leve = True
-            detail = str(exc)
-        except Exception as exc:                    # pragma: no cover
-            detail = "%s: %s" % (type(exc).__name__, exc)
-        check("icone (%d,%d) -> code %d : NotImplementedError"
-              % (col, row, code), leve, detail)
+    print("\nI. les branches serie des codes 2 et 8 leve (pas des no-ops)")
+    # Le chemin **atteignable** de chaque handler est transcrit : avec la
+    # liaison coupee - `serial_off = 1`, pose par L12768 - le code 2 rend la
+    # main sans rien ecrire (L18405-18406). Les branches serie, elles, leve
+    # en nommant la routine qu'il leur manque.
+    st.act = 14
+    st.p2 = 2
+    st.p1 = 1
+    g.sim.serial_off = 1
+    propre, leve, detail = False, False, ""
+    try:
+        g.powers.do_queued(g.sim.player)
+        propre = True
+    except NotImplementedError as exc:
+        leve, detail = True, str(exc)
+    except Exception as exc:
+        detail = "%s: %s" % (type(exc).__name__, exc)
+    check("L18405-18406 : code 2, liaison coupee -> le handler rend la main",
+          propre and not leve, detail)
+    check("L12768 : `_serial_off` vaut bien 1 au depart d'un jeu a un joueur",
+          g.sim.serial_off == 1, "serial_off=%d" % g.sim.serial_off)
 
-    print("\nJ. `_mode` a l'init et survie aux codes non transcrits")
+    st.act = 14
+    st.p2 = 2
+    st.p1 = 1
+    g.sim.serial_off = 0
+    leve, detail = False, ""
+    try:
+        g.powers.do_queued(g.sim.player)
+    except NotImplementedError as exc:
+        leve, detail = True, str(exc)
+    except Exception as exc:
+        detail = "%s: %s" % (type(exc).__name__, exc)
+    check("L18446/L18513 : code 2, liaison active -> leve en nommant "
+          "`_write_serial` / `_read_serial`",
+          leve and "_read_serial" in detail, detail or "aucune leve")
+    g.sim.serial_off = 1
+
+    print("\nJ. `_mode` a l'init et les trois boites de la barre d'icones")
 
     # ---- J1. `_mode = 2` (L1148, init some variables) -------------------
     from populous.game import Game as Nouvelle
@@ -476,8 +493,9 @@ def main() -> int:
                                       str(avant)))
     del g2
 
-    # ---- J2. cliquer une icone non transcrite ne tue pas la partie ------
-    #          `_safe_dispatch` signale et vide la fiche.
+    # ---- J2. cliquer l'icone (2,2) est sans effet en un joueur ----------
+    #          C'est `LAB_4BA34` (L18404) qui rend la main sur
+    #          `TST.W _serial_off ; BNE` (L18405-18406).
     def scenario(pas):
         """Remplace `_pompe` : `Game.options()` est une boucle modale qui
         attend de vrais evenements ; sans scenario elle tournerait a vide."""
@@ -512,16 +530,18 @@ def main() -> int:
         g.poll_mouse()
         g._raw_left = False
         g.poll_mouse()
-        survivant = True
-        detail = ""
+        avant = (g.sim.serial_off, g.sim.paint_map, g.sim.player)
+        survivant, leve, detail = True, False, ""
         try:
             for _ in range(5):
                 g.image()
         except NotImplementedError as exc:
-            survivant = False
-            detail = str(exc)
-        check("barre (%d,%d) + 5 tours : la partie survit au code non transcrit"
-              % (col, row), survivant, detail)
+            survivant, leve, detail = True, True, str(exc)
+        check("L18405-18406 : barre (%d,%d) + 5 tours, la partie tourne et "
+              "rien ne bouge" % (col, row),
+              survivant and not leve
+              and (g.sim.serial_off, g.sim.paint_map, g.sim.player) == avant,
+              detail or "etat modifie")
 
     # ---- J3. l'icone (0,0) ouvre le dialogue et on en sort par CANCEL ----
     # Le code 7 est transcrit (Phase 68) : `options()` attend un clic, on le
