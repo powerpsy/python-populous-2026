@@ -6121,6 +6121,61 @@ Suite complete au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
 demande `_ground_in` + `___setup_display`), plus `_get_name` (L10307) pour la
 saisie au clavier de SAVE/LOAD. Les seize codes de `_do_action` restent
 tous transcrits.
+### Phase 75 (1/2) - la table du resume de monde (`_show_world`)
+
+`_show_world` (L12190-12799) est l'ecran *WORLD TO CONQUER* : le joueur y
+saisit un monde, la routine lit `level.dat` et remplit le resume de ce monde -
+numero de bataille, relief, vitesse, sol, reactions, et les six puissances.
+
+Cette phase pose **la table**, verifiee ; la routine elle-meme vient apres.
+
+Encore le meme schema : **quinze entrees de 46 octets**, 690 octets, a partir
+de `_c_text` (L24621), jusqu'a `_con_text` (L24725). 690 = 15 x 46 exactement.
+
+| i | ligne | i | ligne |
+|---|---|---|---|
+| 0 | WORLD TO CONQUER | 8 | `               YOU    HIM` |
+| 1 | BATTLE NUMBER IS | 9 | POPULATION |
+| 2 | WORLDS LANDSCAPE IS | 10 | EARTHQUAKES |
+| 3 | HIS REACTIONS ARE | 11 | SWAMPS |
+| 4 | HIS RATING IS | 12 | KNIGHTS |
+| 5 | LAND | 13 | VOLCANOS |
+| 6 | THE SWAMPS ARE | 14 | FLOODS |
+| 7 | WATER IS | | |
+
+Les six puissances des lignes 9 a 14 sont exactement les six bits que le
+fichier de sauvegarde conserve sur les neuf cases d'options de tribu.
+
+**Un point ouvert, note tel quel.** La boucle de L12381-12384 annonce
+« loop 1 to 16 » et le saut `LAB_4760C` dispatche **seize** cas, alors que le
+bloc tel qu'il est dans le listing n'en contient que **quinze** avant
+`_con_text`. La seizieme ligne utiliserait donc une entree qui empiete sur la
+suite du bloc. C'est releve et laisse ouvert : il faut relire la table de sauts
+pour trancher, et le controle l'affiche a chaque execution plutot que de le
+cacher.
+
+**Un raccourci que la lecture revele** : une saisie entierement numerique
+n'est pas un monde mais une **graine**. L12265-12273 fait
+`if atoi(_message) != 0 : _start_seed = _seed = n ; _message = 0 ; return -1`
+- la routine rend meme `-1` et ne lit jamais `level.dat`. Le port le fait
+aussi : `close_conquest_dialog` renvoie deja un booleen de chargement.
+
+#### Verification
+
+`tools/check_show_world.py` (nouveau) : **26 controles**. Les 690 octets sont
+relus dans le listing et compares entree par entree ; puis la coherence (le
+titre, le numero de bataille, le relief, la ligne YOU/HIM, les six puissances,
+la descente reguliere de 8 px, la boite `$120` x `$A0`, la valeur de retour
+`-1`). Le point ouvert des 15/16 est **affiche**, pas compte comme un
+echec - c'est une incertitude, pas un controle.
+
+Suite inchangee et au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
+`check_two_players` 33/33 ; `check_level` 41/41 ;
+`check_save_load_screen` 20/20.
+
+**Reste** : la boucle de `_show_world` elle-meme - `_decode`, `_put_in_string`,
+`_get_name`, le `Seek` dans `level.dat` (L12347-12354) et les seize
+`line_N`. C'est la derniere grosse piece du dialogue *GAME SETUP*.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
