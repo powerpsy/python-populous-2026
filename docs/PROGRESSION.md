@@ -6146,14 +6146,32 @@ de `_c_text` (L24621), jusqu'a `_con_text` (L24725). 690 = 15 x 46 exactement.
 Les six puissances des lignes 9 a 14 sont exactement les six bits que le
 fichier de sauvegarde conserve sur les neuf cases d'options de tribu.
 
-**Un point ouvert, note tel quel.** La boucle de L12381-12384 annonce
-« loop 1 to 16 » et le saut `LAB_4760C` dispatche **seize** cas, alors que le
-bloc tel qu'il est dans le listing n'en contient que **quinze** avant
-`_con_text`. La seizieme ligne utiliserait donc une entree qui empiete sur la
-suite du bloc. C'est releve et laisse ouvert : il faut relire la table de sauts
-pour trancher, et le controle l'affiche a chaque execution plutot que de le
-cacher.
+**Le point ouvert est resolu.** La boucle annonce « loop 1 to 16 » et le saut
+`LAB_4760C` dispatche **seize** cas, alors que le bloc n'en contient que
+**quinze** avant `_con_text`. C'etait faux : la boucle de trace s'arrete a
+`CMPI.W #$000f ; BLT` (L12742-12743), donc quatorze iterations, et la table de
+sauts de L12699-12709 n'a que **dix** entrees. `LAB_4760C` (L12713-12714) fait
+`CMP.L #$0000000a ; BCC.W line_0` - le commentaire du listing dit
+« level 10+ = 0 ». Les lignes 10 a 14 repassent donc toutes par `line_0`,
+avec un indice different dans `_con_text`.
 
+Il y a ainsi **quinze entrees** (0 a 14), **quatorze iterations** et **dix
+handlers**. Ce n'etait pas une erreur de transcription, c'etait une lecture
+incomplete du listing.
+
+**Ce que fait OK** (L12762-12771) : une partie neuve a un joueur -
+`_player = 0`, `_not_player = 1`, `_stats[1].can_build = 1`,
+`_stats[0].act = 0`, `_stats[0].queued = 1`, `_stats[1].queued = 0`,
+`_serial_off = 1`, `_paint_map = 0`, `_war = 0`, `_level_number = monde` - et
+la routine rend ce monde. C'est exactement la meme sequence que le
+demarrage d'une partie simple, et c'est elle qui pose `serial_off = 1` que la
+Phase 69 a retabli.
+
+**La forme des seize lignes** est maintenant claire : chacune appelle
+`_put_in_string(strWorldToConquer + i*$2E, LAB_51EEE[i], texte)`, le texte
+venant soit de `_con_text[valeur]` (table de pointeurs, `ASL.L #2`), soit
+d'un litteral en `.data` (lignes 5 et 6, qui testent des bits de
+`conq_04_mode`).
 **Un raccourci que la lecture revele** : une saisie entierement numerique
 n'est pas un monde mais une **graine**. L12265-12273 fait
 `if atoi(_message) != 0 : _start_seed = _seed = n ; _message = 0 ; return -1`

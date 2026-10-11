@@ -18,11 +18,22 @@ Comme partout ailleurs dans ce jeu, c'est **un seul tableau** d'entrees de
 ...), qui y colle le nom d'une valeur de `level.dat` : le libelle est donc
 la partie fixe, et `_con_text` (L24725) donne le texte de chaque valeur.
 
-**Point ouvert** : la boucle de L12381-L12384 annonce « loop 1 to 16 » et le
-saut `LAB_4760C` dispatche seize cas, alors que le bloc tel qu'il est dans le
-listing fait **quinze** entrees de 46 octets avant `_con_text` (L24725). La
-seizieme ligne utiliserait donc une entree qui empiete sur la suite du
-bloc. A verifier en relisant la table de sauts.
+**Le point ouvert est resolu.** La boucle de L12381-L12384 annonce « loop 1 to
+16 », et la boucle de trace s'arrete a `CMPI.W #$000f ; BLT` (L12742-12743) -
+soit quatorze iterations, `(-20)` de 1 a 14. Le dispatch est `LAB_4760C`
+(L12710-12719) :
+
+```python
+if (-20) >= 10:        # CMP.L #$0000000a ; BCC.W line_0
+    return ligne_0     # le commentaire du listing dit « level 10+ = 0 »
+return SAUTS[(-20)]    # dix entrees, line_0 a line_9
+```
+
+Il y a donc **quinze entrees** (0 a 14), **quatorze iterations**, et **dix
+handlers** seulement : les lignes 10 a 14 - les six puissances et la ligne
+YOU/HIM - passent toutes par `line_0`, avec un indice different dans
+`_con_text`. Ce n'est donc pas une erreur de transcription, c'est la
+machine.
 
 La verification est dans ``tools/check_show_world.py``.
 """
@@ -50,6 +61,12 @@ WORLD_TEXTE = [
 
 WORLD_NB = 15
 
+# La boucle de trace va de 1 a 14 (L12742-12743, `CMPI.W #$000f ; BLT`), et
+# `LAB_4760C` renvoie `line_0` pour toute ligne >= 10 (L12713-12714). Donc dix
+# handlers pour quatorze iterations.
+WORLD_LIGNE_MAX = 14
+WORLD_HANDLERS = 10
+
 # `_requester(d_screen, $10, $18, $120, $A0, (-118), (-72))` (L12208-12215)
 WORLD_BOXE = (0x10, 0x18, 0x120, 0xA0)
 
@@ -63,3 +80,27 @@ WORLD_PUISSANCES = ("POPULATION", "EARTHQUAKES", "SWAMPS", "KNIGHTS",
 # **graine**, pas comme un monde - `_start_seed = _seed = n`, et la routine
 # rend -1 (L12273) sans jamais lire `level.dat`.
 WORLD_GRAINE = -1
+
+# Ce que fait OK a la sortie (L12762-12771) : une partie neuve a un joueur,
+# avec le niveau choisi.
+#
+#     _player = 0 ; _not_player = 1
+#     _stats[1].can_build = 1 ; _stats[0].act = 0 ; _stats[0].queued = 1
+#     _stats[1].queued = 0
+#     _serial_off = 1 ; _paint_map = 0 ; _war = 0
+#     _level_number = monde ; et la routine rend ce monde (L12772-12773)
+#
+# C'est exactement la meme sequence que le demarrage d'une partie simple
+# (L12762-12770), et c'est aussi ce qui pose `serial_off = 1` que la Phase 69
+# a retabli.
+WORLD_OK = {
+    "player": 0,
+    "not_player": 1,
+    "can_build1": 1,
+    "act0": 0,
+    "queued0": 1,
+    "queued1": 0,
+    "serial_off": 1,
+    "paint_map": 0,
+    "war": 0,
+}

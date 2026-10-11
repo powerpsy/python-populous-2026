@@ -79,9 +79,10 @@ def extraire():
 
 
 def main():
-    from populous.world import (WORLD_BOXE, WORLD_GRAINE, WORLD_NB,
-                                WORLD_PUISSANCES, WORLD_TEXTE, WORLD_W,
-                                WORLD_X, WORLD_Y)
+    from populous.world import (WORLD_BOXE, WORLD_GRAINE,
+                                WORLD_HANDLERS, WORLD_LIGNE_MAX, WORLD_NB,
+                                WORLD_OK, WORLD_PUISSANCES, WORLD_TEXTE,
+                                WORLD_W, WORLD_X, WORLD_Y)
 
     brut = extraire()
     print("table `strWorldToConquer` : %d octets, base $%05X, %d entrees de "
@@ -130,12 +131,22 @@ def main():
     check("L12270-L12273 : une saisie numerique rend -1 (c'est une graine)",
           WORLD_GRAINE == -1)
 
-    # ---- le point ouvert ------------------------------------------------
-    print("  [note] L12381-12384 annonce « loop 1 to 16 » et le saut "
-          "LAB_4760C")
-    print("         dispatche seize cas ; le bloc n'en contient que %d. La "
-          "seizieme" % NB)
-    print("         ligne utiliserait une entree qui empiete sur `_con_text`.")
+    # ---- le point ouvert, resolu ---------------------------------------
+    check("L12742-12743 : la boucle de trace va de 1 a 14 (`CMPI.W #$000f`)",
+          WORLD_LIGNE_MAX == 14,
+          "ligne max = %d" % WORLD_LIGNE_MAX)
+    check("L12699-12709 : la table de sauts a dix entrees, `line_0` a "
+          "`line_9`", WORLD_HANDLERS == 10)
+    check("L12713-12714 : toute ligne >= 10 repart sur `line_0` "
+          "(« level 10+ = 0 »)",
+          WORLD_NB == WORLD_LIGNE_MAX + 1
+          and WORLD_LIGNE_MAX + 1 > WORLD_HANDLERS,
+          "%d entrees pour %d iterations et %d handlers"
+          % (WORLD_NB, WORLD_LIGNE_MAX, WORLD_HANDLERS))
+    check("L12762-12771 : OK arme une partie neuve a un joueur",
+          (WORLD_OK["player"], WORLD_OK["not_player"],
+           WORLD_OK["serial_off"], WORLD_OK["paint_map"], WORLD_OK["war"])
+          == (0, 1, 1, 0, 0), str(WORLD_OK))
 
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0
