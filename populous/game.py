@@ -770,9 +770,26 @@ class Game:
                   titre: str, message: str = "") -> None:
         """Boite de dialogue — transcription de ``_requester`` (asm L9901).
 
-        Les 6 pushes avant le JSR donnent :
+        Les **sept** pushes avant le JSR donnent
+        ``_requester(ecran, x, y, largeur, hauteur, end_ok, end_cancel)``.
+        Les deux derniers arguments ne sont pas des chaines mais des
+        **structures de trois mots** ``(x0, y0, x1)`` que la routine
+        remplit elle-meme (L10081-10085 pour CANCEL) et dont le texte est
+        a ``+6`` (L10046-10052 : ``ADDQ.L #6,A0`` puis ``___strlen``) -
+        d'ou ``DC.B "OK",0`` a ``_end_ok+6`` (L24354) et
+        ``DC.B "CANCEL",0`` a ``_end_cancel+6`` (L24361). Les appels du
+        listing passent donc ``PEA (_end_cancel,A4)`` puis
+        ``PEA (_end_ok,A4)`` (L13634-13635 pour ``_options``).
 
-            _requester(ecran, x, y, largeur, hauteur, titre, message)
+        Ce port n'a garde que les deux chaines : le cadre et le texte
+        sont fideles, mais les **boutons OK/CANCEL ne sont pas poses**
+        et leurs cadres sont calcules par l'appelant (voir
+        ``Game.check_cancel``). ECART assume, Phase 67.
+
+        Releve dans le tas d'appels :
+        ``_requester(d_screen, $10, $10, $120, $A6, ...)`` pour
+        ``_options`` (L13636-13640) et ``(d_screen, $30, $46, $E4, $40,
+        ...)`` pour la saisie du niveau (L11927).
 
         avec ``D4 = x >> 4``, ``D1 = largeur >> 4`` (nombre de colonnes) et
         ``D5 = y >> 4`` (premiere ligne).
@@ -1346,6 +1363,38 @@ class Game:
         elif up == 8:                               # LAB_3FB26
             if vp == 0:                             # L2298
                 self._palette_people(up, vp, d0)    # L2300-2405
+    def check_cancel(self, ok, cancel) -> int:
+        """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).
+
+        Les deux arguments sont des **structures de trois mots** :
+        ``(x0, y0, x1)``. Rien n'est compare a `x1` autrement que comme
+        borne droite, et la borne basse est `y0`, la haute `y0 + $10` :
+        une bande de 16 px (L12124-12129 / L12149-12154).
+
+        Retour :
+
+        * `0` si ``_left_button != 0`` - pas de clic (L12108-12109) -
+          ou si aucun cadre n'est touche ;
+        * `1` si la souris est dans le cadre OK ;
+        * `2` si elle est dans le cadre CANCEL.
+
+        L'ordre des **deux** tests est celui du listing : OK d'abord
+        (L12110), CANCEL ensuite (L12135), et un cadre nul est saute.
+        """
+        if self.left_button != 0:                 # L12108-12109
+            return 0
+        mx, my = self.mouse
+        for code, box in ((1, ok), (2, cancel)):  # L12110 / L12135
+            if box is None:                       # TST.L / BEQ
+                continue
+            x0, y0, x1 = box
+            if mx < x0 or mx > x1:                # L12113-12119
+                continue
+            if my < y0 or my > y0 + 0x10:         # L12120-12129
+                continue
+            return code                           # L12130 / L12155
+        return 0                                  # L12157-12158
+
     def _palette_magnet(self, up: int, vp: int, d0: int) -> None:
         """``LAB_3F924`` (L2134-2226) - colonne 7, ligne 0.
 

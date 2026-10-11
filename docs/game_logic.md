@@ -896,7 +896,9 @@ modale : dessiner, attendre un clic,appliquer, recommencer.
 |---|---|---|
 | sauvegarde | 13619-13632 | copie des **46 octets** de `_stats[player]` en local (`LINK A5,#-56`) |
 | inversion | 13643-13660 | `LAB_516B0[player] = 10 - LAB_516B0[player]` ; idem `LAB_516B4[player]` - les curseurs sont stockes en complement |
-| boite | 13634-13642 | `_requester(d_screen, $10, $10, $120, $A6, ...)` |
+| boite | 13634-13642 | `_requester(d_screen, $10, $10, $120, $A6,
+      _end_ok, _end_cancel)` - **sept** arguments, les deux derniers
+      etant des structures `(x0, y0, x1)` remplies par la routine |
 | noms | 13669-13688 | `LAB_51922[0]` = "GOOD" si `player == 0`, sinon "EVIL" (`___strcpy`) |
 | traces | 13661-13784 | boucle `i` de 0 a 13 (`CMPI.W #$0E`, L13783) |
 | attente | 13785-13789 | tourne tant que `_left_button != 0` |

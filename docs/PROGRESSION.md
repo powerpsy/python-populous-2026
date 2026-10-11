@@ -5511,6 +5511,49 @@ lignes de logique, 644 octets de table, 30 lignes de `_check_cancel`.
 
 `python tools/check_options.py` **17/17**. Le reste de la suite est
 inchange et au vert depuis la Phase 66.
+### Phase 67 (suite) - `_check_cancel` transcrit, et la signature de `_requester` corrigee
+
+En branchant `_options`, une chose est tombee : **la signature du port pour
+`_requester` est fausse**.
+
+Les sept pushes avant le JSR (L13634-13640 pour `_options`) donnent
+``_requester(ecran, x, y, largeur, hauteur, end_ok, end_cancel)``. Les deux
+derniers arguments ne sont pas des chaines mais des **structures de trois
+mots** `(x0, y0, x1)` que la routine remplit elle-meme (L10081-10085) et dont
+le texte est a `+6` - d'ou ``DC.B "OK",0`` a ``_end_ok+6`` (L24354) et
+``DC.B "CANCEL",0`` a ``_end_cancel+6`` (L24361). Les appels du listing
+passent donc `PEA (_end_cancel,A4)` puis `PEA (_end_ok,A4)`.
+
+Le port n'avait garde que les deux chaines : le cadre et le texte sont
+fideles, mais **les boutons OK/CANCEL ne sont pas poses**. Ecart assume et
+documente dans la docstring de `requester` ; les cadres sont desormais
+calcules par l'appelant.
+
+**`_check_cancel` (L12106-12159) est transcrit** : ``Game.check_cancel(ok,
+cancel)`` recoit les deux structures `(x0, y0, x1)` et renvoie `0` / `1` (OK)
+/ `2` (CANCEL). Le test de chaque cadre est
+
+    x0 <= _mousex <= x1   et   y0 <= _mousey <= y0 + $10
+
+- soit une bande haute de 16 px - et dans cet ordre : OK d'abord (L12110),
+CANCEL ensuite (L12135), un cadre nul etant saute. ``_left_button != 0``
+coupe court et rend 0 (L12108).
+
+#### Verification
+
+`tools/check_checkcancel.py` (nouveau) : **198 cas** de souris systematiques
+(3 etats de bouton x 11 abscisses x 6 ordonnees) confrontes a une reecriture
+independante du listing, plus 9 cas particuliers (bornes inclusives, bande
+des 16 px, cadre nul, entre les deux cadres) : **11 controles, 0 echec**.
+
+Reste pour la boucle modale d'`_options` : le trace des quatorze lignes
+(table deja verifiee) et le calcul des deux cadres de boutons, que
+`_requester` pose lui-meme cote listing (L10069-10135 : OK a gauche,
+CANCEL a droite, sur la ligne du bas). Chiffre : ~80 lignes de port, tout lu.
+
+Suite complete toujours au vert : `check_options` 17/17 ;
+`check_checkcancel` 11/11 ; `autopilot` 84/84 ; `check_icons` 51/51 ;
+`check_level` 41/41.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
