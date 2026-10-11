@@ -183,6 +183,10 @@ class Game:
         self.game_turn = 0
         self.toggle = 0          # inversement à chaque image
         self.war = 0             # guerre globale
+        # `_in_conquest` : -1 hors conquete, sinon le palier en cours.
+        # `_options` (L13834) ne change rien a la fiche tant qu'on est
+        # en conquete, et le chargeur de palier l'alimente.
+        self.in_conquest = -1      # L13834 / L1780
         self.pause = 0
         self.paint_map = 0
         self.player = player

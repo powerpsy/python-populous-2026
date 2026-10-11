@@ -824,7 +824,7 @@ class PowerEngine:
         4           `LAB_4BC46` -> `_do_flood` **fait** — appelle `do_flood`
         5           `LAB_4BC54` -> `_do_knight` **fait** — appelle `do_knight`
         6           `LAB_4BC62` (16 l.)        **fait** — le bouton pause
-        7           `LAB_4BC94` (122 l.)       non lu - `_options` L13617
+        7           `LAB_4BC94` (122 l.)       **fait** - `Game.options`
         8           `LAB_4BE12` (214 l.)       non lu - `_game_options`
                                               L12801
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
@@ -948,9 +948,15 @@ class PowerEngine:
         non_transcrit = {
             # code -> (handler, ligne du handler, routine qu'il appelle)
             2: ("LAB_4BA34", 18400, "_write_serial / _read_serial (liaison serie)"),
-            7: ("LAB_4BC94", 18607, "_options (L13617) : dialogue des options"),
             8: ("LAB_4BE12", 18729, "_game_options (L12801) : mise en place"),
         }
+        if code == 7:                             # LAB_4BC94, L18607
+            # L18634-18645 : `_options(player)` si `p1 != 0`,
+            # `_options(_not_player)` sinon ; la garde de L18617-18628
+            # (l'autre tribu deja en `act = $0E`) n'a pas d'equivalent cote
+            # port - le clic vient de l'icone (0,0), pas d'un message serie.
+            self.g.options(sim.player if arg2 else sim.not_player)
+            return
         handler, ligne, manque = non_transcrit[code]
         raise NotImplementedError(
             "_do_action code %d : handler %s (L%d) non transcrit - il lui "

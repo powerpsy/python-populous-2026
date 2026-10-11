@@ -5554,6 +5554,70 @@ CANCEL a droite, sur la ligne du bas). Chiffre : ~80 lignes de port, tout lu.
 Suite complete toujours au vert : `check_options` 17/17 ;
 `check_checkcancel` 11/11 ; `autopilot` 84/84 ; `check_icons` 51/51 ;
 `check_level` 41/41.
+### Phase 68 - `Game.options` : le dialogue de l'icone (0,0) tourne
+
+`_options` (L13617-13942) est entierement code. Le clic sur l'entree
+`(0,0)` de la barre d'icones ouvre desormais la vraie boite de dialogue, et
+le **code 7 de `_do_action` est le premier des seize a etre debouche**.
+
+**La boucle modale**, dans l'ordre du listing :
+
+1. sauvegarde des champs que la boite peut changer (`threshold`,
+   `power_mask`, `period` - le listing copie les 46 octets de `_stats`,
+   L13619-13632) ;
+2. **inversion** des deux curseurs : `threshold = 10 - threshold`, idem
+   `period` (L13643-13660) - ils sont stockes en **complement** ;
+3. trace : `_requester(d_screen, $10, $10, $120, $A6, ...)` puis les
+   quatorze lignes de la table (L13661-13784) ;
+4. attente de ``_left_button == 0`` (L13785-13789) puis survol de la
+   premiere ligne dont la boite `(_option_text[i]+$10, LAB_51912[i]+$10)`
+   x largeur x 8 px est touchee (L13790-13832) ;
+5. application (L13833-13893) : bascule ``EOR.W`` de `1 << (i-1)` sur
+   `power_mask` pour les cases 1..9, `(mx - $28) / 8` borne a 0..9 pour le
+   curseur 11 (AGGRESSION), `(mx - $30) / 8` pour le curseur 13 (RATE) -
+   **que si `_in_conquest == -1`** (L13834) ;
+6. `_check_cancel` : `0` recommence au trace, `2` (CANCEL) restaure la
+   sauvegarde, `1` (OK) re-inverse les deux curseurs.
+
+**Les cadres des boutons.** `_requester` les pose lui-meme
+(L9991-10246) ; `_cadres_boutons` refait la meme arithmetique :
+`end_ok.x0 = (D4+1) << 4`, `end_ok.y0 = D6`, `end_ok.x1 = x0 +
+(strlen("OK")+4)*8`, `end_cancel.x0 = (D4 + D7) << 4` avec `D7` arrete a
+`(largeur>>4) - 3 - 3`. **Quirk du listing assume** : `x0`/`y0` sont en
+pixels, `x1` est additionne en unites de 8 px (`ASL.W #3`), et
+`_check_cancel` compare les trois a `_mousex` sans convertir - le port fait
+pareil.
+
+**Un bug trouve au passage dans `requester`** : `haut = max(2, hauteur)`
+prenait la hauteur **en lignes**, alors que le listing la prend en pixels
+(L9953 : `D6 < D5 + hauteur - $10`, par pas de `$10`). Toutes les boites
+du port etaient donc 16x trop hautes. Corrige : `haut = hauteur >> 4`.
+
+**Un piege de controle** : `_do_actions` ouvre le dialogue **pendant**
+`poll_mouse`, sur l'image du clic - le scenario qui pilote `_pompe` doit
+donc etre installe **avant** le clic, pas apres. Sans quoi la boucle
+modale tourne a vide (aucun evenement en pilote `dummy`) et le controle
+bloque. C'est exactement le comportement du listing : L13785 tourne sur
+`_left_button`, que seuls les evenements souris font bouger.
+
+#### Verification
+
+`tools/check_options_modal.py` (nouveau) : **12 controles** qui font tourner
+la vraie `Game.options()` de bout en bout, `_pompe` remplace par un
+scenario - bascule d'une case puis CANCEL, deux curseurs puis OK, clic hors
+des lignes, bornes, coupure en conquete, et le fait que la boucle modale ne
+fait pas avancer la simulation.
+
+`tools/check_icons.py` : 51/51 (section I reduite aux codes 8 et 2, J3
+ajoute). Suite complete au vert : `autopilot 59 0 3` 84/84 ;
+`check_render` OK ; `check_assets` OK ; `check_funny` OK ;
+`check_level` 41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_makelevel` OK ;
+`smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ; `coverage` **184/564**.
+
+Reste ouvert, et c'est le dernier gros morceau des seize codes : `_game_options`
+(L12801, code 8), arme par l'entree `(1,1)` de la barre, plus la liaison
+serie du code 2 (entree `(2,2)`).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -5571,7 +5635,7 @@ Suite complete toujours au vert : `check_options` 17/17 ;
   (Phase 63) et ils levent (Phase 65). Il manque les deux dialogues :
   `_options` (L13617, code 7) et `_game_options` (L12801, code 8) - pres
   de 1300 lignes de listing - plus la liaison serie du code 2
-  (`LAB_4BA34`, L18400).
+  (`LAB_4BA34`, L18400). Le code 7 est tombe en Phase 68.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit

@@ -814,7 +814,10 @@ class Game:
         d4 = x >> 4                      # colonne de depart, en unites de 16 px
         d5 = y >> 4                      # premiere ligne, en LIGNES
         n = max(2, largeur >> 4)         # nombre de colonnes
-        haut = max(2, hauteur)           # hauteur, en lignes de 16 px
+        # L9949-9960 : `D6` va de `D5+$10` a `D5+hauteur-$10` par pas de
+        # `$10`, soit `hauteur/16 - 1` rangees. Le port prenait `hauteur`
+        # brut, soit 16x trop de rangees.
+        haut = max(2, hauteur >> 4)     # hauteur, en LIGNES (L9953)
 
         px = lambda col: d4 + col        # noqa: E731  colonne
 
@@ -1363,6 +1366,157 @@ class Game:
         elif up == 8:                               # LAB_3FB26
             if vp == 0:                             # L2298
                 self._palette_people(up, vp, d0)    # L2300-2405
+    def _pompe(self) -> None:
+        """Les evenements pendant une boucle modale.
+
+        Ni `poll_mouse` ni `image` : le listing gele le jeu pendant
+        `_options` et ne lit que la souris. On pompe quand meme les
+        evenements clavier, sans quoi la fenetre ne repond plus.
+        """
+        for ev in pygame.event.get():
+            self.handle(ev)
+        self._read_buttons()
+
+    def _cadres_boutons(self, x: int, y: int, largeur: int):
+        """Les deux cadres poses par ``_requester`` (L9991-10246).
+
+        ``_requester`` remplit lui-meme les structures ``_end_ok`` et
+        ``_end_cancel`` sur la ligne du bas de la boite. L'arithmetique,
+        relevee telle quelle :
+
+        * ``D4 = x >> 4``, ``D5 = y >> 4`` (L9904-9905) ;
+        * ``D6`` part de ``D5 + $10`` et avance de ``$10`` tant que
+          ``D6 < D5 + hauteur - $10`` (L9949-9990) : c'est la ligne des
+          boutons ;
+        * ``end_ok.y0 = D6`` (L9999) et ``end_ok.x0 = (D4 + 1) << 4``
+          (L10006, ``D7`` valant 1) ;
+        * ``end_cancel.y0 = end_ok.y0`` (L10009) ;
+        * ``end_cancel.x0 = (D4 + D7) << 4`` ou ``D7`` s'est arrete a
+          ``(largeur >> 4) - strlen("CANCEL")/2 - 3`` (L10079) ;
+        * les deux ``x1`` : ``x0 + (strlen(texte) + 4) * 8``
+          (L10241-10246 pour OK, L10134-10139 pour CANCEL).
+
+        **Quirk du listing assume** : ``x0``/``y0`` sont en pixels, mais
+        ``x1`` est additionne en unites de 8 px (`ASL.W #3`).
+        `_check_cancel` compare les trois a `_mousex` sans convertir -
+        le port fait pareil.
+        """
+        d4 = x >> 4                     # L9907
+        d5 = y >> 4                     # L9905
+        hauteur = 0xA6                  # hauteur de la boite d'`_options`
+        d6 = d5 + 0x10                  # L9949
+        while d6 < d5 + hauteur - 0x10:  # L9953-9960
+            d6 += 0x10
+        ok_x0 = (d4 + 1) << 4           # L10006
+        ok = (ok_x0, d6, ok_x0 + (2 + 4) * 8)      # L9999, L10241-10246
+        colonnes = largeur >> 4          # L9908-9910
+        d7 = 4                          # apres l'angle + un remplissage
+        while d7 < colonnes - 3 - 3:    # L10079-10080
+            d7 += 1
+        cx0 = (d4 + d7) << 4            # L10081-10085
+        cancel = (cx0, d6, cx0 + (6 + 4) * 8)       # L10134-10139
+        return ok, cancel
+
+    def _trace_options(self, player: int) -> None:
+        """Le trace des 14 lignes (L13661-13784)."""
+        from populous.options import (OPTIONS_TEXTE, OPTIONS_W, OPTIONS_X,
+                                       OPTIONS_Y)
+        r, d = self.ren, self.frame
+        self.requester(0x10, 0x10, 0x120, 0xA6, "", "")
+        nom = "GOOD" if player == 0 else "EVIL"     # L13669-13688
+        for i in range(14):                        # L13783
+            txt = OPTIONS_TEXTE[i]
+            if i == 0:
+                txt = "OPTIONS FOR " + nom
+            x = OPTIONS_X[i] + 0x10                # L13728
+            y = OPTIONS_Y[i] + 0x10                # L13728
+            if 1 <= i < 10:                        # L13690-13710
+                masque = 1 << (i - 1)              # L13740 `ASL`
+                txt = ("\x81" if (self.sim.stats[player].power_mask
+                                    & masque) else "\x80") + txt[1:]
+            if i == 11:                            # L13733-13755
+                x = OPTIONS_X[11] + 0x28 \
+                    + self.sim.stats[player].threshold * 8
+            if i == 13:                            # L13756-13779
+                x = OPTIONS_X[13] + 0x30 \
+                    + self.sim.stats[player].period * 8
+            # `_text` prend x en unites de 8 px (L19977-19980)
+            r.draw_text(d, x >> 3, y, txt)
+
+    def options(self, player: int) -> None:
+        """``_options(player)`` (L13617-13942) - boite de dialogue modale.
+
+        C'est le handler du **code 7** de `_do_action`, arme par
+        l'entree `(0,0)` de la barre d'icones. Boucle en cinq temps :
+
+        1. sauvegarde des champs que la boite peut changer
+           (`threshold`, `power_mask`, `period` - le listing copie les
+           46 octets de `_stats`, L13619-13632) ;
+        2. inversion des deux curseurs : `threshold = 10 - threshold`,
+           idem `period` (L13643-13660) - ils sont stockes en
+           **complement** ;
+        3. trace (`_requester` puis les quatorze lignes) ;
+        4. attente de ``_left_button == 0``, survol de la premiere
+           ligne dont la boite est touchee ;
+        5. application, puis `_check_cancel` : `0` recommence au trace,
+           `2` (CANCEL) restaure la sauvegarde, `1` (OK) re-inverse les
+           deux curseurs.
+
+        Ne s'applique que si `_in_conquest == -1` (L13834) ; hors de la
+        conquete le clic ne change donc rien.
+        """
+        from populous.options import OPTIONS_TEXTE, OPTIONS_W, OPTIONS_X, \
+            OPTIONS_Y
+        from populous import m68k
+        st = self.sim.stats[player]
+        # (1) sauvegarde (L13619-13632) - les trois champs touches
+        garde = (st.threshold, st.power_mask, st.period)
+        # (2) inversion (L13643-13660)
+        st.threshold = 10 - st.threshold
+        st.period = 10 - st.period
+        ok, cancel = self._cadres_boutons(0x10, 0x10, 0x120)
+
+        while True:
+            self.left_button = 2                    # L13662
+            self._trace_options(player)             # L13661-13784
+            # (4) attente du clic (L13785-13789)
+            while self.left_button != 0:
+                self._pompe()
+                if not self.running:
+                    return
+            mx, my = self.mouse
+            i = 14                                  # L13832 : aucune ligne
+            for k in range(1, 14):                  # L13790-13832
+                if mx < OPTIONS_X[k] + 0x10 or mx > OPTIONS_X[k] + OPTIONS_W[k] + 0x10:
+                    continue
+                if my < OPTIONS_Y[k] + 0x10 or my > OPTIONS_Y[k] + 0x18:
+                    continue
+                i = k
+                break
+            # (5) application (L13833-13893)
+            if self.sim.in_conquest == -1 and i != 14:
+                if i < 10:                          # L13836-13848
+                    st.power_mask ^= 1 << (i - 1)
+                elif i == 11:                       # L13850-13871
+                    v = m68k.divs_word(mx - (OPTIONS_X[11] + 0x28), 8)
+                    if 0 <= v <= 9:
+                        st.threshold = v
+                elif i == 13:                       # L13873-13893
+                    v = m68k.divs_word(mx - (OPTIONS_X[13] + 0x30), 8)
+                    if 0 <= v <= 9:
+                        st.period = v
+            r = self.check_cancel(ok, cancel)       # L13894-13900
+            if r == 0:                              # L13938
+                continue
+            if r == 2:                              # CANCEL : restaure
+                st.threshold, st.power_mask, st.period = garde
+            else:                                   # OK : re-inversione
+                st.threshold = 10 - st.threshold
+                st.period = 10 - st.period
+            break
+        self.left_button = 2                        # L13954 `_return_to_game`
+        self.compose()
+
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).
 

@@ -435,11 +435,11 @@ def main() -> int:
           == [(7, 0, 0x12C0), (7, 1, 0x12C0), (8, 0, 0x12C0)],
           "toggles=%s" % sorted(g.icon_toggles))
 
-    print("\nI. les codes non transcrits levent (ils ne sont pas des no-ops)")
-    # (0,0), (1,1) et (2,2) de la barre d'icones arment reellement les codes
-    # 7, 8 et 2 (Phase 63) : le defaut de `do_action` doit lever, pas rendre
-    # la main en silence.
-    for col, row, code in ((0, 0, 7), (1, 1, 8), (2, 2, 2)):
+    print("\nI. les codes encore non transcrits levent (pas des no-ops)")
+    # (1,1) et (2,2) de la barre d'icones arment les codes 8 et 2
+    # (Phase 63) : le defaut de `do_action` doit lever. Le code 7 - entre
+    # (0,0) - est transcrit depuis la Phase 68 (`Game.options`).
+    for col, row, code in ((1, 1, 8), (2, 2, 2)):
         st.act = 14
         st.p2 = code
         st.p1 = 1
@@ -451,7 +451,7 @@ def main() -> int:
             leve = True
             detail = str(exc)
         except Exception as exc:                    # pragma: no cover
-            detail = "%s: %s" % ( type(exc).__name__, exc)
+            detail = "%s: %s" % (type(exc).__name__, exc)
         check("icone (%d,%d) -> code %d : NotImplementedError"
               % (col, row, code), leve, detail)
 
@@ -475,9 +475,27 @@ def main() -> int:
                                       str(avant)))
     del g2
 
-    # ---- J2. cliquer les trois icones non transcrites ne tue pas la ----
-    #          partie : `_safe_dispatch` signale et vide la fiche.
-    for col, row in ((0, 0), (1, 1), (2, 2)):
+    # ---- J2. cliquer une icone non transcrite ne tue pas la partie ------
+    #          `_safe_dispatch` signale et vide la fiche.
+    def scenario(pas):
+        """Remplace `_pompe` : `Game.options()` est une boucle modale qui
+        attend de vrais evenements ; sans scenario elle tournerait a vide."""
+        n = [0]
+
+        def pompe():
+            if n[0] >= len(pas):
+                return
+            mx, my, presse = pas[n[0]]
+            n[0] += 1
+            g.mouse = (mx, my)
+            g._raw_left = presse
+            g._read_buttons()
+
+        return pompe
+
+    ok, cancel = g._cadres_boutons(0x10, 0x10, 0x120)
+    for col, row in ((1, 1), (2, 2)):
+        g.sim.in_conquest = -1
         for mx in range(160, g.screen.get_width()):
             for my in range(0, g.screen.get_height()):
                 u, v = g._uv(mx, my)
@@ -503,6 +521,43 @@ def main() -> int:
             detail = str(exc)
         check("barre (%d,%d) + 5 tours : la partie survit au code non transcrit"
               % (col, row), survivant, detail)
+
+    # ---- J3. l'icone (0,0) ouvre le dialogue et on en sort par CANCEL ----
+    # Le code 7 est transcrit (Phase 68) : `options()` attend un clic, on le
+    # pilote avec un scenario puis on clique CANCEL.
+    g.sim.in_conquest = -1
+    st.power_mask = 0xFFFF
+    for mx in range(160, g.screen.get_width()):
+        for my in range(0, g.screen.get_height()):
+            u, v = g._uv(mx, my)
+            if (u > 0x112 and (u - 0x110) // 16 == 0
+                    and (v - 0x20) // 16 == 0):
+                g.mouse = (mx, my)
+                break
+        else:
+            continue
+        break
+    g._pompe = scenario([(0, 0, False),
+                        (cancel[0] + 4, cancel[1] + 8, True)])
+    g.poll_mouse()
+    g._raw_left = True
+    g.poll_mouse()
+    g._raw_left = False
+    g.poll_mouse()
+    survivant = True
+    detail = ""
+    try:
+        for _ in range(5):
+            g.image()
+    except Exception as exc:
+        survivant = False
+        detail = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        del g._pompe
+    check("L18607 + L13785 : l'icone (0,0) ouvre `_options` et la partie "
+          "continue", survivant and g.running, detail)
+    check("L13902 : CANCEL laisse la fiche `_stats` intacte",
+          st.power_mask == 0xFFFF, "power_mask=0x%04X" % st.power_mask)
 
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0
