@@ -5825,6 +5825,72 @@ Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_icons` 53/53 ;
 Restent quatre leveurs dans *GAME SETUP* : lignes 2 et 13 (`_two_players`,
 `_save_load`), ligne 9 (`_show_world`), lignes 12 et 15 (`_save_load`,
 `_ground_in`).
+### Phase 72 (1/2) - le format de sauvegarde : 25 champs, 29 646 octets
+
+`_save_game` (L17123-17373) est transcrite, et son format - le point le plus
+difficile de toute la chaine - est **extrait du listing et verifie champ par
+champ**. `_checksum` (L17389-17407) aussi.
+
+La routine ecrit 25 blocs avec `___Write(handle, source, taille)` et compare
+chaque retour a la taille demandee : un seul ecart et elle echoue. L'ordre et
+les tailles sont donc imposes par la machine, pas interpretes.
+
+| # | source | taille | contenu |
+|---|---|---|---|
+| 1 | `(-8,A5)` | 4 | la constante `$FFFFB615` |
+| 2 | `_alt` | `$2102` | 4225 sommets en 16 bits (65 x 65) |
+| 3-6 | `_map_alt`, `_map_blk`, `_map_bk2`, `_map_who` | `$1000` chacun | les quatre cartes de 64 x 64 |
+| 7 | `_magnet` | `$20` | 16 mots |
+| 8 | `_peeps` | `$1222` | 211 peeps x 22 octets |
+| 9-10 | `_stats`, `strABC` | `$2E` chacun | la fiche de chaque tribu |
+| 11-25 | 15 scalaires | 2 ou 4 | `_mode` ... et le checksum |
+
+**29 646 octets au total**, et le controle relit les 25 `PEA`/`PEA`/`JSR`
+triplets directement dans le listing pour le prouver.
+
+**Le checksum du terrain** (L17161-17189) est ecrit deux fois : dans la
+variable globale `_land_checksum`, et en **dernier** champ du fichier. C'est
+lui que `_load_game` relit pour verifier que le relief correspond. Il somme
+`_checksum` sur les quatre cartes en `$800` chacune, plus `_alt` sur
+**`$1081 = 4225`** - un nombre impair alors que la lecture se fait par mots a
+`base + 2*i`. La boucle fait donc 4225 iterations et lit deux octets a
+l'offset 8448, c'est-a-dire le dernier mot des `$2102 = 8450` octets
+declares. Reproduit tel quel, sans arrondi.
+
+**La valeur de retour est inversee** : `_save_game` rend **0** en cas de
+succes et **1** en cas d'echec. `(-12,A5)` vaut 1 au depart (L17126) et n'est
+mis a zero qu'apres le dernier `Write` reussi (L17365). L'appelant teste donc
+`TST.W D0 ; BEQ` pour la reussite (L46093).
+
+**Le nom de fichier** recoit toujours le suffixe `.GAM`, une seule fois : si le
+nom fait moins de quatre caracteres on concatene sans tester (L17150-17153) ;
+sinon on ne concatene que si `name[4:] != ".GAM"` (L17135-17146). Le
+controle verifie les trois branches, y compris `abc.GAM` qui devient
+`abc.GAM.GAM` parce que le suffixe est cherche a partir de l'octet **4**, pas
+3.
+
+#### Verification
+
+`tools/check_savegame.py` (nouveau) : **48 controles**. L'extracteur releve
+les 25 `Write` et les 5 appels a `_checksum` dans le listing - y compris dans
+les deux formes d'ecriture de la taille, `$2102.W` pour les gros blocs et
+`2.W` pour les mots - et compare source, taille et ligne a
+`populous/savegame.py`. S'y ajoutent `_checksum` (les 4225 iterations, le
+refus de lire hors du tampon) et le suffixe de fichier.
+
+Suite complete au vert, inchange : `autopilot` 84/84 ; `check_icons` 53/53 ;
+`check_set_options` 21/21 ; `check_set_options_modal` 20/20 ;
+`check_game_setup` 26/26 ; `check_game_setup_modal` 45/45 ; `check_options`
+17/17 ; `check_options_modal` 12/12 ; `check_checkcancel` 11/11 ;
+`check_level` 41/41 ; `check_place` 501 + 16 ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 ; `check_render` / `check_assets` /
+`check_funny` / `check_makelevel` OK ; `smoke_sim` 3 000 tours ;
+`stress 2000 8` 8/8.
+
+Reste pour cette phase : le paquetage reel (`Game.save_game` /
+`Game.load_game`), le navigateur de `_save_load` (L10493), `_get_a_dir`,
+`_sort` et `_get_name`. Le format etant desormais pose, les lignes 12 et 13
+du dialogue *GAME SETUP* restent bloquees jusqu'a la fin.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
