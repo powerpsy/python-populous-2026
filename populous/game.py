@@ -1694,9 +1694,8 @@ class Game:
                 sim.bring_up_two = 1                 # L13028, puis sortie
                 return True                          # LAB_47A0E-47A14
             ticks[2], ticks[1] = coche, vide          # L13014-13019
-            raise NotImplementedError(               # L13021
-                "GAME SETUP : la ligne 2 (TWO PLAYERS) appelle `_two_players` "
-                "(L11265), non transcrite")
+            self.two_players()                      # L13021
+            return True
         if i == 3:                                   # LAB_47A1C PLAY GAME
             ticks[3], ticks[4] = coche, vide          # L13038-13043
             sim.paint_map = 0                        # L13044
@@ -2143,6 +2142,72 @@ class Game:
         import os
         if not os.path.exists("level.dat"):
             print("[SAVE/LOAD] level.dat est absent du repertoire courant")
+
+    def _trace_two_players(self, etat: int) -> None:
+        """Un panneau de `_two_players` (L11284-11413)."""
+        from populous.two_players import (SERIAL_BOXE, SERIAL_NB, SERIAL_TEXTE,
+                                          SERIAL_X, SERIAL_Y)
+        r, d = self.ren, self.frame
+        self.requester(*SERIAL_BOXE, "", "")
+        if 0 <= etat < SERIAL_NB:
+            # L11306-11317 : `_text(x + $20, y + $2E, texte)`, `_blank`
+            # d'abord (L11298).
+            r.draw_text(d, (SERIAL_X[etat] + 0x20) >> 3,
+                        SERIAL_Y[etat] + 0x2E, SERIAL_TEXTE[etat])
+
+    def two_players(self) -> int:
+        """``_two_players()`` (L11265-11892). Rend 1, comme la machine.
+
+        Une machine a etats, dont le mot `(-40,A5)` est l'etat :
+
+        * **`$3E7 = 999`** au depart (L11267) - « je ne suis pas pret » ;
+        * **`2`** : *STARTUP SERIAL*, titre indexe par `(-42) + $0C`
+          (L11298-11320) ;
+        * **`3`** : *SEND LOGIN*, indexe par `(-44) + $0E` (L11323-11346) ;
+        * **`4`** : *SERIAL ERROR!* (L11349-11361) ;
+        * **`5`** et **`6`** : les options modem (L11363-11413).
+
+        La boucle tourne tant que `(-40,A5) != 0` (L11285-11286) et sort par
+        `_check_cancel` (L11876-11878) : `0` retrace, `2` sort, et `1`
+        avec `(8,A5) != 0` - c'est-a-dire **depuis le code 8**, puisque
+        l'argument est nul quand on vient du dialogue (L11884-11885).
+
+        **Transcrit** : la machine a etats, les seize panneaux, le titre
+        indexe par le joueur, et l'effet sur `_player` (L11744-11752).
+
+        **Non transcrit** : `_clear_serial` (L11277), `_write_serial`
+        (L11643, L11658), `_set_baud_rate` (L11703) et `_try_serial`
+        (L11763). Ces quatre routines commandent le **port serie de l'Amiga** ;
+        il n'y a pas de second Amiga a relier, donc elles leve
+        `NotImplementedError` en nommant la routine. La boite s'ouvre et
+        affiche ses panneaux, mais tenter de se connecter leve : mieux vaut
+        une erreur nommee qu'un ecart muet.
+        """
+        from populous.two_players import SERIAL_BOXE, SERIAL_ETAT_INITIAL
+        sim = self.sim
+        etat = SERIAL_ETAT_INITIAL                 # L11267
+        ok, cancel = self._cadres_boutons(*SERIAL_BOXE)
+
+        while etat != 0:                           # L11285-11286
+            self._trace_two_players(etat)
+            self.left_button = 2
+            while self.left_button != 0:
+                self._pompe()
+                if not self.running:
+                    return 0
+            r = self.check_cancel(ok, cancel)      # L11876-11878
+            if r == 0:                              # L11888 : on retrace
+                continue
+            if r == 1:
+                raise NotImplementedError(         # L11884-11885
+                    "`_two_players` : la connexion passe par `_try_serial` "
+                    "(L11903), `_write_serial` (L20141) et `_set_baud_rate` "
+                    "(L16841) - le port serie de l'Amiga, dont il n'y a pas "
+                    "d'equivalent sur un poste seul")
+            break                                   # CANCEL : L11886-11892
+        self.left_button = 2                       # `_return_to_game`
+        self.compose()
+        return 1                                   # L11891 puis LAB_46BDC
 
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).

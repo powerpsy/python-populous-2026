@@ -993,9 +993,12 @@ class PowerEngine:
                     "`___setup_display(0, new_map - 2)` (L18924-18928), non "
                     "transcrit" % sim.new_map)
             if sim.bring_up_two:                 # L18933-18940
-                raise NotImplementedError(
-                    "_do_action code 8 : `_bring_up_two` demande "
-                    "`_two_players(1)` (L18936), non transcrit")
+                # LAB_4C09A le consomme avant d'appeler la routine
+                sim.bring_up_two = 0
+                self.g.two_players()              # L18936 `_two_players(1)`
+                self.g.left_button = 2            # L18938 `___return_to_game`
+                self.g.compose()
+                return
             return
         if code == 7:                             # LAB_4BC94, L18607
             # L18634-18645 : `_options(player)` si `p1 != 0`,

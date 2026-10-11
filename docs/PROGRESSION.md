@@ -6047,6 +6047,80 @@ Suite complete au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
 ligne 2 (*TWO PLAYERS*, `_two_players` L11265) et la ligne 9 (*CONQUEST*,
 `_show_world` L12190), plus la ligne 15 (*RESTART THIS MAP*) qui demande
 `_ground_in` + `___setup_display`. Et `_get_name` pour la saisie au clavier.
+### Phase 74 - `Game.two_players` : l'ecran de liaison serie
+
+`_two_players` (L11265-11892) est transcrite : la machine a etats, les seize
+panneaux, et l'effet sur `_player`. **C'est la seule chose qui pouvait
+l'etre**, et le docstring le dit.
+
+**La table.** Comme toutes les autres, un seul bloc de **16 entrees de 46
+octets** a partir de `_serial_text` (L24930) : 736 octets, de 0x525da a
+0x528ba. 736 = 16 x 46 exactement, ce qui est deja une preuve
+d'alignement.
+
+| i | panneau | etat |
+|---|---|---|
+| 0 | STARTUP SERIAL | titre (index `(-42) + $0C`) |
+| 1 | SEND LOGIN | titre (index `(-44) + $0E`) |
+| 2 | BAUD RATE | titre de la boite |
+| 3-7 | DATALINK, FULL SERIAL CHECKING, I AM GOOD, USE THIS LANDSCAPE, CONNECT ME | options **datalink** |
+| 8-11 | MODEM, NO SERIAL CHECKING, I AM EVIL, USE SAVED LANDSCAPE | options **modem** |
+| 12-15 | HE'S TRYING TO BE GOOD / TO BE EVIL / NOT USING A SAVED GAME / USING A SAVED GAME | messages d'etat |
+
+**La machine** tient dans le mot `(-40,A5)`, a `$3E7 = 999` au depart
+(L11267) : etats 2, 3, 4, 5 et 6 selon le panneau, `0` pour sortir. Elle
+tourne tant que ce mot n'est pas nul (L11285-11286) et sort par
+`_check_cancel` (L11876-11878).
+
+**Point d'asm** : la sortie par OK ne part vers la connexion que si
+`(8,A5) != 0` - le second argument (L11884-11885). Il est **nul** quand on
+arrive du dialogue `GAME SETUP` : la ligne 2 ouvre donc l'ecran et
+l'utilisateur ne peut rien y faire de plus. Ce n'est que depuis le code 8,
+via `_bring_up_two` (L18933-18938), que la boite sert vraiment - et c'est
+exactement ce que le port reproduit.
+
+**Ce qui reste non transcrit, et pourquoi** : `_clear_serial` (L11277),
+`_write_serial` (L11643, L11658), `_set_baud_rate` (L11703) et `_try_serial`
+(L11763). Ces quatre routines commandent le **port serie de l'Amiga**. Il
+n'y a pas de second Amiga a relier, et le materiel n'a pas d'equivalent.
+Contrairement a la sauvegarde - ou le format etait la substance, et
+portable - ici la substance **est** le materiel. La boite s'ouvre et affiche
+ses panneaux, mais tenter de se connecter leve `NotImplementedError` en
+nommant les quatre routines. C'est la seule ligne honnete.
+
+**Deux leviers tombent** : la ligne 2 (*TWO PLAYERS*) du dialogue *GAME
+SETUP*, et la queue `LAB_4C09A` du code 8 (`_bring_up_two`), qui consomme le
+drapeau avant d'appeler la routine (L11744-11752 echange `_player`, trace,
+puis le remet).
+
+#### Verification
+
+`tools/check_two_players.py` (nouveau) : **33 controles**. Les 736 octets sont
+relus dans le listing et compares entree par entree ; puis la coherence (les
+sixteen colonnes a x = 16, les deux series d'options, les quatre messages,
+la boite `$100` x `$80`, l'etat initial `$3E7`) ; enfin la machine - CANCEL
+rend 1, OK leve en nommant `_try_serial` *et* `_write_serial` /
+`_set_baud_rate`, les seize panneaux se tracent, la ligne 2 ouvre l'ecran,
+et la branche `bring_up_two` de L13028.
+
+`tools/check_game_setup_modal.py` passe de 46 a **47 controles** : la ligne 2
+quitte la liste des leveurs.
+
+Suite complete au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
+`check_two_players` 33/33 ; `check_saveslots` 26/26 ; `check_savegame` 48/48 ;
+`check_save_roundtrip` 36/36 ; `check_save_load_screen` 20/20 ;
+`check_game_setup` 26/26 ; `check_game_setup_modal` 47/47 ;
+`check_set_options` 21/21 ; `check_set_options_modal` 20/20 ;
+`check_options` 17/17 ; `check_options_modal` 12/12 ; `check_checkcancel`
+11/11 ; `check_level` 41/41 ; `check_place` 501 + 16 ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 ; `check_render` OK ; `stress 2000 8` 8/8 ;
+`coverage` **214/564**.
+
+**Il ne reste que deux leveurs** dans *GAME SETUP* : la ligne 9
+(*CONQUEST*, `_show_world` L12190) et la ligne 15 (*RESTART THIS MAP*, qui
+demande `_ground_in` + `___setup_display`), plus `_get_name` (L10307) pour la
+saisie au clavier de SAVE/LOAD. Les seize codes de `_do_action` restent
+tous transcrits.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

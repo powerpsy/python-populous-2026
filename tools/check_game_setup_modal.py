@@ -253,7 +253,7 @@ def main():
     check("L12969-12972 : un clic hors de toute ligne rend 17",
           g._survol_game_setup() == 17, "survol=%d" % g._survol_game_setup())
 
-    # ---- 11. les trois handlers qui levent ------------------------------
+    # ---- 11. les deux handlers qui levent ------------------------------
     # Branche active de chaque ligne : TWO PLAYERS ne montre son
     # `_two_players` que si la liaison est **active** (L13009 `TST` / L13010
     # `BEQ`) et CONQUEST que si elle est **coupee** (L13225-13226). C'est
@@ -261,8 +261,7 @@ def main():
     #
     # La ligne 11 (*GAME OPTIONS*) ne leve plus depuis la Phase 71 : elle
     # ouvre `SET GAME OPTIONS`, verifie par `tools/check_set_options_modal.py`.
-    for k, nom, serie in ((2, "_two_players", 0), (9, "_show_world", 1),
-                          (15, "_ground_in", 1)):
+    for k, nom, serie in ((9, "_show_world", 1), (15, "_ground_in", 1)):
         depart(g)
         sim.serial_off = serie
         leve, detail = False, ""
@@ -315,6 +314,35 @@ def main():
         g.save_load = vrai2
     check("L13267-13270 : la ligne 13 est sans effet si la liaison est ACTIVE",
           sortie is False and sim.in_conquest == etat)
+
+    # ---- 11 ter. TWO PLAYERS ouvre l'ecran, sans lever ---------------
+    # La ligne 2 est transcrite depuis la Phase 74 : elle ouvre
+    # `_two_players` (L13021) quand la liaison est **active**, et ne fait
+    # que poser `bring_up_two` quand elle est coupee (L13009-L13028).
+    depart(g)
+    sim.serial_off = 0
+    appele = []
+    vrai = g.two_players
+
+    def espion():
+        appele.append(True)
+        return 1
+
+    g.two_players = espion
+    try:
+        sortie = g._exec_game_setup(2)
+    finally:
+        g.two_players = vrai
+    check("L13009-L13021 : la ligne 2 ouvre `_two_players` et sort",
+          appele == [True] and sortie is True,
+          "appele %s, sortie %s" % (appele, sortie))
+
+    depart(g)
+    sim.serial_off = 1           # liaison coupee
+    sortie = g._exec_game_setup(2)
+    check("L13009-L13028 : liaison coupee -> `bring_up_two` et sortie",
+          sortie is True and sim.bring_up_two == 1 and appele == [True],
+          "bring_up_two=%d" % sim.bring_up_two)
 
     # ---- 12. la boucle modale ne fait pas tourner la simulation -------
     tour = sim.game_turn
