@@ -102,6 +102,10 @@ class Game:
         # _left_button / _right_button : 0 = clic (1 image), 0x40 = relache,
         # 1 = stable, 2 = bloque (asm L19582-19591, L999, L2425-2448)
         self.left_button = 1
+        # Drapeau de redessin de `_game_options` : le listing le tient
+        # dans son cadre local (-4,A5). Ici c'est un attribut, pose par
+        # `_exec_game_setup` et relu par `game_setup`.
+        self._redessiner = False
         self.right_button = 1
         self._raw_left = False          # etat physique du bouton
         self._raw_right = False
@@ -237,7 +241,11 @@ class Game:
         # $18F = 399 pour les deux tribus, et `conq_08` n'est lu que L390,
         # comme graine. L'ancienne formule `start_mana * 100` venait de la
         # colonne 8-9 lue comme deux octets de mana - elle disparait.
-        # L425-427 (`_game_mode = conq_04_mode`) reste a transcrire.
+        # L425-427 : `_game_mode = conq_04_mode`. C'est le seul endroit du
+        # port qui alimente les cinq options de l'ecran *SET GAME OPTIONS*
+        # (Phase 71) - les cinq bits de bas poid sont les cinq paires de
+        # choix exclusifs. Le port posait 0.
+        sim.game_mode = lv.mode
         return True
 
 # ---------------------------------------- saisie du numero (asm L11942)
@@ -1597,6 +1605,7 @@ class Game:
         ok, cancel = self._cadres_boutons(*self._boite_game_setup())
 
         while True:
+            self._redessiner = False
             if redessiner:                          # LAB_47822-47850
                 self.requester(*self._boite_game_setup(), "", "")
                 redessiner = False
@@ -1609,6 +1618,7 @@ class Game:
             i = self._survol_game_setup()           # L12866-12982
             if self._exec_game_setup(i):             # L12980 + table L13292
                 break                               # sortie directe (LAB_47E4E)
+            redessiner = self._redessiner           # (-4,A5), L13257
             r = self.check_cancel(ok, cancel)        # LAB_47DCA, L13317-13319
             if r == 0:                               # L13322 : on retrace
                 continue
@@ -1742,9 +1752,9 @@ class Game:
             sim.in_conquest = -1                     # L13253
             return False
         if i == 11:                                  # LAB_47D30 GAME OPTIONS
-            raise NotImplementedError(               # L13256
-                "GAME SETUP : la ligne 11 (GAME OPTIONS) appelle "
-                "`_set_options` (L13362), non transcrite")
+            self.set_options()                       # L13256
+            self._redessiner = True                  # L13257 : (-4,A5) = 1
+            return False                             # -> LAB_47DCA
         if i in (12, 13):                            # LAB_47D3E / LAB_47D56
             if i == 13 and sim.serial_off != 0:       # L13268-13269
                 return False
@@ -1775,6 +1785,139 @@ class Game:
             return
         if self.sim.mode & 4:                        # BTST #2, bas octet
             self.sim.pointer = self.sim.player + 2   # L13091-13095
+
+    def _boite_set_options(self):
+        """`(x, y, largeur, hauteur)` de la boite *SET GAME OPTIONS* (L13367)."""
+        from populous.set_options import SET_OPTIONS_BOXE
+        return SET_OPTIONS_BOXE
+
+    def _draw_set_option(self, i: int, txt: str) -> None:
+        """Une ligne de *SET GAME OPTIONS* a l'index `i` (L13403-13416).
+
+        `_text(d_screen, _set_text[i]+$20, LAB_523B0[i]+$18, txt)` ; `_text`
+        prend x en unites de 8 px, y en lignes de pixels.
+        """
+        from populous.set_options import SET_OPTIONS_X, SET_OPTIONS_Y
+        x = SET_OPTIONS_X[i] + 0x20                  # L13412-13414
+        y = SET_OPTIONS_Y[i] + 0x18                  # L13404-13406
+        self.ren.draw_text(self.frame, x >> 3, y, txt)
+
+    def _trace_set_options(self) -> None:
+        """Le trace du titre, des cinq paires et de la rustine de debug."""
+        from populous.set_options import (SET_OPTIONS_BLANC, SET_OPTIONS_PASTICHE,
+                                           SET_OPTIONS_TEXTE, SET_OPTIONS_X,
+                                           SET_OPTIONS_Y)
+        sim = self.sim
+        ticks = sim.set_option_ticks
+        self._draw_set_option(0, SET_OPTIONS_TEXTE[0])        # L13374-13382
+        for j in range(5):                                   # L13386-13446
+            col = 2 if (sim.game_mode >> j) & 1 else 1        # L13386-13396
+            i = 2 * j + col
+            self._draw_set_option(i, SET_OPTIONS_BLANC)        # L13398
+            self._draw_set_option(i, ticks[i] + SET_OPTIONS_TEXTE[i][1:])
+        # L13447-13482 : rustine de debug, « new code added here » dans le
+        # listing. Elle ecrit « LANDSCAPE NO » puis le numero de terrain a
+        # `buf + 13` - juste apres l'espace final, en recouvrant le zero -
+        # et l'affiche sous la derniere paire, avec un y de `+ $22` et non
+        # `+ $18`.
+        #
+        # ECART declare : le listing y met `_start_seed`, le port n'a qu'un
+        # seul mot de graine, `self.seed`. Les deux sont egaux juste apres
+        # `load_conquest` (L430 `_start_seed = _seed`) et ne divergent qu'au
+        # milieu d'une partie, quand `_seed` est regenere (L18922 fait
+        # l'inverse). Le port lit donc `self.seed`.
+        prefixe, decalage = SET_OPTIONS_PASTICHE
+        buf = prefixe + str(self.seed)
+        i = 2 * 4 + col                                       # L13459-13463
+        x = SET_OPTIONS_X[i] + 0x20                           # L13473-13475
+        y = SET_OPTIONS_Y[i] + 0x22                           # L13465-13467
+        self.ren.draw_text(self.frame, x >> 3, y, buf)
+
+    def _survol_set_options(self):
+        """L'index de la ligne touchee, ou `None` (L13490-13587)."""
+        from populous.set_options import (SET_OPTIONS_SURVOL, SET_OPTIONS_W,
+                                           SET_OPTIONS_X, SET_OPTIONS_Y)
+        sim = self.sim
+        mx, my = self.mouse
+        if sim.in_conquest != -1:                        # L13500-13501
+            return None
+        for i in SET_OPTIONS_SURVOL:
+            # L13494-13496 : `x0 = _set_text[i] + $20`
+            x0 = SET_OPTIONS_X[i] + 0x20
+            if mx < x0:                                  # L13497-13499
+                continue
+            # L13507-13510 : `D2 = _set_text[i] + LAB_523B2[i] + $20`, soit
+            # exactement `x0 + w`. Contrairement a `_options` et `GAME
+            # SETUP`, le decalage de $20 n'apparait **qu'une** fois, a
+            # gauche : la zone fait 8 px de large, pas 40.
+            if mx > x0 + SET_OPTIONS_W[i]:               # L13511-13513
+                continue
+            y0 = SET_OPTIONS_Y[i] + 0x18                 # L13516-13518
+            if my < y0:                                  # L13519-13521
+                continue
+            if my <= y0 + 8:                             # L13524-13529
+                return i
+        return None
+
+    def set_options(self) -> None:
+        """``_set_options`` (L13362-13605) - l'ecran *SET GAME OPTIONS*.
+
+        Appele par la ligne 11 (*GAME OPTIONS*) du dialogue `GAME SETUP`
+        (L13256). Cinq paires de choix exclusifs, un bit de `_game_mode`
+        chacune ; la boite est plus petite que celle de *GAME SETUP*
+        (`$100` x `$70`, L13367-13370) parce que les deux colonnes sont
+        a x = 16, cote a cote sur la meme ligne.
+
+        Boucle : sauvegarde de `_game_mode` (L13364), trace, attente du clic
+        (L13484-13488), survol, bascule du bit, `_check_cancel` (L13489-13603).
+        Un `0` retrace, un `2` restaure `_game_mode`, un `1` sort.
+
+        **Point d'asm** : les deux colonnes d'une paire ont le meme x et le
+        meme y, et la zone cliquable ne couvre que les huit pixels de la
+        coche. Cliquer la colonne 1 bascule le bit de la paire, et la coche
+        part alors sur la colonne 2 (L13537-13545) - c'est le bit qui decide,
+        pas la colonne cliquee.
+        """
+        from populous.set_options import (SET_OPTIONS_BLANC,
+                                           SET_OPTIONS_TEXTE)
+        sim = self.sim
+        garde = sim.game_mode                            # L13364
+        ok, cancel = self._cadres_boutons(*self._boite_set_options())
+
+        while True:
+            self.requester(*self._boite_set_options(), "", "")  # L13365-13373
+            # Le prologue reclasse les dix coches d'apres `_game_mode`
+            # (L13386-13396) : c'est lui, et non le contenu du ROM, qui fait
+            # foi a l'affichage.
+            ticks = [s[:1] for s in SET_OPTIONS_TEXTE]
+            for j in range(5):
+                ticks[2 * j + 2] = ("\x81" if (sim.game_mode >> j) & 1
+                                    else "\x80")
+            sim.set_option_ticks = ticks
+            self._trace_set_options()
+            self.left_button = 2                          # L13484
+            while self.left_button != 0:                  # L13485-13488
+                self._pompe()
+                if not self.running:
+                    return
+            i = self._survol_set_options()               # L13490-13587
+            if i is not None:
+                # L13530-13546 : le bit est celui de la paire, et la coche
+                # part sur `i` ou `i + 1` selon sa nouvelle valeur.
+                bit = 1 << (i >> 1)                       # L13531-13534
+                sim.game_mode ^= bit                      # L13536
+                k = i + 1 if (sim.game_mode & bit) else i  # L13537-13545
+                ticks[k] = "\x81" if (sim.game_mode & bit) else "\x80"
+                self._draw_set_option(k, SET_OPTIONS_BLANC)   # L13547-13561
+                self._draw_set_option(k, ticks[k] + SET_OPTIONS_TEXTE[k][1:])
+            r = self.check_cancel(ok, cancel)             # L13489-13491
+            if r == 0:                                    # L13594
+                continue
+            if r == 2:                                    # L13595-13597
+                sim.game_mode = garde
+            break
+        self.left_button = 2                              # L13603
+        self.compose()
 
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).

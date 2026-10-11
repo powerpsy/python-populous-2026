@@ -253,14 +253,17 @@ def main():
     check("L12969-12972 : un clic hors de toute ligne rend 17",
           g._survol_game_setup() == 17, "survol=%d" % g._survol_game_setup())
 
-    # ---- 11. les six handlers qui lèvent ------------------------------
+    # ---- 11. les cinq handlers qui levent ------------------------------
     # Branche active de chaque ligne : TWO PLAYERS ne montre son
     # `_two_players` que si la liaison est **active** (L13009 `TST` / L13010
     # `BEQ`) et CONQUEST que si elle est **coupee** (L13225-13226). C'est
     # l'inverse des deux, et c'est le listing qui le dit.
+    #
+    # La ligne 11 (*GAME OPTIONS*) ne leve plus depuis la Phase 71 : elle
+    # ouvre `SET GAME OPTIONS`, verifie par `tools/check_set_options_modal.py`.
     for k, nom, serie in ((2, "_two_players", 0), (9, "_show_world", 1),
-                          (11, "_set_options", 1), (12, "_save_load", 1),
-                          (13, "_save_load", 0), (15, "_ground_in", 1)):
+                          (12, "_save_load", 1), (13, "_save_load", 0),
+                          (15, "_ground_in", 1)):
         depart(g)
         sim.serial_off = serie
         leve, detail = False, ""

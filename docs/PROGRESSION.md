@@ -5749,6 +5749,82 @@ La suite de la table est donc achevee. Le travail se deplace desormais sur les
 routines appelees en aval, dont la plus grosse est `_save_load` (L10493) :
 elle seule debloquerait trois lignes du dialogue *GAME SETUP* (12, 13 et
 l'display de `_show_world` pour la ligne 9).
+### Phase 71 - `Game.set_options` : l'ecran *SET GAME OPTIONS* et `_game_mode`
+
+`_set_options` (L13362-13605) est code, et la ligne 11 (*GAME OPTIONS*) du
+dialogue *GAME SETUP* ne leve plus : elle ouvre le vrai ecran.
+
+Cinq paires de choix **exclusifs**, un bit de `_game_mode` chacune :
+
+| paire | bit | coeffue | laisse |
+|---|---|---|---|
+| 1-2 | 0 | WATER IS HARMFUL | WATER IS FATAL |
+| 3-4 | 1 | SWAMPS SHALLOW | SWAMPS BOTTOMLESS |
+| 5-6 | 2 | CAN BUILD | CANNOT BUILD |
+| 7-8 | 3 | BUILD UP AND DOWN | ONLY BUILD UP |
+| 9-10 | 4 | BUILD NEAR PEOPLE | BUILD NEAR TOWNS |
+
+**Encore une table unique.** `_set_text` (0x523ae, x), `LAB_523B0` (0x523b0,
+y), `LAB_523B2` (0x523b2, largeur) et `strGameOptions` (0x523b4, les chaines)
+sont quatre vues du meme bloc de **506 octets**, avec le pas 0x2E. Onze
+entrees dont le titre. C'est le meme schema que *GAME SETUP* (Phase 69) et que
+les options de tribu (Phase 67) : le listing range tout ce qui est affiche
+dans des enregistrements de 46 octets et n'ouvre que des vues decalees.
+
+**`_game_mode` est desormais alimente.** C'etait la seule entree du port laissee
+en commentaire : L425-427 `_game_mode = conq_04_mode` au chargement d'un
+palier. `lv.mode` existait deja dans `conquest.py`. Le champ est un `DS.B 1`
+(L24310) : il demarre a zero, et le prologue affiche alors les cinq colonnes
+1 decochees.
+
+**Un bug trouve dans mon propre port** en ecrivant le test de survol : j'avais
+mis le decalage de `$20` des deux cotes de la zone, soit
+`[x+$20, x+w+$20]`. Le listing (L13496 et L13507-13510) ne met le `$20` qu'a
+gauche : `x0 = _set_text[i] + $20` et `D2 = _set_text[i] + w + $20`, donc
+`x1 = x0 + w`. Contrairement a `_options` et `GAME SETUP`, la zone fait **huit
+pixels**, pas quarante. La zone cliquable n'est donc que la coche - c'est
+coherent avec la largeur 8 que donne la table, et c'est ce que le controle
+verifie aujourd'hui.
+
+**Deuxiard du listing, assume et documente** : le cadre OK (`x` dans
+[48, 96], `y` dans [97, 113]) **recouvre la neuvieme ligne** (`x` dans
+[48, 56], `y` dans [104, 112]). Le listing teste les lignes *avant*
+`_check_cancel`, donc cliquer OK dans cette bande allume au passage la
+cinquieme paire. C'est reproduit tel quel, et le controle vise la droite du
+cadre pour ne pas le declencher.
+
+La rustine de debug du listing (« new code added here », L13447-13482), qui
+affiche « LANDSCAPE NO » et le numero de terrain, est transcrite aussi. Elle
+lit `_start_seed` ; le port n'a qu'un mot de graine, `self.seed` - **ECART
+declare**, les deux etant egaux juste apres `load_conquest` (L430).
+
+#### Verification
+
+`tools/check_set_options.py` (nouveau) : **21 controles**. L'extracteur relit
+les 506 octets dans le listing et les compare a `populous/set_options.py`.
+
+`tools/check_set_options_modal.py` (nouveau) : **20 controles** qui font
+tourner la vraie `Game.set_options()` de bout en bout, `_pompe` remplace par
+un scenario - le classement des dix coches d'apres `_game_mode`, la bascule
+`EOR` du bit de la paire, la coche qui part sur `i` ou `i + 1`, le survol qui
+n'ouvre que les colonnes impaires, la neutralisation en conquete, CANCEL et
+OK, et le fait que la boucle modale ne fait pas avancer la simulation.
+
+`tools/check_game_setup_modal.py` passe de 46 a **45 controles** : la ligne 11
+a quitte la liste des leveurs.
+
+Suite complete au vert : `autopilot 59 0 3` 84/84 ; `check_icons` 53/53 ;
+`check_set_options` 21/21 ; `check_set_options_modal` 20/20 ;
+`check_game_setup` 26/26 ; `check_game_setup_modal` 45/45 ;
+`check_options` 17/17 ; `check_options_modal` 12/12 ; `check_checkcancel`
+11/11 ; `check_level` 41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_render` / `check_assets` /
+`check_funny` / `check_makelevel` OK ; `smoke_sim` 3 000 tours ;
+`stress 2000 8` 8/8 ; `coverage` **196/564**.
+
+Restent quatre leveurs dans *GAME SETUP* : lignes 2 et 13 (`_two_players`,
+`_save_load`), ligne 9 (`_show_world`), lignes 12 et 15 (`_save_load`,
+`_ground_in`).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

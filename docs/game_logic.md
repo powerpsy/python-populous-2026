@@ -1005,25 +1005,71 @@ prologue en fait `strOnePlayer = $80 + serial_off` (L12813-12815). Le port
 l'initialisait a 0, ce qui le faisait partir sur la voie série du code 8.
 Corige.
 
-**Six lignes sur dix-sept lèvent encore** `NotImplementedError`, en nommant
-la routine manquante - mieux vaut une erreur nommee qu'un ecart muet :
+**Cinq lignes sur dix-sept lèvent encore** `NotImplementedError`, en nommant
+la routine manquante - mieux vaut une erreur nommée qu'un écart muet :
 
-| ligne | etiquette | branche active | routine |
+| ligne | étiquette | branche active | routine |
 |---|---|---|---|
 | 2 | TWO PLAYERS | `serial_off == 0` | `_two_players` (L11265), L13021 |
 | 9 | CONQUEST | `serial_off != 0` | `_show_world` (L12190), L13237 |
-| 11 | GAME OPTIONS | toujours | `_set_options` (L13362), L13256 |
 | 12 | SAVE A GAME | toujours | `_save_load(1)` (L10493), L13261 |
 | 13 | LOAD A GAME | `serial_off == 0` | `_save_load(0)` (L10493), L13071 |
 | 15 | RESTART THIS MAP | toujours | `_ground_in` + `___setup_display` (L18924), L13282 |
 
-Noter l'**inverse** des branches 2 et 9 : TWO PLAYERS n'ouvre son ecran que si
-la liaison est **active**, CONQUEST ne part que si elle est **coupee**
+La ligne 11 (*GAME OPTIONS*) est transcrite depuis la Phase 71 : elle ouvre
+`_set_options`, décrit en §4.4 quater.
+
+Noter l'**inverse** des branches 2 et 9 : TWO PLAYERS n'ouvre son écran que si
+la liaison est **active**, CONQUEST ne part que si elle est **coupée**
 (L13009-13010 contre L13225-13226).
 
 La queue commune du handler, `LAB_4C070` (L18917-18942), consomme `_new_map`
 (`___setup_display(0, new_map - 2)`, L18924) puis `_bring_up_two`
-(`_two_players(1)`, L18936) : les deux leveurs egalement.
+(`_two_players(1)`, L18936) : les deux lèvent également.
+
+## 4.4 quater `_set_options` — ligne 13362 (`$47E56`) — l'écran *SET GAME OPTIONS*
+
+Ligne 11 du dialogue précédent. Cinq paires de choix **exclusifs**, un bit de
+`_game_mode` chacune.
+
+| étape | lignes | détail |
+|---|---|---|
+| sauvegarde | 13364 | `_game_mode` dans `(-46,A5)` |
+| boîte | 13365-13373 | `_requester(d_screen, $20, $18, $100, $70, ...)` — plus petite que celle de *GAME SETUP*, car les deux colonnes sont à x = 16 |
+| titre | 13374-13383 | `strGameOptions[0]` à `(_set_text[0]+$20, LAB_523B0[0]+$18)` |
+| les cinq paires | 13384-13446 | pour `j` de 0 à 4, colonne `1` ou `2` selon `(1 << j) & _game_mode` (L13386-13396) ; index `2*j + colonne` ; `_blank` puis le texte |
+| rustine de debug | 13447-13482 | le listing la marque « new code added here » : « LANDSCAPE NO » puis le numéro de terrain à `buf + 13`, affiché sous la dernière paire avec un y de `+ $22` et non `+ $18` |
+| attente | 13483-13488 | `_left_button = 2`, puis on tourne |
+| survol | 13490-13587 | indices **impairs** 1, 3, 5, 7, 9 (`ADDQ.W #2`, `CMPI.W #$000A`) ; **entièrement neutralisé en conquête** (L13500-13501) |
+| bascule | 13530-13546 | `bit = 1 << (i >> 1)` ; `_game_mode ^= bit` ; la coche part sur `i + 1` si le bit est désormais à 1, sur `i` sinon |
+| boutons | 13489-13601 | `_check_cancel` ; `0` retrace, `2` restaure `_game_mode`, `1` sort |
+
+**La table.** Comme pour *GAME SETUP* (§4.4 bis), un seul bloc de **506
+octets** : `_set_text` (0x523ae, x), `LAB_523B0` (0x523b0, y), `LAB_523B2`
+(0x523b2, largeur) et `strGameOptions` (0x523b4, les chaînes). Onze entrées,
+dont le titre. Les dix autres sont cinq paires à x = 16, **de même y**,
+largeur **8** : la zone cliquable ne couvre que les huit pixels de la coche.
+
+**Deux particularités du listing, reproduites telles quelles** :
+
+* le décalage de `$20` n'apparaît **qu'une fois** dans le test de survol, à
+  gauche (L13496) : `x1 = _set_text[i] + LAB_523B2[i] + $20 = x0 + w`.
+  Contrairement à `_options` et `GAME SETUP`, la zone fait donc 8 px, pas 40 ;
+* le cadre **OK** (`x ∈ [48, 96]`, `y ∈ [97, 113]`) **recouvre la neuvième
+  ligne** (`x ∈ [48, 56]`, `y ∈ [104, 112]`). Comme le listing teste les
+  lignes *avant* `_check_cancel`, cliquer OK dans cette bande allume au
+  passage la cinquième paire.
+
+**Les deux colonnes d'une paire partagent x et y.** Redessiner l'une efface
+donc l'autre — ce qui est voulu, puisque `_blank` est justement tracé pour
+cela. Mais `_blank` ne fait que onze caractères (`^^^^^^^^^^^`, L24918) alors
+que « SWAMPS BOTTOMLESS » en compte dix-sept : le reste de l'ancien texte peut
+subsister. Fidèlement reproduit, cosmétique et sans conséquence.
+
+**`_game_mode`** est un `DS.B 1` (L24310) : il démarre à zéro, et le prologue
+affiche alors les cinq colonnes 1 décochées. Il est alimenté par
+`conq_04_mode` au chargement d'un palier (L425-427) — seul endroit du port où
+le champ est écrit.
 
 ## 4.5 Les effets
 

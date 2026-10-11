@@ -215,6 +215,17 @@ class Game:
         # (L12987-12992). On garde donc une copie vivante ici.
         from populous.game_setup import GAME_SETUP_TEXTE
         self.setup_ticks = [s[:1] for s in GAME_SETUP_TEXTE]
+        # `_game_mode` (L24310) est un `DS.B 1` : il demarre a zero.
+        # Ses cinq bits de bas poid sont les cinq options de l'ecran
+        # *SET GAME OPTIONS* (Phase 71) ; les cinq paires sont
+        # mutuellement exclusives. L425-427 l'ecrit depuis
+        # `conq_04_mode` au chargement d'un palier.
+        self.game_mode = 0
+        # Les onze coches de cet ecran sont, comme celles de
+        # `GAME SETUP`, un etat vivant : `_set_options` les
+        # recalcule a chaque ouverture (L13386-13446).
+        from populous.set_options import SET_OPTIONS_TEXTE
+        self.set_option_ticks = [s[:1] for s in SET_OPTIONS_TEXTE]
         self.flags = 0x10        # LAB_518A7 (L24311-24312, DC.B $10) :
                                    # bit0 tue dans l'eau, bit2 gele l'IA
         # Globaux remis a zero par `_check_life` (L20965 / L20970) puis lus
