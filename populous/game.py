@@ -106,6 +106,12 @@ class Game:
         # dans son cadre local (-4,A5). Ici c'est un attribut, pose par
         # `_exec_game_setup` et relu par `game_setup`.
         self._redessiner = False
+        # Le tiroir des sauvegardes : `_drawer` (L302c) et le tampon de douze
+        # noms `LAB_525C8` (L525c8), plus le defilement et le nom courant.
+        self._saves_drawer = "Pop Saves"
+        self._saves_liste = []
+        self._saves_nom = ""
+        self._saves_defil = 0
         self.right_button = 1
         self._raw_left = False          # etat physique du bouton
         self._raw_right = False
@@ -1756,11 +1762,18 @@ class Game:
             self._redessiner = True                  # L13257 : (-4,A5) = 1
             return False                             # -> LAB_47DCA
         if i in (12, 13):                            # LAB_47D3E / LAB_47D56
-            if i == 13 and sim.serial_off != 0:       # L13268-13269
+            # L13267-13270 : `TST.W (_serial_off) ; BEQ.S LAB_47D70`. La
+            # ligne 13 (*LOAD A GAME*) n'ouvre l'ecran que si la liaison
+            # serie est **coupee** - donc en un seul joueur. La ligne 12
+            # (*SAVE A GAME*, L13259-13266) n'a pas cette garde.
+            if i == 13 and sim.serial_off == 0:       # L13268-13269
                 return False
-            raise NotImplementedError(               # L13071 / L13261
-                "GAME SETUP : la ligne %d appelle `_save_load` (L10493), "
-                "non transcrite" % i)
+            # L13261 (`_save_load(1)`) et L13071 (`_save_load(0)`) : le
+            # meme ecran, la seule difference est le titre. Un retour non
+            # nul fait sortir de la boite par `_return_to_game` (L13264,
+            # L13275) - donc, de l'exterieur, la boite se referme.
+            self.save_load(i == 12)                  # L13061 / L13261
+            return True
         if i == 14:                                  # LAB_47D72 NEXT MAP
             sim.new_map = 1                          # L13279, puis LAB_47E4E
             return True
@@ -1992,6 +2005,144 @@ class Game:
         if sim.mode == 2:                        # L17671-17682
             sim.pointer = 4 if sim.player == 1 else 1
         return True
+
+    def _boite_save_load(self):
+        """`(x, y, largeur, hauteur)` de la boite de sauvegarde (L10523)."""
+        return (0x48, 0x10, 0xB0, 0xB0)
+
+    def _trace_save_load(self, sauvegarder: bool) -> None:
+        """Le trace de l'ecran des douze emplacements (L10520-10750)."""
+        r, d = self.ren, self.frame
+        self.requester(*self._boite_save_load(), "", "")
+        # les trois titres de colonnes, tous a y = $58 (L10530-10570)
+        for x, txt in ((0x18, "SAVE GAME" if sauvegarder else "LOAD GAME"),
+                       (0x7A, "DIRECTORY"), (0xD8, "FILE NAME")):
+            r.draw_text(d, x >> 3, 0x58, txt)
+        # les douze emplacements : `LAB_525C8[k]` a `$22 + k*8` (L10577-10585)
+        for k in range(12):
+            if k < len(self._saves_liste):
+                nom = self._saves_liste[k].rstrip(b"\x00").decode("latin-1")
+            else:
+                nom = ""
+            r.draw_text(d, (0x22 + k * 8) >> 3, 0x58, nom)
+        # le tiroir puis le nom de fichier, a `$A0` (L10739-10749)
+        r.draw_text(d, 0xA0 >> 3, 0x58, self._saves_drawer)
+        r.draw_text(d, 0xA0 >> 3, 0x58, self._saves_nom)
+
+    def _survol_save_load(self):
+        """L'index de l'emplacement clique, ou `None` (L10759-10784).
+
+        La zone est `$58 <= x <= $D8` et `$22 <= y <= $82` (L10759-10766) ;
+        la ligne se lit `(y - $22) >> 3`, ajoute a l'offset de defilement
+        `self._saves_defil` (L10767-10771). Une ligne au-dela du contenu
+        n'est pas selectionnable (L10772-10774).
+        """
+        mx, my = self.mouse
+        if mx < 0x58 or mx > 0xD8:                     # L10759-10762
+            return None
+        if my < 0x22 or my > 0x82:                     # L10763-10766
+            return None
+        i = ((my - 0x22) >> 3) + self._saves_defil     # L10767-10771
+        if i >= len(self._saves_liste):                # L10772-10774
+            return None
+        self._saves_nom = self._saves_liste[i].rstrip(b"\x00").decode("latin-1")
+        return i
+
+    def _defiler_save_load(self, delta: int) -> None:
+        """Les deux fleches a droite (L10819-10842)."""
+        n = len(self._saves_liste)
+        if delta < 0:                                  # fleche du haut
+            if self._saves_defil:                      # L10827-10828
+                self._saves_defil -= 1
+            return
+        if self._saves_defil + 5 < n:                  # L10837-10840
+            self._saves_defil += 1
+
+    def save_load(self, sauvegarder: bool) -> int:
+        """``_save_load(sauvegarder)`` (L10493-10972).
+
+        **Rend 1 si l'ecran a ete valide, 0 sinon.** Appele par les lignes 12
+        (*SAVE A GAME*) et 13 (*LOAD A GAME*) du dialogue *GAME SETUP*.
+
+        La boucle :
+
+        * `_requester(d_screen, $48, $10, $B0, $B0, (-130), _end_cancel)`
+          (L10523-10529) ;
+        * le tiroir est liste par `_get_a_dir` puis `_sort` **une seule fois**,
+          a la construction (L10589-10598) - les douze emplacements ne sont
+          donc pas recharges pendant la navigation ;
+        * chaque clic dans la zone `$58..$D8` x `$22..$82` met `_filename` a
+          l'entree correspondante (L10759-10784) ; les deux fleches a
+          `$D8..$E0` font defiler (L10819-10842) ;
+        * `_check_cancel` : `0` retrace, `2` sort sans rien faire, `1`
+          assemble le chemin (L10832-10886) puis appelle `_save_game` ou
+          `_load_game` (L10888-10894).
+
+        Apres une sauvegarde reussie, la routine met `_saved = 1` (L10930)
+        puis **verifie que `level.dat` est present** : elle boucle sur
+        `Open("level.dat", $3ED)` tant que le fichier manque, en affichant
+        `strInsertDisk` (L10931-10950).
+
+        **Non transcrit** : `_get_name` (L10307, 183 lignes), l'editeur de
+        nom de fichier au clavier - les deux zones d'edition (tiroir a `$8D`,
+        nom a `$A0`, L10787-10815) leve donc `NotImplementedError`.
+        """
+        from populous.saveslots import chemin_complet, get_a_dir, sort
+        self._saves_defil = 0
+        self._saves_nom = ""
+        self._saves_liste = get_a_dir(self._saves_drawer)
+        sort(self._saves_liste)                     # L10597
+        ok, cancel = self._cadres_boutons(*self._boite_save_load())
+
+        while True:
+            self._trace_save_load(sauvegarder)
+            self.left_button = 2                     # L10753
+            while self.left_button != 0:             # L10754-10757
+                self._pompe()
+                if not self.running:
+                    return 0
+            # L10787-10815 : les deux zones d'edition
+            mx, my = self.mouse
+            if 0x58 <= mx <= 0xD8 and 0x8D <= my <= 0x95:
+                raise NotImplementedError(
+                    "SAVE/LOAD : l'edition du tiroir appelle `_get_name` "
+                    "(L10307), non transcrite")
+            if 0x58 <= mx <= 0xD8 and 0xA0 <= my <= 0xA8:
+                raise NotImplementedError(
+                    "SAVE/LOAD : l'edition du nom de fichier appelle "
+                    "`_get_name` (L10307), non transcrite")
+            i = self._survol_save_load()             # L10759-10784
+            if i is None:
+                self._defiler_save_load(
+                    1 if (mx >= 0xD8 and 0x7A <= my <= 0x82) else
+                    (-1 if (mx >= 0xD8 and 0x22 <= my <= 0x2A) else 0))
+            r = self.check_cancel(ok, cancel)        # L10843-10848
+            if r == 0:                                # L10849
+                continue
+            if r == 2:                                # L10850
+                return 0
+            if not self._saves_nom:                   # L10853-10854
+                return 0
+            chemin = chemin_complet(self._saves_drawer, self._saves_nom)
+            if sauvegarder:
+                if self.save_game(chemin) == 0:      # L10888-10894
+                    self._saved = True                # L10930
+                    self._verifier_level_dat()        # L10931-10950
+                return 1
+            self.load_game(chemin)                    # L10952-10954
+            return 1
+
+    def _verifier_level_dat(self) -> None:
+        """L10931-10950 : `level.dat` doit etre lisible, sinon on le demande.
+
+        La routine boucle sur `Open("level.dat", $3ED)` tant que le fichier
+        manque : elle ne rend la main qu'apres l'avoir referme. Le port
+        n'insere pas de disque - il n'y en a pas - mais l'echec reste
+        signale.
+        """
+        import os
+        if not os.path.exists("level.dat"):
+            print("[SAVE/LOAD] level.dat est absent du repertoire courant")
 
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).

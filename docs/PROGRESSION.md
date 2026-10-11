@@ -5964,6 +5964,89 @@ format est bit-compatible avec le listing.
 ce qui relie `save_game`/`load_game` aux lignes 12 et 13 du dialogue *GAME
 SETUP*. Passer par la boite de dialogue ou par un appel direct ne change rien
 au format ; c'est l'ecran des douze emplacements qui manque.
+### Phase 73 - `Game.save_load` : les lignes 12 et 13 de *GAME SETUP*
+
+`_save_load` (L10493-10972) est transcrite, avec `_get_a_dir` (L16841) et
+`_sort` (L11016). **SAVE A GAME** et **LOAD A GAME** fonctionnent.
+
+**Une decouverte : `_sort` trie a l'envers.** L11038-11046 compare
+`base[(D4-1)*32]` a `base[(D5-1)*32]` et n'echange que si le premier est
+**superieur** au second :
+
+```python
+if base[(D4 - 1) * 32] > base[(D5 - 1) * 32]:   # TST.W D0 ; BLE = pas d'echange
+    swap(base[D4 - 1], base[D5 - 1])
+```
+
+L'echange se produit donc quand l'element le plus loin est le plus grand,
+et le tableau sort dans l'ordre **decroissant**. Verifie par execution sur les
+**120 permutations de cinq elements** : le port donne exactement ce que
+donne un tri par insertion decroissant, a chaque fois. Le tiroir de
+sauvegardes s'affiche donc Z...A.
+
+C'est un bug de l'original, reproduit tel quel - et le controle le fixe,
+pour qu'une correction ulterieure ne passe pas inapercue.
+
+**`_get_a_dir` ne liste que les sauvegardes** (L16841-16947) : un repertoire
+est ecarte meme s'il s'appelle `*.GAM` (`TST.L (4,A0) ; BGT`, L16863), le
+nom est recopie **en majuscules** (L16870-16881), et s'il fait au moins
+quatre caracteres et finit par `.GAM` les quatre derniers sont effaces
+(L16908-16929). Un nom tronque a 29 caracteres ne porte plus le suffixe, donc
+il n'est pas compte. Chaque entree fait 32 octets.
+
+**Le tiroir n'est liste qu'une fois**, a la construction de l'ecran
+(L10589-10598) : naviguer dans les douze emplacements ne recharge rien du
+disque. Cote port la liste est donc figee au moment ou la boite s'ouvre.
+
+**Un piege de port corrige** : le collage du chemin (L10832-10886) ecrit le
+separateur a l'indice `strlen`, donc **par-dessus le zero** - aucun
+caractere n'est perdu. Ma premiere version tronquait le dernier. Et
+`TST.W (-138) ; BLE` (L10864) fait qu'un tiroir d'un seul caractere passe
+tout droit, sans separateur : `("a", "essai") -> "aessai"`. C'est la
+machine.
+
+**La garde de la ligne 13** est l'inverse de ce qu'on imagine :
+`TST.W (_serial_off) ; BEQ.S LAB_47D70` (L13267-13270) fait que *LOAD A GAME*
+n'ouvre l'ecran que si la liaison serie est **coupee**, donc en un seul
+joueur. La ligne 12 (*SAVE A GAME*) n'a pas cette garde.
+
+**Non transcrit** : `_get_name` (L10307, 183 lignes), l'editeur de nom au
+clavier. Les deux zones d'edition - tiroir a `$8D`, nom a `$A0`
+(L10787-10815) - leve donc `NotImplementedError` en nommant la routine. On
+peut selectionner un emplacement existant, mais pas en creer un par le
+clavier.
+
+#### Verification
+
+`tools/check_saveslots.py` (nouveau) : **26 controles**. Les 120 permutations
+de cinq elements contre un tri par insertion ecrit independamment, les
+listes de 0 a 4 elements, neuf elements a quatre passes, `_get_a_dir` sur un
+dossier construit (repertoire, mauvais suffixe, nom court, nom tronque), et le
+collage du chemin sur six cas dont `("a", "essai") -> "aessai"`.
+
+`tools/check_save_load_screen.py` (nouveau) : **20 controles**. La zone
+cliquable `$58..$D8` x `$22..$82`, le calcul `(y-$22) >> 3 + defil`, le refus
+d'une ligne hors contenu, les deux fleches et leur borne `defil + 5 < n`,
+puis SAVE ecrit reellement un fichier et pose `_saved`, CANCEL n'ecrit rien,
+les deux zones d'edition lever, et LOAD relit ce que SAVE a ecrit.
+
+`tools/check_game_setup_modal.py` passe de 45 a **46 controles** : les lignes
+12 et 13 quittent la liste des leveurs et sont verifiees a part.
+
+Suite complete au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
+`check_saveslots` 26/26 ; `check_savegame` 48/48 ;
+`check_save_roundtrip` 36/36 ; `check_save_load_screen` 20/20 ;
+`check_game_setup` 26/26 ; `check_game_setup_modal` 46/46 ;
+`check_set_options` 21/21 ; `check_set_options_modal` 20/20 ;
+`check_options` 17/17 ; `check_options_modal` 12/12 ; `check_checkcancel`
+11/11 ; `check_level` 41/41 ; `check_place` 501 + 16 ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 ; `check_render` OK ; `stress 2000 8` 8/8 ;
+`coverage` **207/564**.
+
+**Il ne reste que deux leveurs** dans tout le dialogue *GAME SETUP* : la
+ligne 2 (*TWO PLAYERS*, `_two_players` L11265) et la ligne 9 (*CONQUEST*,
+`_show_world` L12190), plus la ligne 15 (*RESTART THIS MAP*) qui demande
+`_ground_in` + `___setup_display`. Et `_get_name` pour la saisie au clavier.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

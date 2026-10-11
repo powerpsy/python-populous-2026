@@ -253,7 +253,7 @@ def main():
     check("L12969-12972 : un clic hors de toute ligne rend 17",
           g._survol_game_setup() == 17, "survol=%d" % g._survol_game_setup())
 
-    # ---- 11. les cinq handlers qui levent ------------------------------
+    # ---- 11. les trois handlers qui levent ------------------------------
     # Branche active de chaque ligne : TWO PLAYERS ne montre son
     # `_two_players` que si la liaison est **active** (L13009 `TST` / L13010
     # `BEQ`) et CONQUEST que si elle est **coupee** (L13225-13226). C'est
@@ -262,7 +262,6 @@ def main():
     # La ligne 11 (*GAME OPTIONS*) ne leve plus depuis la Phase 71 : elle
     # ouvre `SET GAME OPTIONS`, verifie par `tools/check_set_options_modal.py`.
     for k, nom, serie in ((2, "_two_players", 0), (9, "_show_world", 1),
-                          (12, "_save_load", 1), (13, "_save_load", 0),
                           (15, "_ground_in", 1)):
         depart(g)
         sim.serial_off = serie
@@ -275,6 +274,47 @@ def main():
         check("L12983-13286 : la ligne %d leve en nommant %s" % (k, nom),
               leve and nom in detail,
               detail if leve else "aucune leve (serial_off=%d)" % serie)
+
+    # ---- 11 bis. SAVE et LOAD ouvrent l'ecran, sans lever --------------
+    # La ligne 12 (*SAVE A GAME*) et la 13 (*LOAD A GAME*) sont transcrites
+    # depuis la Phase 73 : meme ecran, seul le titre change
+    # (`_save_load(1)` L13061, `_save_load(0)` L13261).
+    for k, sauvegarde in ((12, True), (13, False)):
+        depart(g)
+        sim.serial_off = 1          # la 13 n'ouvre l'ecran que si la
+                                   # liaison serie est COUPEE (L13267-13270)
+        g._redessiner = False
+        appele = []
+        vrai = g.save_load
+
+        def espion(flag):
+            appele.append(flag)
+            return 0
+
+        g.save_load = espion
+        try:
+            sortie = g._exec_game_setup(k)
+        finally:
+            g.save_load = vrai
+        check("L13061 / L13261 : la ligne %d appelle `save_load(%s)` et sort "
+              "de la boite" % (k, "1" if sauvegarde else "0"),
+          appele == [sauvegarde] and sortie is True,
+          "appele %s, sortie %s" % (appele, sortie))
+
+    # la ligne 13 reste inerte quand la liaison serie est ACTIVE : c'est
+    # l'inverse de ce qu'on pourrait croire, mais `TST.W ; BEQ` saute par
+    # dessus quand le mot est nul (L13268-13269).
+    depart(g)
+    sim.serial_off = 0
+    etat = sim.in_conquest
+    vrai2 = g.save_load
+    g.save_load = lambda flag: 0
+    try:
+        sortie = g._exec_game_setup(13)
+    finally:
+        g.save_load = vrai2
+    check("L13267-13270 : la ligne 13 est sans effet si la liaison est ACTIVE",
+          sortie is False and sim.in_conquest == etat)
 
     # ---- 12. la boucle modale ne fait pas tourner la simulation -------
     tour = sim.game_turn
