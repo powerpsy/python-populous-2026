@@ -5458,6 +5458,59 @@ complete au vert : `autopilot 59 0 3` 84/84 ; `check_render` OK ;
 501 + 16 cas ; `check_devil` 621 ; `check_devil_effect` 620, 8/8 chemins ;
 `check_makelevel` OK ; `smoke_sim` 5000 tours ; `stress 2000 8` 8/8 ;
 `coverage` 177/564.
+### Phase 67 - `_options` lu de part en part, et sa table verifiee
+
+Le handler du code 7 - arme par l'entree `(0,0)` de la barre d'icones - est
+maintenant **lu entier** (L13617-13942, 325 lignes) et sa table de donnees
+**transcrite et verifiee**. Le code interactif reste a ecrire.
+
+**Ce que dit la routine.** Boucle modale en cinq temps :
+
+1. sauvegarde des **46 octets** de `_stats[player]` en local (L13619-13632) ;
+2. inversion des deux curseurs : `LAB_516B0 = 10 - LAB_516B0` et idem
+   `LAB_516B4` (L13643-13660) - ils sont stockes en **complement** ;
+3. `_requester(d_screen, $10, $10, $120, $A6, ...)` puis le trace des
+   **quatorze lignes**, boucle `i` de 0 a 13 (L13783) ;
+4. attente de `_left_button == 0`, puis survol : premiere ligne dont la
+   boite `(_option_text[i]+$10, LAB_51912[i]+$10)` x largeur x 8 px est
+   touchee ;
+5. application selon la ligne, puis `_check_cancel`.
+
+**Les neuf cases a cocher** (entrees 1 a 9) masquent `power_mask`
+(`_stats+$0E`) bit par bit : le masque part de `1` et decale a gauche
+(L13740), la coche vaut `$80` eteinte / `$81` allumee, et un clic fait un
+`EOR.W` de `1 << (i-1)` (L13836-13848). Tout cela n'a lieu que si
+`_in_conquest == -1` (L13834).
+
+**Les deux curseurs.** Entree 11 = AGGRESSION sur `LAB_516B0`
+(`_stats+$0C`), entree 13 = RATE sur `LAB_516B4` (`_stats+$10`) - qui est
+**aussi** la periode des decisions IA (L17939 `DIVU`). La valeur se lit
+`(mousex - (_option_text[i] + $28)) / 8` pour 11, `+ $30` pour 13, bornee a
+`0..9`.
+
+**`_check_cancel`** (L12106) renvoie `0` (rien), `1` = OK, `2` = CANCEL, sur
+des cadres de 16 px de haut. Le `0` renvoie au trace, le `2` restaure les 46
+octets, le `1` re-inverse les deux curseurs : la double inversion annule
+celle de l'entree.
+
+**La table.** Quatorze entrees de 0x2E (46) octets a partir de
+`_option_text` (L24363) : `+0` x, `+2` y, `+4` largeur du test, `+6` la
+chaine (40 octets, octet 0 = la coche). Transcrite dans
+`populous/options.py`, et **relue dans le listing par
+`tools/check_options.py`** : 17 controles (14 entrees x/y/w/chaine + 3
+points de structure). L'octet de coche est suivi d'une **espace** avant le
+texte (`$80 $20 $43...`) - le premier jet l'avait oubliee, le controle l'a
+attrape.
+
+Reste a ecrire : la boucle modale elle-meme, qui demande de brancher
+`_check_cancel` (30 lignes, entierement lu) et le tracÃ© des quatorze lignes
+sur le moteur de rendu du port. Les deux sont desormais chiffres : 325
+lignes de logique, 644 octets de table, 30 lignes de `_check_cancel`.
+
+#### Verification
+
+`python tools/check_options.py` **17/17**. Le reste de la suite est
+inchange et au vert depuis la Phase 66.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

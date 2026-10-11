@@ -888,6 +888,46 @@ Les trois codes qui ne sont pas transcrits, avec ce qu'il leur manque :
 Ils sont armes par les entrees `(0,0)`, `(1,1)` et `(2,2)` de la barre
 d'icones (L1729, L1795, L1820) et levent `NotImplementedError`.
 
+`_options` (L13617, `$48188`) est le handler du **code 7** de `_do_action`
+(L18607-18728), arme par l'entree `(0,0)` de la barre d'icones. Boucle
+modale : dessiner, attendre un clic,appliquer, recommencer.
+
+| etape | lignes | detail |
+|---|---|---|
+| sauvegarde | 13619-13632 | copie des **46 octets** de `_stats[player]` en local (`LINK A5,#-56`) |
+| inversion | 13643-13660 | `LAB_516B0[player] = 10 - LAB_516B0[player]` ; idem `LAB_516B4[player]` - les curseurs sont stockes en complement |
+| boite | 13634-13642 | `_requester(d_screen, $10, $10, $120, $A6, ...)` |
+| noms | 13669-13688 | `LAB_51922[0]` = "GOOD" si `player == 0`, sinon "EVIL" (`___strcpy`) |
+| traces | 13661-13784 | boucle `i` de 0 a 13 (`CMPI.W #$0E`, L13783) |
+| attente | 13785-13789 | tourne tant que `_left_button != 0` |
+| survol | 13790-13832 | premiere ligne dont `_option_text[i]+$10 <= mousex <= _option_text[i]+LAB_51914[i]+$10` **et** `LAB_51912[i]+$10 <= mousey <= LAB_51912[i]+$18` |
+| application | 13833-13893 | si `_in_conquest == -1` seulement |
+| boutons | 13894-13938 | `_check_cancel(_end_ok, _end_cancel)` |
+| sortie | 13939-13942 | `_return_to_game` (L13954) |
+
+**Les 9 cases a cocher** (entrees 1 a 9, L13690-13710) : le masque part de
+`1` et decale a gauche (`ASL (-4,A5)` L13740) ; l'octet de la coche vaut
+`$80` eteint, `$81` allume ; un clic fait `EOR.W` de `1 << (i-1)` sur
+`LAB_516B2[player]` (`_stats + $0E`, `power_mask`) - L13836-13848.
+
+**Les deux curseurs** : entree 11 = AGGRESSION (`LAB_516B0`, `_stats+$0C`,
+`threshold`), entree 13 = RATE (`LAB_516B4`, `_stats+$10`, **la periode des
+decisions IA**, L17939 `DIVU`). La valeur vient de
+`(mousex - (_option_text[i] + $28)) / 8` pour 11, `+ $30` pour 13,
+bornee a `0..9` (`TST.W` / `CMPI.W #$9`, L13863-13866).
+
+**`_check_cancel`** (L12106) renvoie `0` tant qu'aucun des deux cadres n'est
+ touche, `1` pour OK et `2` pour CANCEL - chacun teste une boite de 16 px de
+ haut (L12125-12129). Le `0` renvoie au trace (L13938), le `2` restaure les
+ 46 octets, le `1` re-inverse les deux curseurs (L13916-13933) : la double
+ inversion annule celle de l'entree.
+
+Les quatorze lignes vivent dans une table de 14 entrees de `0x2E` (46) octets
+a partir de `_option_text` (L24363) : `+0` x, `+2` y, `+4` largeur du test,
+`+6` la chaine (40 octets, octet 0 = la coche). Elle est transcrite dans
+`populous/options.py` et verifiee par `tools/check_options.py`, qui la relit
+dans le listing.
+
 ## 4.5 Les effets
 
 ### `_do_magnet` (ligne 6769, `$42F34`) — coût 200
