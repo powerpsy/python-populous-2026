@@ -193,7 +193,28 @@ class Game:
         self.not_player = 1 - player
         self.seed = seed
         self.cheat = 0
-        self.serial_off = 0
+        # `_serial_off` : 1 = liaison serie **coupee**, donc un seul
+        # joueur. Le port posait 0 (deux joueurs) la ou le listing
+        # arme une partie simple a 1 (L12768, comme L11240). Consequence
+        # directe : le handler du code 8 saute alors `_write_serial`
+        # (L18736-18737).
+        self.serial_off = 1
+        # `_bring_up_two` (L12812) : demande d'ouvrir l'ecran deux
+        # joueurs ; `_new_map` (L18733) : changement de terrain a
+        # charger, consomme par `___setup_display(0, new_map - 2)`
+        # (L18924-18928). Les deux ne sont pas encore consommes cote
+        # port - voir `Game.game_options`.
+        self.bring_up_two = 0
+        self.new_map = 0
+        # Les dix-sept coches du dialogue `GAME SETUP` sont un etat
+        # **global et persistant** dans le listing : les dix variables
+        # `strOnePlayer` .. `strCustomGame` sont ecrites dans
+        # `strGameSetup` (L12815, L12824, ...). Le prologue de
+        # `_game_options` les recalcule a chaque ouverture (L12813-12884),
+        # et chaque handler retourne sa ligne et sa voisine
+        # (L12987-12992). On garde donc une copie vivante ici.
+        from populous.game_setup import GAME_SETUP_TEXTE
+        self.setup_ticks = [s[:1] for s in GAME_SETUP_TEXTE]
         self.flags = 0x10        # LAB_518A7 (L24311-24312, DC.B $10) :
                                    # bit0 tue dans l'eau, bit2 gele l'IA
         # Globaux remis a zero par `_check_life` (L20965 / L20970) puis lus

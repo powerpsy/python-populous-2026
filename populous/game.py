@@ -1377,7 +1377,8 @@ class Game:
             self.handle(ev)
         self._read_buttons()
 
-    def _cadres_boutons(self, x: int, y: int, largeur: int):
+    def _cadres_boutons(self, x: int, y: int, largeur: int,
+                        hauteur: int):
         """Les deux cadres poses par ``_requester`` (L9991-10246).
 
         ``_requester`` remplit lui-meme les structures ``_end_ok`` et
@@ -1403,7 +1404,6 @@ class Game:
         """
         d4 = x >> 4                     # L9907
         d5 = y >> 4                     # L9905
-        hauteur = 0xA6                  # hauteur de la boite d'`_options`
         d6 = d5 + 0x10                  # L9949
         while d6 < d5 + hauteur - 0x10:  # L9953-9960
             d6 += 0x10
@@ -1474,7 +1474,7 @@ class Game:
         # (2) inversion (L13643-13660)
         st.threshold = 10 - st.threshold
         st.period = 10 - st.period
-        ok, cancel = self._cadres_boutons(0x10, 0x10, 0x120)
+        ok, cancel = self._cadres_boutons(*self._boite_options())
 
         while True:
             self.left_button = 2                    # L13662
@@ -1516,6 +1516,265 @@ class Game:
             break
         self.left_button = 2                        # L13954 `_return_to_game`
         self.compose()
+
+    def _boite_options(self):
+        """`(x, y, largeur, hauteur)` de la boite d'`_options` (L13660)."""
+        return (0x10, 0x10, 0x120, 0xA6)
+
+    def _boite_game_setup(self):
+        """`(x, y, largeur, hauteur)` de la boite de `GAME SETUP` (L12891)."""
+        return (0x10, 0x10, 0x120, 0xB0)
+
+    def _trace_game_setup(self) -> None:
+        """Le trace des dix-sept lignes de `GAME SETUP` (L12886-12924).
+
+        `_requester` n'est retrace que lorsqu'un handler leve le drapeau de
+        redessin (`-4,A5`, L12887-12898) ; le cadre disparait donc quand on
+        passe par `_set_options`, et revient au trace suivant.
+        """
+        from populous.game_setup import (GAME_SETUP_NB, GAME_SETUP_TEXTE,
+                                         GAME_SETUP_X, GAME_SETUP_Y)
+        r, d = self.ren, self.frame
+        for i in range(GAME_SETUP_NB):                     # L12902-12924
+            txt = GAME_SETUP_TEXTE[i]
+            if i:                                           # le titre n'a pas
+                txt = self.sim.setup_ticks[i] + txt[1:]      # de coche
+            x = GAME_SETUP_X[i] + 0x10                      # L12910-12912
+            y = GAME_SETUP_Y[i] + 0x10                      # L12910-12912
+            # `_text` prend x en unites de 8 px (L12964-12966)
+            r.draw_text(d, x >> 3, y, txt)
+
+    def game_setup(self) -> None:
+        """``_game_options`` (L12801-13358) - la boite *GAME SETUP*.
+
+        Handler du **code 8** de `_do_action`, arme par l'entree `(1,1)` de
+        la barre d'icones. Comme `_options`, c'est une boucle modale :
+
+        1. sauvegarde de l'etat - `serial_off`, `paint_map`, `player`,
+           `_stats[player].act` et `in_conquest` (L12803-12811) ;
+        2. `_bring_up_two = 0` (L12812) ;
+        3. recalcul des dix coches d'apres cet etat (L12813-12884) : elles
+           vivent **dans** le tableau `strGameSetup`, l'octet 0 de chaque
+           chaine ;
+        4. trace, attente du clic, survol de la premiere ligne touchee
+           (L12866-12982) ;
+        5. saut dans le handler de la ligne (table de L13292-13308) ;
+        6. `_check_cancel` : `0` retrace, `2` restaure la sauvegarde et
+           sort, `1` sort (L13316-13358).
+
+        **Six handlers restent non transcrits** parce qu'ils appellent une
+        routine qui ne l'est pas - ils levent `NotImplementedError` en
+        nommant la routine : ligne 2 (`_two_players`, L11265) sur sa branche
+        active, ligne 9 (`_show_world`, L12190), ligne 11 (`_set_options`,
+        L13362), lignes 12 et 13 (`_save_load`, L10493), ligne 15
+        (`_ground_in` + `___setup_display`, L18924). Le port ne peut pas
+        faire semblant : mieux vaut une erreur nommee qu'un ecart muet.
+        """
+        sim = self.sim
+        st = sim.stats
+        ticks = sim.setup_ticks
+
+        # (1) sauvegarde - L12803-12811
+        garde = (sim.serial_off, sim.paint_map, sim.player,
+                 st[sim.player].act, sim.in_conquest)
+        sim.bring_up_two = 0                              # L12812
+
+        # (2) les dix coches, recalculees d'apres l'etat - L12813-12884.
+        # L'entree cochee porte $81, l'autre $80.
+        for i, actif in ((1, sim.serial_off != 0),
+                         (2, sim.serial_off == 0),
+                         (3, sim.paint_map == 0),
+                         (4, sim.paint_map != 0),
+                         (5, sim.player == 0),
+                         (6, sim.player != 0),
+                         (7, st[sim.player].act == 0),
+                         (8, st[sim.player].act != 0),
+                         (9, sim.in_conquest == -1),
+                         (10, sim.in_conquest != -1)):
+            ticks[i] = "\x81" if actif else "\x80"
+
+        redessiner = True                          # -4,A5 = 1, L12803
+        ok, cancel = self._cadres_boutons(*self._boite_game_setup())
+
+        while True:
+            if redessiner:                          # LAB_47822-47850
+                self.requester(*self._boite_game_setup(), "", "")
+                redessiner = False
+            self.left_button = 2                    # L12925
+            self._trace_game_setup()                # L12901-12924
+            while self.left_button != 0:            # L12927-12929
+                self._pompe()
+                if not self.running:
+                    return
+            i = self._survol_game_setup()           # L12866-12982
+            if self._exec_game_setup(i):             # L12980 + table L13292
+                break                               # sortie directe (LAB_47E4E)
+            r = self.check_cancel(ok, cancel)        # LAB_47DCA, L13317-13319
+            if r == 0:                               # L13322 : on retrace
+                continue
+            if r == 2:                               # L13323 : CANCEL
+                (sim.serial_off, sim.paint_map, sim.player,
+                 st[sim.player].act, sim.in_conquest) = garde
+            break
+        self.left_button = 2                        # L13960 `_return_to_game`
+        self.compose()
+
+    def _survol_game_setup(self) -> int:
+        """L'index de la premiere ligne touchee, ou 17 (L12866-12982)."""
+        from populous.game_setup import (GAME_SETUP_CONQUEST_MAX, GAME_SETUP_NB,
+                                         GAME_SETUP_W, GAME_SETUP_X,
+                                         GAME_SETUP_Y)
+        sim = self.sim
+        mx, my = self.mouse
+        for i in range(GAME_SETUP_NB):
+            x0 = GAME_SETUP_X[i] + 0x10              # L12886-12888
+            if mx < x0:                              # L12889-12890
+                continue
+            if mx > x0 + GAME_SETUP_W[i] + 0x10:     # L12892-12893
+                continue
+            y0 = GAME_SETUP_Y[i] + 0x10              # L12894-12896
+            if my < y0:                              # L12897-12898
+                continue
+            if my <= y0 + 8:                         # L12900-12901
+                # L12974-12978 : en conquete les premieres lignes sont
+                # neutralisees - l'index saute hors du tableau et le
+                # dispatch de `LAB_47DB8` retombe sur le no-op.
+                if i < GAME_SETUP_CONQUEST_MAX and sim.in_conquest != -1:
+                    return 0x13
+                return i
+        return GAME_SETUP_NB                        # aucune ligne (L12969-12972)
+
+    def _exec_game_setup(self, i: int) -> bool:
+        """Le handler de la ligne `i`. Rend vrai si la boite se ferme.
+
+        Ordre et branches releves sur la table de sauts de L13292-13308 ;
+        chaque handler y aboutit soit a `LAB_47DCA` (on rend faux, la suite
+        est `_check_cancel`), soit a `LAB_47E4E` (`_return_to_game`, on rend
+        vrai).
+        """
+        sim = self.sim
+        st = sim.stats
+        ticks = sim.setup_ticks
+        coche = "\x81"                              # ligne active
+        vide = "\x80"                                # l'autre
+
+        if i == 0:                                   # LAB_47D94 : le titre
+            return False
+        if i >= 17:                                  # LAB_47DB8 : hors tableau
+            return False
+
+        if i == 1:                                   # LAB_47968 ONE PLAYER
+            ticks[1], ticks[2] = coche, vide          # L12987-12992
+            if sim.serial_off == 0:                  # L12993
+                # L12998 puis L13002 : le meme mot ecrit deux fois, il reste
+                # donc `act = 1`. On garde les deux ecritures, pas l'effet.
+                st[sim.player].act = 0                # L12998
+                st[sim.player].act = 1                # L13002
+                ticks[7], ticks[8] = coche, vide      # L13003-13004
+                sim.serial_off = 1                   # L13005
+            return False
+        if i == 2:                                   # LAB_479CC TWO PLAYERS
+            if sim.serial_off != 0:
+                sim.bring_up_two = 1                 # L13028, puis sortie
+                return True                          # LAB_47A0E-47A14
+            ticks[2], ticks[1] = coche, vide          # L13014-13019
+            raise NotImplementedError(               # L13021
+                "GAME SETUP : la ligne 2 (TWO PLAYERS) appelle `_two_players` "
+                "(L11265), non transcrite")
+        if i == 3:                                   # LAB_47A1C PLAY GAME
+            ticks[3], ticks[4] = coche, vide          # L13038-13043
+            sim.paint_map = 0                        # L13044
+            return False
+        if i == 4:                                   # LAB_47A4A PAINT MAP
+            ticks[4], ticks[3] = coche, vide          # L13050-13055
+            sim.paint_map = 1                        # L13056
+            return False
+        if i == 5:                                   # LAB_47A7A GOOD
+            ticks[5], ticks[6] = coche, vide          # L13062-13067
+            self.set_tend_icons(-1, -1)              # L13068-13071
+            self.set_mode_icons(-1, -1)              # L13072-13075
+            # L13076-13084 : on echange les `act` des deux fiches. Le
+            # listing ecrit `LAB_516D8` et `LAB_516AA` en dur, soit
+            # `stats[1]` et `stats[0]`, et non `not_player`.
+            tmp = st[sim.not_player].act             # L13076-13079
+            st[1].act = st[sim.player].act           # L13080-13083
+            st[0].act = tmp                          # L13084
+            sim.player = 0                           # L13085
+            self._pointeur_set_options(1, 4)         # L13086-13095
+            sim.not_player = 1                       # L13097-13102
+            self.set_tend_icons(-1, -1)              # L13104-13107
+            self.set_mode_icons(-1, -1)              # L13108-13111
+            return False
+        if i == 6:                                   # LAB_47B3E EVIL
+            ticks[6], ticks[5] = coche, vide          # L13117-13122
+            self.set_tend_icons(-1, -1)              # L13123-13126
+            self.set_mode_icons(-1, -1)              # L13127-13130
+            tmp = st[sim.not_player].act             # L13131-13134
+            st[1].act = st[sim.player].act           # L13135-13138
+            st[0].act = tmp                          # L13139
+            sim.player = 1                           # L13140
+            self._pointeur_set_options(4, 4)         # L13141-13150
+            sim.not_player = 0                       # L13152-13157
+            self.set_tend_icons(-1, -1)              # L13159-13162
+            self.set_mode_icons(-1, -1)              # L13163-13166
+            return False
+        if i == 7:                                   # LAB_47C04 HUMAN VS AMIGA
+            ticks[7], ticks[8] = coche, vide          # L13172-13177
+            st[sim.player].act = 0                   # L13178-13181
+            if sim.serial_off != 0:                  # L13182
+                st[1 - sim.player].act = 1           # L13184-13193
+            return False
+        if i == 8:                                   # LAB_47C5E AMIGA VS AMIGA
+            ticks[8], ticks[7] = coche, vide          # L13200-13205
+            st[sim.player].act = 1                   # L13206-13209
+            if sim.serial_off != 0:                  # L13210
+                st[1 - sim.player].act = 1           # L13212-13221
+            return False
+        if i == 9:                                   # LAB_47CBA CONQUEST
+            if sim.serial_off == 0:                  # L13225 : inerte
+                return False
+            ticks[9], ticks[10] = coche, vide         # L13230-13235
+            raise NotImplementedError(               # L13237
+                "GAME SETUP : la ligne 9 (CONQUEST) appelle `_show_world` "
+                "(L12190), non transcrite")
+        if i == 10:                                  # LAB_47D00 CUSTOM GAME
+            ticks[10], ticks[9] = coche, vide         # L13247-13252
+            sim.in_conquest = -1                     # L13253
+            return False
+        if i == 11:                                  # LAB_47D30 GAME OPTIONS
+            raise NotImplementedError(               # L13256
+                "GAME SETUP : la ligne 11 (GAME OPTIONS) appelle "
+                "`_set_options` (L13362), non transcrite")
+        if i in (12, 13):                            # LAB_47D3E / LAB_47D56
+            if i == 13 and sim.serial_off != 0:       # L13268-13269
+                return False
+            raise NotImplementedError(               # L13071 / L13261
+                "GAME SETUP : la ligne %d appelle `_save_load` (L10493), "
+                "non transcrite" % i)
+        if i == 14:                                  # LAB_47D72 NEXT MAP
+            sim.new_map = 1                          # L13279, puis LAB_47E4E
+            return True
+        if i == 15:                                  # LAB_47D7C RESTART
+            raise NotImplementedError(               # L13282-13284
+                "GAME SETUP : la ligne 15 (RESTART THIS MAP) veut "
+                "`_new_map = _ground_in + 2` ; le port ne suit pas "
+                "`_ground_in` (L396-399, L438-441)")
+        # i == 16                                    # LAB_47D8A SURRENDER
+        self.surrender = sim.player                  # L13287, puis LAB_47E4E
+        return True
+
+    def _pointeur_set_options(self, si_mode2, si_mode4):
+        """`_pointer` apres un changement de tribu (L13086-13095 / L13141).
+
+        `CMPI.W #$0002,(_mode)` : le mode 2 force le pointeur du joueur.
+        Sinon `BTST #2,bitfield_51645` - le **bas octet** de `_mode`
+        (Phase 63) - et le pointeur vaut alors `player + 2`.
+        """
+        if self.sim.mode == 2:                       # L13086-13088
+            self.sim.pointer = si_mode2
+            return
+        if self.sim.mode & 4:                        # BTST #2, bas octet
+            self.sim.pointer = self.sim.player + 2   # L13091-13095
 
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).

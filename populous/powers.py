@@ -825,7 +825,7 @@ class PowerEngine:
         5           `LAB_4BC54` -> `_do_knight` **fait** — appelle `do_knight`
         6           `LAB_4BC62` (16 l.)        **fait** — le bouton pause
         7           `LAB_4BC94` (122 l.)       **fait** - `Game.options`
-        8           `LAB_4BE12` (214 l.)       non lu - `_game_options`
+        8           `LAB_4BE12` (230 l.)       **fait** - `Game.game_setup`
                                               L12801
         9           `LAB_4C0B8` (17 l.)        **fait** — mana du joueur
         10          `LAB_4C0EC` (17 l.)        **fait** — mana de l'adversaire
@@ -942,14 +942,44 @@ class PowerEngine:
             sim.cheat = arg2 + 1                   # L19001-19002
             return
 
-        # Seuls codes encore joignables ici : 2, 7, 8. Les douze autres
+        # Seuls codes encore joignables ici : 2. Les quatorze autres
         # (0, 1, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15) sont transcrits et
         # sont retournes plus haut.
         non_transcrit = {
             # code -> (handler, ligne du handler, routine qu'il appelle)
             2: ("LAB_4BA34", 18400, "_write_serial / _read_serial (liaison serie)"),
-            8: ("LAB_4BE12", 18729, "_game_options (L12801) : mise en place"),
         }
+        if code == 8:                             # LAB_4BE12, L18729
+            # L18733 : le drapeau de changement de terrain est efface avant
+            # d'ouvrir la boite.
+            sim.new_map = 0
+            if tribe == sim.player:               # L18731
+                # L18734-18735 : on note l'etat de la liaison *avant* la
+                # boite. Si le joueur etait en deux joueurs, le listing
+                # repart sur la voie serie (L18738-18753) ; en un joueur
+                # (`serial_off != 0`, pose par L12768) il ne l'ecrit pas.
+                avant = sim.serial_off
+                self.g.game_setup()              # L18735
+                if avant == 0:                   # L18736-18737
+                    raise NotImplementedError(
+                        "_do_action code 8 : `_message = _game_mode` puis dix "
+                        "octets de `_stats` recopies et `_write_serial"
+                        "(_message, $0C, 0)` (L18738-18753), non transcrit")
+            elif sim.serial_off == 0:            # L18757-18758
+                raise NotImplementedError(
+                    "_do_action code 8 : branche distante, `_read_serial"
+                    "(_message, $0C, $1B)` (L18759-18762), non transcrit")
+            # LAB_4C070, L18917-18942 : la queue commune aux deux branches.
+            if sim.new_map:                      # L18918-18931
+                raise NotImplementedError(
+                    "_do_action code 8 : `_new_map = %d` demande "
+                    "`___setup_display(0, new_map - 2)` (L18924-18928), non "
+                    "transcrit" % sim.new_map)
+            if sim.bring_up_two:                 # L18933-18940
+                raise NotImplementedError(
+                    "_do_action code 8 : `_bring_up_two` demande "
+                    "`_two_players(1)` (L18936), non transcrit")
+            return
         if code == 7:                             # LAB_4BC94, L18607
             # L18634-18645 : `_options(player)` si `p1 != 0`,
             # `_options(_not_player)` sinon ; la garde de L18617-18628

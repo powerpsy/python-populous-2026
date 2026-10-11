@@ -68,7 +68,7 @@ def main():
     st.threshold = 3
     st.period = 4
 
-    ok, cancel = g._cadres_boutons(0x10, 0x10, 0x120)
+    ok, cancel = g._cadres_boutons(*g._boite_options())
     check("L9991-10246 : les deux cadres sont calcules, CANCEL a droite",
           ok is not None and cancel is not None and cancel[0] > ok[0],
           "ok=%s cancel=%s" % (str(ok), str(cancel)))

@@ -436,10 +436,11 @@ def main() -> int:
           "toggles=%s" % sorted(g.icon_toggles))
 
     print("\nI. les codes encore non transcrits levent (pas des no-ops)")
-    # (1,1) et (2,2) de la barre d'icones arment les codes 8 et 2
-    # (Phase 63) : le defaut de `do_action` doit lever. Le code 7 - entre
-    # (0,0) - est transcrit depuis la Phase 68 (`Game.options`).
-    for col, row, code in ((1, 1, 8), (2, 2, 2)):
+    # (2,2) de la barre d'icones arme le code 2, seul code encore non
+    # transcrit. Le code 7 - entree (0,0) - est transcrit depuis la Phase 68
+    # (`Game.options`), le code 8 - entree (1,1) - depuis la Phase 69
+    # (`Game.game_setup`).
+    for col, row, code in ((2, 2, 2),):
         st.act = 14
         st.p2 = code
         st.p1 = 1
@@ -493,8 +494,8 @@ def main() -> int:
 
         return pompe
 
-    ok, cancel = g._cadres_boutons(0x10, 0x10, 0x120)
-    for col, row in ((1, 1), (2, 2)):
+    ok, cancel = g._cadres_boutons(*g._boite_options())
+    for col, row in ((2, 2),):
         g.sim.in_conquest = -1
         for mx in range(160, g.screen.get_width()):
             for my in range(0, g.screen.get_height()):
@@ -558,6 +559,47 @@ def main() -> int:
           "continue", survivant and g.running, detail)
     check("L13902 : CANCEL laisse la fiche `_stats` intacte",
           st.power_mask == 0xFFFF, "power_mask=0x%04X" % st.power_mask)
+
+    # ---- J4. l'icone (1,1) ouvre `GAME SETUP` et on en sort par CANCEL --
+    # Le code 8 est transcrit (Phase 69). Comme `_options`, la boite est
+    # modale : le scenario doit etre pose **avant** le clic, car
+    # `_do_actions` ouvre le dialogue des la meme image (L1010).
+    g.sim.in_conquest = -1
+    sim_avant = (g.sim.serial_off, g.sim.paint_map, g.sim.player,
+                 g.sim.in_conquest)
+    ok2, cancel2 = g._cadres_boutons(*g._boite_game_setup())
+    for mx in range(160, g.screen.get_width()):
+        for my in range(0, g.screen.get_height()):
+            u, v = g._uv(mx, my)
+            if (u > 0x112 and (u - 0x110) // 16 == 1
+                    and (v - 0x20) // 16 == 1):
+                g.mouse = (mx, my)
+                break
+        else:
+            continue
+        break
+    g._pompe = scenario([(0, 0, False),
+                         (cancel2[0] + 4, cancel2[1] + 8, True)])
+    survivant = True
+    detail = ""
+    try:
+        for _ in range(5):
+            g.image()
+    except Exception as exc:
+        survivant = False
+        detail = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        del g._pompe
+    check("L18729 + L12801 : l'icone (1,1) ouvre `GAME SETUP` et la partie "
+          "continue", survivant and g.running, detail)
+    check("L13325-13351 : CANCEL restaure `serial_off`, `paint_map`, "
+          "`player` et `in_conquest`",
+          (g.sim.serial_off, g.sim.paint_map, g.sim.player,
+           g.sim.in_conquest) == sim_avant,
+          "avant=%s apres=%s"
+          % (str(sim_avant),
+             str((g.sim.serial_off, g.sim.paint_map, g.sim.player,
+                  g.sim.in_conquest))))
 
     print("\n%d controles, %d echec(s)" % (TOTAL[0], KO[0]))
     return 1 if KO[0] else 0

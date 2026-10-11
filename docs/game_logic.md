@@ -824,8 +824,9 @@ croix `_tend_x[p1]`/`_tend_y[p1]` (L2455-2522), puis ecrit
 `LAB_52DE8[tribu*16] = p1` (`command[player]`). Aucun cout, aucun modelage du
 terrain : choisir une direction n'est pas lever le sol.
 
-Les codes 2, 7 et 8 de `_do_action` - armes par (0,0), (1,1) et (2,2) de la
-barre - n'ont pas ete transcrits.
+Le code 2 de `_do_action` - arme par (2,2) de la barre - n'a pas ete
+transcrit : il est la liaison serie. Les codes 7 et 8, armes par (0,0) et
+(1,1), le sont depuis les phases 68 et 69.
 
 Les colonnes 7 et 8 de `LAB_3F666` n'arment rien : elles deplacent la
 fenetre et le suivi.
@@ -882,11 +883,12 @@ Les trois codes qui ne sont pas transcrits, avec ce qu'il leur manque :
 | code | handler | ligne | routine requise |
 |---|---|---|---|
 | 2 | `LAB_4BA34` | 18400 | `_write_serial` / `_read_serial` |
-| 7 | `LAB_4BC94` | 18607 | `_options` (L13617) - dialogue des options |
-| 8 | `LAB_4BE12` | 18729 | `_game_options` (L12801) - mise en place |
+| 7 | `LAB_4BC94` | 18607 | `Game.options` (`_options`, L13617) - **fait** |
+| 8 | `LAB_4BE12` | 18729 | `Game.game_setup` (`_game_options`, L12801) - **fait** |
 
-Ils sont armes par les entrees `(0,0)`, `(1,1)` et `(2,2)` de la barre
-d'icones (L1729, L1795, L1820) et levent `NotImplementedError`.
+Le code 2 est arme par l'entree `(2,2)` de la barre d'icones (L1820) et leve
+`NotImplementedError`. Les codes 7 et 8 sont armes par `(0,0)` (L1729) et
+`(1,1)` (L1795) et sont transcrits.
 
 `_options` (L13617, `$48188`) est le handler du **code 7** de `_do_action`
 (L18607-18728), arme par l'entree `(0,0)` de la barre d'icones. Boucle
@@ -929,6 +931,70 @@ a partir de `_option_text` (L24363) : `+0` x, `+2` y, `+4` largeur du test,
 `+6` la chaine (40 octets, octet 0 = la coche). Elle est transcrite dans
 `populous/options.py` et verifiee par `tools/check_options.py`, qui la relit
 dans le listing.
+
+## 4.4 bis `_game_options` — ligne 12801 (`$47722`) — le dialogue *GAME SETUP*
+
+Handler du **code 8** de `_do_action` (`LAB_4BE12`, L18729), arme par l'entree
+`(1,1)` de la barre d'icones (L1795). Meme boucle modale que `_options` :
+sauvegarde, trace, attente du clic, survol, saut dans le handler de la ligne,
+`_check_cancel`, `_return_to_game`.
+
+| etape | lignes | detail |
+|---|---|---|
+| sauvegarde | 12803-12811 | cinq mots : `_serial_off`, `_paint_map`, `_player`, `_stats[_player]` et `_in_conquest` |
+| `_bring_up_two` | 12812 | remis a zero |
+| les dix coches | 12813-12884 | les variables `strOnePlayer` .. `strCustomGame` sont **dans** `strGameSetup` : c'est l'octet 0 de la chaine de l'entree |
+| boite | 12886-12898 | `_requester(d_screen, $10, $10, $120, $B0, _end_ok, _end_cancel)` - **`$B0`**, et non `$A6` comme pour `_options`, parce que la colonne de droite est a x = 152 |
+| traces | 12901-12924 | boucle `i` de 0 a 16 (`CMPI.W #$0011`) |
+| attente | 12927-12929 | tourne tant que `_left_button != 0` |
+| survol | 12866-12982 | comme `_options`, mais la boite y est `[y+$10, y+$18]` et la neutralisation de conquete (L12974-12978) renvoie l'index `$13`, hors tableau |
+| dispatch | 13292-13308 | table de **17 sauts relatifs**, un par ligne |
+| boutons | 13316-13324 | `_check_cancel(_end_ok, _end_cancel)` ; `0` retrace, `2` restaure et sort, `1` sort |
+| sortie | 13356-13358 | `_return_to_game` (L13954) |
+
+**La table unique.** `_game_text` (L24494), `LAB_51BDE` (L24496) et
+`LAB_51BE0` (L24498) ne sont pas trois tables mais trois vues du meme bloc de
+**782 octets**, indexees avec le pas `0x2E` et decalees de 0, 2 et 4 octets :
+
+```
+LAB_51BDE = 0x51bde = strGameSetup (0x51be2) - 4
+LAB_51BE0 = 0x51be0 = strGameSetup - 2
+_game_text = 0x51bdc = strGameSetup - 6
+```
+
+Chaque entree est donc `{WORD x ; WORD y ; WORD w ; char texte[40]}`, l'octet
+0 de `texte` etant la coche - `$81` pour la ligne active, `$80` pour l'autre.
+Le bloc finit a 0x51eea, ou commence `_c_text` (L24622). Les dix premieres
+lignes sont cinq paires de boutons radio (x = 16 et x = 152), les sept
+dernieres les actions (x = 80, largeur 128). Table transcrite dans
+`populous/game_setup.py`, relue dans le listing par
+`tools/check_game_setup.py`.
+
+**`_serial_off` vaut 1 au depart** (L12768, comme L11240) : le nom est
+trompeur, `1` signifie « liaison série **coupée** », donc un seul joueur. Le
+prologue en fait `strOnePlayer = $80 + serial_off` (L12813-12815). Le port
+l'initialisait a 0, ce qui le faisait partir sur la voie série du code 8.
+Corige.
+
+**Six lignes sur dix-sept lèvent encore** `NotImplementedError`, en nommant
+la routine manquante - mieux vaut une erreur nommee qu'un ecart muet :
+
+| ligne | etiquette | branche active | routine |
+|---|---|---|---|
+| 2 | TWO PLAYERS | `serial_off == 0` | `_two_players` (L11265), L13021 |
+| 9 | CONQUEST | `serial_off != 0` | `_show_world` (L12190), L13237 |
+| 11 | GAME OPTIONS | toujours | `_set_options` (L13362), L13256 |
+| 12 | SAVE A GAME | toujours | `_save_load(1)` (L10493), L13261 |
+| 13 | LOAD A GAME | `serial_off == 0` | `_save_load(0)` (L10493), L13071 |
+| 15 | RESTART THIS MAP | toujours | `_ground_in` + `___setup_display` (L18924), L13282 |
+
+Noter l'**inverse** des branches 2 et 9 : TWO PLAYERS n'ouvre son ecran que si
+la liaison est **active**, CONQUEST ne part que si elle est **coupee**
+(L13009-13010 contre L13225-13226).
+
+La queue commune du handler, `LAB_4C070` (L18917-18942), consomme `_new_map`
+(`___setup_display(0, new_map - 2)`, L18924) puis `_bring_up_two`
+(`_two_players(1)`, L18936) : les deux leveurs egalement.
 
 ## 4.5 Les effets
 
@@ -1475,8 +1541,11 @@ Ce que l'on sait *pour certain* :
 * Pourquoi `_do_action` **bascule sur son 3ᵉ argument** alors que les codes 1‑13
   utilisent ce champ comme `y` (§4.4) : le comportement machine est certain,
   l'intention d'origine ne l'est pas.
-* `_do_action` sous‑commandes 7 (ligne 18607) et 8 (`LAB_4BE12`, ligne 18729) : non
-  décodées.
+* `_do_action` sous‑commandes 7 (ligne 18607) et 8 (`LAB_4BE12`, ligne 18729) :
+  **transcrites** (phases 68 et 69). Restent non transcrites, et elles leve
+  `NotImplementedError` : `_two_players` (L11265), `_show_world` (L12190),
+  `_set_options` (L13362), `_save_load` (L10493) et `_ground_in`, que
+  `_game_options` appelle depuis six de ses dix-sept lignes.
 * `_end_game` cas 5 (`LAB_4883E`) : non relu.
 * `peep+0x0C == 0x2A (42)` : utilisé comme marqueur « grande ville » par `_set_town`
   (ligne 5946) et filtré dans `_end_game` (ligne 14128). Le lien exact entre ce champ

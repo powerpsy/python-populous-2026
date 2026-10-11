@@ -5618,6 +5618,79 @@ ajoute). Suite complete au vert : `autopilot 59 0 3` 84/84 ;
 Reste ouvert, et c'est le dernier gros morceau des seize codes : `_game_options`
 (L12801, code 8), arme par l'entree `(1,1)` de la barre, plus la liaison
 serie du code 2 (entree `(2,2)`).
+### Phase 69 - `Game.game_setup` : le dialogue *GAME SETUP* tourne
+
+`_game_options` (L12801-13358) est code, et le **code 8 de `_do_action`
+(`LAB_4BE12`, L18729) est le deuxieme des seize debouche**. L'entree `(1,1)`
+de la barre d'icones ouvre la vraie boite.
+
+**Une seule table, pas trois.** Point releve en transposant : `_game_text`
+(L24494), `LAB_51BDE` (L24496) et `LAB_51BE0` (L24498) ne sont pas trois
+tableaux, mais **trois vues du meme bloc de 782 octets**, indexees avec le
+pas 0x2E et decalees de 0, 2 et 4 octets depuis `strGameSetup` (0x51be2) :
+
+    LAB_51BDE = 0x51bde = strGameSetup - 4
+    LAB_51BE0 = 0x51be0 = strGameSetup - 2
+    _game_text = 0x51bdc = strGameSetup - 6
+
+Chaque entree est donc `{WORD x ; WORD y ; WORD w ; char texte[40]}` et
+l'octet 0 de `texte` est la coche - `$81` pour la ligne active, `$80` pour
+l'autre. C'est pourquoi les dix variables `strOnePlayer` .. `strCustomGame`
+ne sont pas dix variables mais dix octets du tableau : le port les garde dans
+`sim.setup_ticks`, copie vivante recalculee par le prologue (L12813-12884) et
+retournee par chaque handler.
+
+Le bloc finit a 0x51eea, ou commence `_c_text` (L24622) : l'extraction lit
+exactement 782 octets, ce qui est deja une preuve qu'elle est alignee.
+
+**Un bug de plus trouve dans le port** : `sim.serial_off` valait 0, la ou le
+listing arme une partie simple a **1** (L12768, comme L11240) - le nom est
+trompeur, `1` signifie « liaison serie **coupee** », donc un seul joueur. Le
+prologue en fait `strOnePlayer = $80 + serial_off` (L12813-12815). Avec 0, le
+code 8 partait sur la voie serie au lieu d'ouvrir tranquillement la boite.
+
+**La boite est plus haute** que celle d'`_options` : `$B0` et non `$A6`
+(L12891), parce que la colonne de droite est a x = 152. `_cadres_boutons`
+prend desormais la hauteur en argument, avec `_boite_options()` et
+`_boite_game_setup()`.
+
+**Six lignes sur dix-sept levent encore** `NotImplementedError`, en nommant
+la routine : ligne 2 `_two_players`, 9 `_show_world`, 11 `_set_options`,
+12 et 13 `_save_load`, 15 `_ground_in` + `___setup_display`. Noter que les
+branches des lignes 2 et 9 sont **inverses** l'une de l'autre (L13009-13010
+contre L13225-13226) : TWO PLAYERS n'ouvre son ecran que si la liaison est
+active, CONQUEST ne part que si elle est coupee. La queue commune du handler
+(`LAB_4C070`, L18917-18942) consomme ensuite `_new_map` puis
+`_bring_up_two`, et leve elle aussi.
+
+#### Verification
+
+`tools/check_game_setup.py` (nouveau) : **26 controles**. L'extracteur relit
+les 782 octets dans le listing et les compare octet a octet a
+`populous/game_setup.py` ; les controles restants vérifient la coherence
+(paires radio, lignes d'action centrees, boite `$120` x `$B0`, coche absente
+du titre, coupure de la conquete a 9).
+
+`tools/check_game_setup_modal.py` (nouveau) : **46 controles** qui font
+tourner la vraie `Game.game_setup()` de bout en bout, `_pompe` remplace par un
+scenario - les dix coches du prologue, chacune des lignes transcrites
+(ONE PLAYER, PLAY GAME, PAINT MAP, GOOD, EVIL, HUMAN VS AMIGA, AMIGA VS
+AMIGA, CUSTOM GAME, MOVE TO NEXT MAP, SURRENDER), CANCEL, la neutralisation en
+conquete, et les six leveurs nommees.
+
+Suite complete au vert : `autopilot 59 0 3` **84/84** ; `check_icons`
+**51/51** (section J4 ajoutee : l'icone (1,1) ouvre `GAME SETUP` et CANCEL
+restaure les quatre champs) ; `check_game_setup` 26/26 ;
+`check_game_setup_modal` 46/46 ; `check_options` 17/17 ;
+`check_options_modal` 12/12 ; `check_checkcancel` 11/11 ; `check_level`
+41/41 ; `check_place` 501 + 16 cas ; `check_devil` 621 ;
+`check_devil_effect` 620, 8/8 chemins ; `check_render` / `check_assets` /
+`check_funny` / `check_makelevel` OK ; `smoke_sim` 3 000 tours ;
+`stress 2000 8` 8/8 ; `coverage` **193/564** (contre 184 en Phase 68).
+
+Reste ouvert, et c'est le dernier des seize codes : la liaison serie du
+**code 2** (`LAB_4BA34`, L18400, entree `(2,2)`), qui appelle
+`_write_serial` / `_read_serial`.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -5635,7 +5708,8 @@ serie du code 2 (entree `(2,2)`).
   (Phase 63) et ils levent (Phase 65). Il manque les deux dialogues :
   `_options` (L13617, code 7) et `_game_options` (L12801, code 8) - pres
   de 1300 lignes de listing - plus la liaison serie du code 2
-  (`LAB_4BA34`, L18400). Le code 7 est tombe en Phase 68.
+  (`LAB_4BA34`, L18400). Le code 7 est tombe en Phase 68 et
+  le code 8 en Phase 69 : il ne reste que lui.
 * **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit
