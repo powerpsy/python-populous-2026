@@ -1071,6 +1071,101 @@ affiche alors les cinq colonnes 1 décochées. Il est alimenté par
 `conq_04_mode` au chargement d'un palier (L425-427) — seul endroit du port où
 le champ est écrit.
 
+## 4.4 quinquies `_get_name` — ligne 10307 (`$458D0`) — le champ de saisie
+
+C'est la **seule** routine de saisie du jeu : *WORLD TO CONQUER*, les deux
+champs de *SAVE/LOAD*, les deux champs de l'écran de liaison, et la boîte
+de `_get_a_message` passent toutes par elle.
+
+```text
+_get_name(texte, x, y, maxlen, end_ok, end_cancel) -> texte (en place)
+```
+
+Les six appels empilent les mêmes **sept arguments, 22 octets**
+(`4+4+2+2+2+4+4`) : L10798 tiroir `($58,$8D,$10)`, L10814 nom de fichier
+`($58,$A0,$10)`, L11177 `($30,$64,$1C)` après un `CLR.B (A0)`, L11628 et
+L11675 les deux champs de `_two_players` (`maxlen = $11` et `$06`,
+`end_cancel = NULL` — la voie « OK seul »), L12249 `_message`
+`($20,$2C,$10)` avec les deux cadres de *WORLD TO CONQUER*.
+
+### Le cadre (`LINK.W A5,#-46`, L10308)
+
+`scratch` occupe les 40 octets de `(-40,A5)`. Trois mots se partagent le
+reste, **le même emplacement servant à deux usages successifs** :
+
+| offset | pendant le remplissage | ensuite |
+|---|---|---|
+| `(-46,A5)` | `curseur` = `strlen(texte)` (L10310-10312) | `curseur` |
+| `(-44,A5)` | `apres_fin` (L10313, écrit à L10321) | compteur `t` du clignotement (L10355-10358) |
+| `(-42,A5)` | index `i` (L10317-10340) | `rr` de `_check_cancel` (L10443), puis `i` du trim (L10472) |
+
+### Remplissage (L10313-10347)
+
+Tant que `i != maxlen` (L10339-10341) : si `texte[i] <= $20` **ou** si le
+premier zéro est déjà passé (`(-44)` posé à L10321), l'octet devient
+`$82` (L10325-10332) ; `scratch[i]` reçoit `$82` de toute façon (L10336).
+Puis `texte[maxlen] = 0` et `scratch[maxlen] = 0` (L10344-10347).
+
+Deux conséquences vérifiées par `tools/check_get_name.py` :
+
+* l'espace **interne** d'un nom (« POP SAVES ») devient `$82` — c'est un
+  glyphe de remplissage, pas un blanc ;
+* les sept appels dessinent **exactement `maxlen` glyphes**, jamais un de
+  plus, même quand la chaîne d'entrée est plus longue que le champ.
+
+### La souris vit dans la boucle
+
+`_setup_interrupt` (L187-207) enregistre `___mouse` par
+`___AddIntServer(..., 5.W)` — l'interruption VERTB. Le port n'a donc **pas**
+un champ « gelé » : `_read_buttons` tourne pendant la saisie, et
+`_check_cancel` (L10441) teste réellement `_left_button`, mis à 2 en
+entrée (L10348) avant même le premier dessin.
+
+### Boucle (LAB_4597A, L10356-10459)
+
+1. clignotement (L10356-10380) : écrit seulement si `t % (maxlen + 20) == 0`,
+   et met `$83` si l'octet valait déjà `$82`, `$82` sinon — le curseur
+   alterne. Avec `maxlen = 8`, la période est 28 images ;
+2. `_text(texte)` (L10382-10387) ;
+3. `_keyboard` (L10388) — **une touche par image**, 0 sinon ;
+4. frappe : `$20..$7A` seulement (L10392-10395), refusée dès que
+   `curseur >= maxlen - 1` (L10396-10400). On pose `$82` à la position et
+   on **redessine avant** d'écrire la lettre (L10403-10408), puis on force
+   la majuscule par `SUBI #$20` (L10410-10414) ;
+5. `$08` **et** `$7f` font la même chose (L10422-10425) : `curseur != 0`,
+   décrément, `$82` à l'ancienne place (L10427-10432) ;
+6. `$0D` sort directement à `LAB_45ABA` (L10435-10437) ;
+7. `_check_cancel(end_ok, end_cancel)` (L10439) :
+   * `rr == 0` → reboucle, en remettant `left_button = 2` si le clic
+     venait de finir (L10454-10457) ;
+   * `rr == 2` (CANCEL) → `texte[0] = 0`, rend la main (L10445-10451) ;
+   * sinon → validation.
+
+### Validation (L10460-10489)
+
+`texte[curseur] = $82` puis un dernier `_text` (L10463-10468) — le curseur
+reste visible à l'instant de la validation. On part de `i = maxlen - 1`
+(L10470-10472) et on remonte tant que `texte[i] > $80` (L10479-10487),
+effaçant au passage : seuls les `$82` de fin disparaissent.
+
+**Lecture hors tampon modélisée à 0** : le test `texte[i]` (L10480-10484)
+a lieu **avant** `i >= 0` (L10486), donc le listing lit `texte[-1]`. Le
+port ne reproduit pas cette lecture et traite l'indice négatif comme un
+octet nul, ce qui arrête exactement la même boucle.
+
+### Ce que le port y a ajouté
+
+* `Game.get_name(...)` et, avec, `Game.afficher()` — sur l'Amiga `_text`
+  écrit dans le plan que le copper balaye, l'effet est immédiat ; le port
+  doit faire `frame → screen` puis `flip` à chaque image, sinon la boucle
+  modale reste figée sur la dernière image du jeu ;
+* `handle()` déverse les `KEYDOWN` dans `_touches` dès que `_saisie`, et
+  `_keyboard()` en retire **un** par appel, tronqué à `& 0xFF` (même
+  troncature que le `MOVE.B` de L19062). **ECART déclaré** : le port
+  clavier Amiga est du matériel, comme la liaison série — seul le contrat
+  est transcrit, la table `keycodes` (L19085) étant remplacée par
+  `ev.unicode`.
+
 ## 4.5 Les effets
 
 ### `_do_magnet` (ligne 6769, `$42F34`) — coût 200

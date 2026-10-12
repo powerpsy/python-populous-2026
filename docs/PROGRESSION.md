@@ -6259,8 +6259,8 @@ un seul chemin**, et le listing le dit en quatre lignes :
 | L12758 | abandon *NEW GAME* : retour a `LAB_47064` **sans y toucher** |
 
 Donc : apres un premier monde accepte, *NEW GAME* reboucle avec `saisi = 1`
-et la saisie passe par `_get_name` - le port leve `NotImplementedError` a
-cet endroit. Avant, jamais.
+et la saisie passe par `_get_name` - le port levait `NotImplementedError` a
+cet endroit, jusqu'a la Phase 76. Avant, jamais.
 
 **Le `BRA.W LAB_47064` du NEW GAME n'est pas une sortie.** Le port a d'abord
 fait du rendu 2 un simple `break`, ce qui faisait de *NEW GAME* un second
@@ -6305,7 +6305,115 @@ Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
 **Reste a ce jour** : `_get_name` (L10307, 183 lignes) - le clavier pour
 *NEW GAME*, pour les tiroirs de sauvegarde (zones `$8D`, `$A0`) et pour les
 noms de monde ; et `_ground_in` + `___setup_display` (L18924), qui seuls
-peuvent rendre la ligne 15 *RESTART THIS MAP* jouable.
+peuvent rendre la ligne 15 *RESTART THIS MAP* jouable. *(Le premier point
+est traite en Phase 76.)*
+
+### Phase 76 - `_get_name` : le clavier, et l'ecran qui rafraichit enfin
+
+`_get_name` (L10307-10492, 186 lignes) est la **seule** routine de saisie
+du jeu. Les six appels depilent les memes sept arguments - 22 octets de
+pile, `4+4+2+2+2+4+4` (L10798 tiroir, L10814 nom de fichier, L11177
+`_get_a_message`, L11628 et L11675 les deux champs de `_two_players`,
+L12249 `_message`) :
+
+```python
+get_name(texte, x, y, maxlen, end_ok, end_cancel) -> str
+```
+
+**Le cadre** (`LINK.W A5,#-46`, L10308) : `scratch` occupe les 40 octets
+de `(-40,A5)` (L10335), et trois mots partagent le reste, en reutilisant
+**le meme emplacement a des moments differents** :
+
+| offset | pendant | apres |
+|---|---|---|
+| `(-46,A5)` | `curseur`, initialise par `___strlen` (L10310-10312) | idem |
+| `(-44,A5)` | `apres_fin` du remplissage (L10313, L10321) | compteur de clignotement `t` (L10355-10358) |
+| `(-42,A5)` | index `i` du remplissage (L10317-10340) | retour `rr` de `_check_cancel` (L10443), puis `i` du trim (L10472) |
+
+**Remplissage** (L10313-10347) : tant que `i != maxlen`, tout octet
+`<= $20` **ou** pose apres le premier zero devient `$82` (L10325-10332) ;
+`scratch[i]` recoit aussi `$82` (L10336). Puis `texte[maxlen] = 0` et
+`scratch[maxlen] = 0` (L10344-10347). Resultat : les sept appels dessinent
+toujours exactement `maxlen` glyphes, et l'invariant tient - l'espace
+interne d'un nom devient lui aussi `$82`.
+
+**La souris est lue dans la boucle.** C'est le point qui a fait basculer
+l'hypothese du « champ gele » : `_setup_interrupt` (L187-207) pose
+`___mouse` comme serveur d'interruption par `___AddIntServer(..., 5.W)`,
+soit l'interruption VERTB. Le clavier et la souris sont donc **tous deux
+vivants** dans `_get_name`, et le port appelle `_pompe` (donc
+`_read_buttons`) a chaque image - exactement comme `_check_cancel`
+(L10441) le suppose puisqu'il teste `_left_button`. `left_button` est
+mis a 2 en entree (L10348), avant meme le premier dessin.
+
+**Une image par image** : `_text(scratch)` (L10349), puis boucle
+`LAB_4597A` - clignotement, `_text(texte)`, `_keyboard` (L10388),
+frappe, `_check_cancel`. Le clignotement (L10356-10380) n'ecrit que si
+`t % (maxlen + 20) == 0`, et alterne `$82` / `$83` selon le caractere
+qui etait deja la : avec `maxlen = 8` le periode est 28 images.
+
+**Frappes** (L10392-10437) : `$20..$7A` seulement, refuse des que
+`curseur >= maxlen - 1` (L10396-10400), ecrit `$82` a la position puis
+redessine **avant** d'ecrire la lettre (L10403-10408), majuscules forcees
+par `SUBI #$20` (L10410-10414). `$7f` fait ce que fait `$08`
+(L10422-10425) et la retour arriere recule en reposant `$82`
+(L10427-10432). `$0D` sort a `LAB_45ABA` (L10435-10437).
+
+**Sorties** : `_check_cancel` (L10439-10459) - `rr == 0` reboucle, en
+remettant `left_button = 2` si le clic vient de finir (L10454-10457) ;
+`rr == 2` (CANCEL) efface `texte[0]` et rend la main (L10445-10451) ;
+sinon validation. La validation (L10460-10489) pose `texte[curseur] =
+$82`, redessine une derniere fois, puis remonte de `maxlen - 1` tant que
+l'octet est `> $80` (L10474-10487). La lecture de `texte[-1]` du listing
+est **modelee a 0** (boucle arretee) - le port n'embarque pas de lecture
+hors tampon.
+
+**Ce que cela debloque.** Deux `NotImplementedError` tombent :
+*WORLD TO CONQUER* après *NEW GAME* (L12249) et les deux zones d'edition
+de *SAVE/LOAD* (L10798, L10814). `save_load` redevient une boucle
+complete : clic sur la zone, saisie, re-listage du tiroir (le bit 0 de
+`(-144)`), retour.
+
+**Correction d'un ordre de parametres.** `_trace_save_load` avait x et y
+**inverses** : le titre, les fleches `$88`/`$89`, `DIRECTORY`,
+`FILE NAME`, les deux fonds `LAB_525C8` et les douze lignes passaient
+leurs coordonnees a l'envers. Les positions sont maintenant celles du
+listing : `(x, y) = ($58>>3, $18)` pour le titre, `(11, $22 + k*8)` pour
+les lignes, `(11, $8D)` et `(11, $A0)` pour les champs.
+
+**Necessite de port : `Game.afficher()`.** Sur l'Amiga, `_text` ecrit
+dans le plan que le copper balaye deja - l'effet est immediat, et c'est
+la meme interruption VERTB qui fait tourner la souris. Le port doit
+valider l'image a la main : `_pompe` appelle desormais `afficher()`
+(`frame` -> `screen`, puis `flip`), et `run()` utilise la meme methode.
+Les tests qui remplacent `_pompe` par un scenario ne voient donc rien
+changer.
+
+**`handle()`** divertit les evenements clavier dans `_touches` des que
+`_saisie` est vrai (avant la branche `conquest_dialog`), et `_keyboard()`
+retire **une** touche par appel, tronquee a un octet (`& 0xFF`, meme
+truncation que le `MOVE.B` de L19062). ECART declare : le port clavier de
+l'Amiga est du materiel, comme les routines de liaison serie - seul le
+contrat (file d'attente, un element par appel, `_asckey` sur un octet)
+est transcrit, la table `keycodes` etant remplacee par `ev.unicode`.
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/check_get_name.py` | **28/28** - les six appels et leurs 22 octets, le cadre de 46, l'absence de lecture de souris, le remplissage `$82`, les 57 images et les clignotements 28/56, la borne `maxlen - 1`, `$7f`, la touche ignoree, CANCEL et OK, le trim et les six `maxlen` |
+| `tools/check_show_world_modal.py` | **40/40** (39 + *NEW GAME* qui passe reellement par `_get_name`, appele une fois avec `("", $20, $2C, $10)`) |
+| `tools/check_save_load_screen.py` | **26/26** (20 + les deux zones d'edition saisies au clavier + les positions du trace) |
+| `tools/check_dispatch.py` | **vert** - test remis a jour : le code 7 est transcrit depuis la Phase 68 et ouvre `_options` au lieu de lever, le code 8 ouvre `_game_setup` (L18735) avant ses trois branches serie |
+
+Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
+`check_render` **OK** ; `check_assets` **OK** ; `check_funny` **OK** ;
+`smoke_sim` 3000 tours ; `stress 2000 8` **8/8** ; et les 30 controles
+`tools/check_*.py` rendent tous 0.
+
+**Reste a ce jour** : `_ground_in` + `___setup_display` (L18924), qui
+seuls peuvent rendre la ligne 15 *RESTART THIS MAP* jouable ; et le
+second appel de `_show_world` depuis `_animate` (L542-547).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

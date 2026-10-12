@@ -95,6 +95,51 @@ def _atoi(texte: str) -> int:
     return signe * total
 
 
+def _touche_nom(ev) -> str | None:
+    """La lettre qu'une frappe doit mettre dans ``_asckey``.
+
+    `ev.unicode` porte deja la touche traduite, **shift compris** - c'est
+    l'equivalent de la table `keycodes` (L19085) et de son decalage de
+    `$60` (L19058-19062). Les trois touches de controle que ``_get_name``
+    lit explicitement (`$08`, `$7f`, `$0d` - L10422, L10424, L10435) n'ont
+    pas d'unicode partout : elles sont donc nommees.
+
+    Une touche sans lettre (fleches, Fx) rend ``None`` : `_keyboard` ne la
+    pousse pas, ce qui revient au `keycodes` plein de zéros de l'original -
+    `_asckey` reste nul et L10390 saute vers `_check_cancel`.
+    """
+    if ev.key == pygame.K_BACKSPACE:
+        return "\x08"
+    if ev.key == pygame.K_DELETE:
+        return "\x7f"
+    if ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+        return "\x0d"
+    return ev.unicode or None
+
+
+def _champ(buf: bytearray) -> str:
+    """Le contenu d'un tampon `char*` jusqu'a son zero, en latin-1.
+
+    C'est exactement ce que ``___text`` lit (L10353, L10386, L10468) :
+    la boucle s'arrete sur l'octet nul, jamais sur la taille du tampon.
+    """
+    fin = buf.find(0)
+    return bytes(buf[:fin if fin >= 0 else len(buf)]).decode("latin-1")
+
+
+def _remplir(texte, n: int = 16) -> str:
+    """La recopie d'un tampon sur ``n`` octets, `$82` au-dela du texte.
+
+    C'est le motif de L10621-10660, L10683-10709 et L10718-10738 : la
+    longueur est `strlen` (0 si l'entree est hors contenu), puis les octets
+    restants valent `$82` jusqu'a l'octet nul pose a ``n`` (L10658-10660).
+    """
+    corps = (list(bytes(texte)) if isinstance(texte, (bytes, bytearray))
+             else [ord(c) & 0xFF for c in texte])[:n]
+    corps += [0x82] * (n - len(corps))
+    return bytes(corps).decode("latin-1")
+
+
 class Game:
     def __init__(self, seed: int = 1, ground: int = 0, zoom: int = 3) -> None:
         self.seed = seed
@@ -150,6 +195,12 @@ class Game:
         self.right_button = 1
         self._raw_left = False          # etat physique du bouton
         self._raw_right = False
+        # `_asckey` (L25502) et la file de touches lue par `_keyboard`
+        # (L19037-19072) : le port n'a pas le port clavier de l'Amiga,
+        # `handle` y verse les KEYDOWN pendant qu'un `get_name` tourne.
+        self._touches: list[str] = []
+        self._asckey = ""
+        self._saisie = False            # un `_get_name` en cours (L10388)
 
         pygame.init()
         pygame.display.set_caption("Populous (remake) - %d/%d" % (seed, ground))
@@ -1421,10 +1472,53 @@ class Game:
         Ni `poll_mouse` ni `image` : le listing gele le jeu pendant
         `_options` et ne lit que la souris. On pompe quand meme les
         evenements clavier, sans quoi la fenetre ne repond plus.
+
+        **La souris est bien lue** : sur l'Amiga elle ne depend pas de la
+        boucle, `_mouse` etant pose comme serveur d'interruption par
+        `_setup_interrupt` (L187-207, `___AddIntServer(..., 5)` - l'
+        interruption VERTB). C'est donc `_read_buttons` ici, et c'est ce
+        qui rend `_check_cancel` actif **dans** `_get_name`.
         """
         for ev in pygame.event.get():
             self.handle(ev)
         self._read_buttons()
+        self.afficher()
+
+    def afficher(self) -> None:
+        """Valide l'image : ``frame`` -> ``screen``, puis *flip*.
+
+        Sur l'original il n'y a rien a faire - `_text` ecrit dans le plan
+        bitmap que le copper balaye deja, l'effet est immediat, et c'est
+        la meme interruption VERTB qui fait tourner `_mouse`. Le port doit
+        le faire a la main : sans cela une boucle modale reste figee sur
+        la derniere image du jeu et le champ de `_get_name` est invisible.
+        """
+        self.screen.blit(pygame.transform.scale(self.frame,
+                                                 self.screen.get_size()),
+                         (0, 0))
+        pygame.display.flip()
+
+    def _keyboard(self) -> int:
+        """``_keyboard()`` (L19037-19072) : 0 sans touche, sinon `_asckey`.
+
+        L'original lit le registre `CIAA_SDR` (L19042), traduit le code
+        brut par la table `keycodes` (L19085) avec le decalage de `$60`
+        quand `_shift` est enfonce (L19058-19062), pose le resultat dans
+        `_asckey` (L19062) et rend **une touche par appel** : `D0` est
+        l'octet `_asckey` etautranduit en long (L19063-19064), donc 0 quand
+        rien n'arrivait.
+
+        ECART declare : le port clavier de l'Amiga est du materiel, comme
+        les routines de liaison serie. Seul le contrat est transcrit - file
+        d'attente, un element par appel, `_asckey` sur **un octet**
+        (`& 0xFF`, meme truncation que le `MOVE.B` de L19062) - et la
+        table `keycodes` est remplacee par `ev.unicode`, deja traduite.
+        """
+        if not self._touches:
+            self._asckey = ""
+            return 0
+        self._asckey = chr(ord(self._touches.pop(0)) & 0xFF)
+        return ord(self._asckey)
 
     def _cadres_boutons(self, x: int, y: int, largeur: int,
                         hauteur: int, texte_ok: str = "OK",
@@ -2055,23 +2149,44 @@ class Game:
         return (0x48, 0x10, 0xB0, 0xB0)
 
     def _trace_save_load(self, sauvegarder: bool) -> None:
-        """Le trace de l'ecran des douze emplacements (L10520-10750)."""
+        """Le trace de l'ecran des douze emplacements (L10520-10750).
+
+        `_text` prend **x et y en pixels** et le port les convertit en
+        unites de 8 px : `_text($58, $18, "SAVE GAME")` (L10530) est donc
+        `(11, 24)`, pas l'inverse.
+
+        Le masque `(-144,A5)` ne sert qu'aux rafraichissements - bit 0 :
+        relister le tiroir (L10573-10598), bit 1 : redessiner les douze
+        lignes (L10602-10674), bits 2 et 3 : les deux champs (L10676,
+        L10711). Le port redessine tout a chaque tour, qui est le cas
+        ouvert du masque `$000F` pose en tete (L10496) ; seuls le re-listage
+        et le repositionnement du defilement restent conditionnes, et sont
+        faits par `save_load` lui-meme.
+        """
         r, d = self.ren, self.frame
+        from populous.world import WORLD_TRAIT        # `LAB_525C8` (L24927)
         self.requester(*self._boite_save_load(), "", "")
-        # les trois titres de colonnes, tous a y = $58 (L10530-10570)
-        for x, txt in ((0x18, "SAVE GAME" if sauvegarder else "LOAD GAME"),
-                       (0x7A, "DIRECTORY"), (0xD8, "FILE NAME")):
-            r.draw_text(d, x >> 3, 0x58, txt)
-        # les douze emplacements : `LAB_525C8[k]` a `$22 + k*8` (L10577-10585)
-        for k in range(12):
-            if k < len(self._saves_liste):
-                nom = self._saves_liste[k].rstrip(b"\x00").decode("latin-1")
-            else:
-                nom = ""
-            r.draw_text(d, (0x22 + k * 8) >> 3, 0x58, nom)
-        # le tiroir puis le nom de fichier, a `$A0` (L10739-10749)
-        r.draw_text(d, 0xA0 >> 3, 0x58, self._saves_drawer)
-        r.draw_text(d, 0xA0 >> 3, 0x58, self._saves_nom)
+        r.draw_text(d, 0x58 >> 3, 0x18,              # L10530-10535 `(-10,A5)`
+                    "SAVE GAME" if sauvegarder else "LOAD GAME")
+        r.draw_text(d, 0xD8 >> 3, 0x22, "\x88")      # L10536-10541 `LAB_46192`
+        r.draw_text(d, 0xD8 >> 3, 0x7A, "\x89")      # L10542-10547 `LAB_46194`
+        r.draw_text(d, 0x58 >> 3, 0x84, "DIRECTORY")  # L10548-10553
+        r.draw_text(d, 0x58 >> 3, 0x97, "FILE NAME")  # L10554-10559
+        # `LAB_525C8` (L24927) = seize octets `$82` : le fond du champ du
+        # tiroir (L10560-10565) et de celui du nom (L10566-10571).
+        r.draw_text(d, 0x58 >> 3, 0x8D, WORLD_TRAIT)
+        r.draw_text(d, 0x58 >> 3, 0xA0, WORLD_TRAIT)
+        for k in range(12):                          # L10604-10674 : les
+            j = self._saves_defil + k                # douze lignes, depuis
+            nom = b""                                # l'offset `(-134)`
+            if 0 <= j < len(self._saves_liste):
+                nom = self._saves_liste[j].rstrip(b"\x00")
+            r.draw_text(d, 0x58 >> 3, 0x22 + k * 8, _remplir(nom))
+        # L10676-10709 puis L10711-10750 : les deux champs, recopies sur
+        # seize octets completes de `$82` au-dela du texte.
+        r.draw_text(d, 0x58 >> 3, 0x8D, _remplir(self._saves_drawer))
+        r.draw_text(d, 0x58 >> 3, 0xA0, WORLD_TRAIT)  # L10739-10744
+        r.draw_text(d, 0x58 >> 3, 0xA0, _remplir(self._saves_nom))
 
     def _survol_save_load(self):
         """L'index de l'emplacement clique, ou `None` (L10759-10784).
@@ -2112,24 +2227,27 @@ class Game:
 
         * `_requester(d_screen, $48, $10, $B0, $B0, (-130), _end_cancel)`
           (L10523-10529) ;
-        * le tiroir est liste par `_get_a_dir` puis `_sort` **une seule fois**,
-          a la construction (L10589-10598) - les douze emplacements ne sont
-          donc pas recharges pendant la navigation ;
+        * le tiroir est liste par `_get_a_dir` puis `_sort` quand le masque
+          `(-144)` porte le bit 0 (L10573-10598) - c'est le cas a
+          l'ouverture (`$000F`, L10496) et apres une edition du tiroir
+          (`$0003`, L10800), donc **une fois au depart puis a chaque changement
+          de repertoire**, et non une seule fois ;
         * chaque clic dans la zone `$58..$D8` x `$22..$82` met `_filename` a
-          l'entree correspondante (L10759-10784) ; les deux fleches a
-          `$D8..$E0` font defiler (L10819-10842) ;
-        * `_check_cancel` : `0` retrace, `2` sort sans rien faire, `1`
-          assemble le chemin (L10832-10886) puis appelle `_save_game` ou
-          `_load_game` (L10888-10894).
+          l'entree correspondante (L10759-10784) ; les deux fleches, dans
+          `$D8..$E0`, font defiler (L10818-10842) ;
+        * les deux zones d'edition `$8D..$95` et `$A0..$A8` (L10786-10815)
+          ouvrent `_get_name` sur `_drawer` puis `_filename`, avec
+          `x = $58`, `y = $8D` / `$A0` et `maxlen = $10` ;
+        * chaque branche **saute** a `LAB_45F7C` (L10801, L10816), donc a
+          `_check_cancel` : les fleches ne sont plus consultees ensuite ;
+        * `_check_cancel` : `0` reboucle au trace (L10970-10971), `2` sort
+          sans rien faire, `1` assemble le chemin (L10832-10886) puis
+          appelle `_save_game` ou `_load_game` (L10888-10894).
 
         Apres une sauvegarde reussie, la routine met `_saved = 1` (L10930)
         puis **verifie que `level.dat` est present** : elle boucle sur
         `Open("level.dat", $3ED)` tant que le fichier manque, en affichant
         `strInsertDisk` (L10931-10950).
-
-        **Non transcrit** : `_get_name` (L10307, 183 lignes), l'editeur de
-        nom de fichier au clavier - les deux zones d'edition (tiroir a `$8D`,
-        nom a `$A0`, L10787-10815) leve donc `NotImplementedError`.
         """
         from populous.saveslots import chemin_complet, get_a_dir, sort
         self._saves_defil = 0
@@ -2145,21 +2263,29 @@ class Game:
                 self._pompe()
                 if not self.running:
                     return 0
-            # L10787-10815 : les deux zones d'edition
+            # LAB_45EAC (L10758) : **une seule** zone est testee, et
+            # chaque branche saute a `LAB_45F7C` puis `_check_cancel`
+            # (L10801, L10816) - les fleches ne sont plus consultees.
             mx, my = self.mouse
-            if 0x58 <= mx <= 0xD8 and 0x8D <= my <= 0x95:
-                raise NotImplementedError(
-                    "SAVE/LOAD : l'edition du tiroir appelle `_get_name` "
-                    "(L10307), non transcrite")
-            if 0x58 <= mx <= 0xD8 and 0xA0 <= my <= 0xA8:
-                raise NotImplementedError(
-                    "SAVE/LOAD : l'edition du nom de fichier appelle "
-                    "`_get_name` (L10307), non transcrite")
-            i = self._survol_save_load()             # L10759-10784
-            if i is None:
-                self._defiler_save_load(
-                    1 if (mx >= 0xD8 and 0x7A <= my <= 0x82) else
-                    (-1 if (mx >= 0xD8 and 0x22 <= my <= 0x2A) else 0))
+            if 0x58 <= mx <= 0xD8:                   # L10759-10762
+                if 0x22 <= my <= 0x82:               # L10763-10766
+                    self._survol_save_load()         # L10767-10784
+                elif 0x8D <= my <= 0x95:             # L10787-10790
+                    # L10791-10801 : `_get_name(_drawer, $58, $8D, $10, ...)`
+                    # puis `(-144) = 3`, dont le bit 0 reliste le tiroir.
+                    self._saves_drawer = self.get_name(
+                        self._saves_drawer, 0x58, 0x8D, 0x10, ok, cancel)
+                    self._saves_liste = get_a_dir(self._saves_drawer)
+                    sort(self._saves_liste)           # L10589-10598
+                    self._saves_defil = 0             # L10600 `(-134)`
+                elif 0xA0 <= my <= 0xA8:             # L10802-10815
+                    self._saves_nom = self.get_name(
+                        self._saves_nom, 0x58, 0xA0, 0x10, ok, cancel)
+            elif 0xD8 <= mx <= 0xE0:                 # LAB_45F7E, L10819-10822
+                if 0x22 <= my <= 0x2A:               # L10823-10826
+                    self._defiler_save_load(-1)      # L10827-10830
+                elif 0x7A <= my <= 0x82:             # L10833-10836
+                    self._defiler_save_load(1)       # L10837-10842
             r = self.check_cancel(ok, cancel)        # L10843-10848
             if r == 0:                                # L10849
                 continue
@@ -2175,6 +2301,133 @@ class Game:
                 return 1
             self.load_game(chemin)                    # L10952-10954
             return 1
+
+    def get_name(self, texte: str, x: int, y: int, maxlen: int,
+                 end_ok, end_cancel) -> str:
+        """``_get_name(ecran, texte, x, y, maxlen, end_ok, end_cancel)``
+        (L10307-10489) : l'editeur de nom au clavier.
+
+        Sept arguments, dans l'ordre des pushes des six appels du listing
+        (L10798, L10814, L11177, L11628, L11675, L12249) : `ecran` est
+        `_d_screen`, `texte` est le tampon que l'original modifie **en
+        place** - le port le rend, l'appelant l'affecte.
+
+        **Remplissage** (L10313-10347) : le champ est complete jusqu'a
+        `maxlen`. Tout octet `$20` **ou inferieur**, et tout octet situe
+        **apres** le terminateur (le drapeau `(-44)` de L10321), devient
+        `$82` - le trait de soulignement - puis le terminateur est pose a
+        ``texte[maxlen]`` et non a ``strlen`` (L10342-10344). Le champ
+        affiche fait donc **toujours `maxlen` glyphes**, jamais un de plus
+        ni un de moins. `scratch`, le tampon local de 40 octets, recoit
+        `$82` partout et n'est dessine qu'une fois au depart (L10349).
+
+        **Clignotement** (L10356-10380) : un compteur parcourt
+        ``maxlen + 20`` (`DIVS` puis `SWAP` pour le reste, L10361-10364)
+        ; a chaque tour ou le reste est nul, ``texte[-46]`` alterne
+        `$82` et `$83` (L10366-10380). Le curseur est donc **pose par
+        dessus** le caractere de la position - c'est cela, et rien d'autre,
+        qui fait marcher la retour arriere.
+
+        **Saisie** : `_asckey` compris entre `$20` et `$7A` avec
+        ``curseur < maxlen - 1`` (L10392-10400) ecrit le caractere, en
+        **majuscules** quand il est dans `$61..$7A` (L10410-10414, qui
+        modifie aussi le global `_asckey`) ; `$08` / `$7f` reculent d'un
+        rang en posant `$82` a l'ancienne position (L10422-10432) ;
+        `$0d` valide (L10435-10437). Tout le reste est ignore.
+
+        **Sortie** : `_check_cancel` a chaque tour (L10439-10443). `2`
+        efface ``texte[0]`` et rend la main (L10445-10451), `1` valide,
+        `0` remet `_left_button = 2` s'il valait 0 (L10454-10459) et
+        reboucle. **La souris est vivante pendant toute cette boucle** :
+        `_mouse` tourne sur l'interruption VERTB (`_setup_interrupt`,
+        L187-207, `___AddIntServer(..., 5)`), d'ou le `_pompe` de chaque
+        tour - sans lui les boutons ne repondraient pas.
+
+        La validation (L10460-10489) pose `$82` sur le curseur, redessine,
+        puis **ramene le tampon en arriere** tant que l'octet lu est
+        `> $80` : les traits de fin sont effaces sans autre redraw, le
+        champ garde donc a l'ecran le nom suivi de ses soulignements.
+        """
+        r, d = self.ren, self.frame
+        # (-46,A5) : la position du curseur, `strlen` au depart (L10310)
+        curseur = len(texte)
+        # Le tampon d'appelant, sur `maxlen + 1` octets : l'original n'ecrit
+        # jamais `texte[maxlen]` avant L10344, qui y pose le zero - d'ou
+        # l'octet de terminaison fourni par la taille ci-dessous.
+        buf = bytearray(max(len(texte), maxlen) + 1)
+        donnees = bytes(ord(c) & 0xFF for c in texte)
+        buf[:len(donnees)] = donnees
+        # (-40,A5) : 40 octets de local (le LINK fait -46, soit 2+2+2+40)
+        scratch = bytearray(max(40, maxlen + 1))
+        # ---- L10313-10347 : le remplissage ------------------------------
+        apres_fin = 0                           # (-44,A5), pose en L10321
+        i = 0                                   # (-42,A5)
+        while i != maxlen:                      # L10338-10341
+            if buf[i] == 0:
+                apres_fin = 1                   # L10319-10321
+            if buf[i] <= 0x20 or apres_fin:     # BLS / TST+BEQ, L10325-10328
+                buf[i] = 0x82                   # L10329-10332
+            scratch[i] = 0x82                   # L10333-10336
+            i += 1
+        buf[maxlen] = 0                         # L10342-10344
+        scratch[maxlen] = 0                     # L10345-10347
+
+        self.left_button = 2                    # L10348
+        r.draw_text(d, x >> 3, y, _champ(scratch))       # L10349-10354
+        compteur = 0                            # L10355 CLR.W (-44)
+        self._saisie = True
+        try:
+            while True:                         # ---- LAB_4597A (L10356) ----
+                t = compteur                    # L10357
+                compteur += 1                   # L10358
+                if t % (maxlen + 20) == 0:      # L10359-10364
+                    # L10366-10380 : `$83` si le curseur etait deja `$82`
+                    buf[curseur] = 0x83 if buf[curseur] == 0x82 else 0x82
+                r.draw_text(d, x >> 3, y, _champ(buf))   # L10382-10387
+                self._pompe()                   # la VERTB de L187-207
+                if not self.running:
+                    return ""
+                if self._keyboard() != 0:       # L10388-10390
+                    code = ord(self._asckey)
+                    if 0x20 <= code <= 0x7A and curseur < maxlen - 1:
+                        buf[curseur] = 0x82             # L10401-10403
+                        r.draw_text(d, x >> 3, y, _champ(buf))   # L10404
+                        if 0x61 <= code <= 0x7A:        # L10410-10414
+                            code -= 0x20
+                            self._asckey = chr(code)
+                        buf[curseur] = code             # L10419
+                        curseur += 1                    # L10417
+                    elif code in (0x08, 0x7F):          # L10422-10425
+                        if curseur != 0:                # L10427-10428
+                            ancien = curseur            # L10429-10432
+                            curseur -= 1
+                            buf[ancien] = 0x82
+                    elif code == 0x0D:                  # L10435-10437
+                        break                           # -> LAB_45ABA
+                # ---- LAB_45A82 (L10438) --------------------------------
+                rr = self.check_cancel(end_ok, end_cancel)
+                if rr == 0:                       # L10444
+                    if self.left_button == 0:     # L10455-10456
+                        self.left_button = 2      # L10457
+                    continue                      # L10459 BRA LAB_4597A
+                if rr == 2:                       # L10445-10446
+                    return ""                     # L10447-10451 CLR.B (A0)
+                break                             # L10452-10453 -> LAB_45ABA
+            # ---- LAB_45ABA (L10460) : la validation ---------------------
+            buf[curseur] = 0x82                   # L10461-10463
+            r.draw_text(d, x >> 3, y, _champ(buf))       # L10464-10469
+            i = maxlen - 1                        # L10470-10472
+            while True:                           # LAB_45AFC puis LAB_45AEC
+                octet = buf[i] if 0 <= i < len(buf) else 0   # L10480-10484
+                if octet <= 0x80:                 # BLS -> LAB_45B16
+                    break
+                if i < 0:                         # TST.W / BGE
+                    break
+                buf[i] = 0                        # L10475-10477
+                i -= 1                            # L10478
+            return _champ(buf)
+        finally:
+            self._saisie = False
 
     def _verifier_level_dat(self) -> None:
         """L10931-10950 : `level.dat` doit etre lisible, sinon on le demande.
@@ -2262,11 +2515,11 @@ class Game:
         relit est `LAB_47064`, ou reviennent deux chemins : L12376, apres
         L12370 qui **efface** `saisi` (disque absent), et **L12758**,
         l'abandon *NEW GAME*, qui lui **le laisse a 1**. C'est donc par
-        NEW GAME que la saisie passe par `_get_name` (L12249), **non
-        transcrite** : le port leve `NotImplementedError` a cet endroit -
-        apres un premier monde accepte, jamais avant.
-        ``tools/check_show_world_modal.py`` relit ces quatre lignes pour
-        le montrer, puis provoque la levee.
+        NEW GAME que la saisie passe par `_get_name` (L12249) : apres un
+        premier monde accepte, jamais avant - et la deuxieme visite est
+        la premiere a pouvoir editer le champ.
+        ``tools/check_show_world_modal.py`` relit ces quatre lignes, puis
+        fait entrer un nom au clavier par ce chemin.
 
         `(-20) = (-18) / 25` (L12315-12319) donne l'entree de
         ``level.dat``. En echec l'affichage demande le disque et la boite
@@ -2318,9 +2571,11 @@ class Game:
                 r.draw_text(d, 0x20 >> 3, 0x2C, WORLD_TRAIT)   # L12228-12233
                 r.draw_text(d, 0x20 >> 3, 0x2C, self._message)  # L12234-12239
                 if saisi:                   # L12240-12250
-                    raise NotImplementedError(
-                        "_show_world : la deuxieme saisie passe par "
-                        "`_get_name` (L10307), non transcrite")
+                    # `PEA (-118)`, `PEA (-72)`, `$10`, `$2C`, `$20`,
+                    # `_message`, `_d_screen` : les memes `ok`/`cancel`
+                    # que `_check_cancel` de L12749.
+                    self._message = self.get_name(
+                        self._message, 0x20, 0x2C, 0x10, ok, cancel)
                 n = _atoi(self._message) & 0xFFFF     # L12262-12265
                 if n != 0:                  # L12266
                     self.seed = n            # L12270-12271 `_start_seed=_seed`
@@ -2750,6 +3005,14 @@ class Game:
                               pygame.K_ESCAPE):
                     self._next_conquest()
                 return
+            # Un `_get_name` en cours prend le clavier tout entier : c'est
+            # `_keyboard` (L10388) qui le lit dans sa boucle, et `_key`
+            # n'existe pas a cet endroit du listing.
+            if self._saisie:
+                touche = _touche_nom(ev)
+                if touche:
+                    self._touches.append(touche)
+                return
             # La boite « TRY NUMBER » capte tout le clavier tant qu'elle est
             # ouverte (LAB_46D3C boucle jusqu'a validation ou annulation).
             if self.conquest_dialog is not None:
@@ -3021,10 +3284,7 @@ class Game:
                     credit -= 1.0
                     self.image()
             self.people = sum(1 for v in self.sim.map.who if v)
-            self.screen.blit(pygame.transform.scale(self.frame,
-                                                    self.screen.get_size()),
-                             (0, 0))
-            pygame.display.flip()
+            self.afficher()
             self.frames += 1
             self.clock.tick(img_s)
         pygame.quit()

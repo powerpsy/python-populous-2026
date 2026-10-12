@@ -12,8 +12,10 @@ et non suppose :
    tourner et que la table de Phase 46 donnait pour "non lus" ;
 3. le calcul du mana (codes 9/10) doit egaler le listing, reference
    reecrite ici de maniere independante (flottant, pas ``divs_long``) ;
-4. les codes ``2, 7, 8`` doivent **lever** ``NotImplementedError``
-   et surtout pas retomber silencieusement en no-op : c'est la regle de
+4. les codes ``2, 7, 8`` : le 7 est **transcrit** depuis la Phase 68 et
+   doit appeler ``_options`` une fois par tribu ; les codes ``2`` et ``8``
+   doivent **lever** ``NotImplementedError`` sur leurs branches serie et
+   surtout pas retomber silencieusement en no-op - c'est la regle de
    Phase 22, et c'est exactement ce que ``_sub_action`` faisait ;
 5. le code 12 doit **bien vider la carte** (Phase 52) — 4225 sommets,
    4096 cases ``who``, puis ``_no_peeps`` a 0 — et appeler
@@ -38,7 +40,6 @@ from populous.constants import ACT_ACTION  # noqa: E402
 CIBLES = ("do_war", "do_flood", "do_knight")
 CODES_APPELES = (3, 4, 5)
 CODES_SANS_CIBLEE = (1, 6, 11, 15)
-CODES_NON_TRANSCRITS = (2, 7, 8)
 ESSAIS_MANA = (399, -250, 0, 1, 32767, 32768, 65535, 65536,
                99_999, 100_000, 100_001, 200_000, 300_000, 2_000_063)
 
@@ -101,18 +102,103 @@ def main() -> int:
     print("routage 1/6/11/15 sans le lever           : %d levage(s)" % n_lev)
 
     # --- 3. codes non transcrits : doivent LEVER ------------------------
+    # Les deux boites ouvertes par le code 8 - `_game_setup` (L18735) et
+    # `_two_players` (L18936) - sont elles-memes des boucles modales : on
+    # les epingle pour isoler le routage, sinon la boucle attend un clic
+    # qui n'arrivera jamais.
+    vrai_setup, vrai_two = g.game_setup, g.two_players
+    appel_setup, appel_two = [], []
+    pose_new_map = [0]
+
+    def setup_epion():
+        appel_setup.append(1)
+        sim.new_map = pose_new_map[0]               # L13239 / L13279
+
+    g.game_setup, g.two_players = setup_epion, \
+        lambda: appel_two.append(1)
+    garde_si = (sim.serial_off, sim.new_map, sim.bring_up_two, sim.player)
     n_ok = 0
-    for code in CODES_NON_TRANSCRITS:
+
+    def lancer(libelle, attendu, action):
+        """`attendu` = sous-chaine attendue dans la levee, ou `None`."""
+        nonlocal n_ok
         try:
-            pe.dispatch(0, ACT_ACTION, 0, code)
-        except NotImplementedError:
-            n_ok += 1
-        except Exception as exc:
-            echecs.append("code %d : erreur inattendue %r" % (code, exc))
+            action()
+        except NotImplementedError as exc:
+            bon, detail = bool(attendu) and attendu in str(exc), str(exc)
+        except Exception as exc:                        # noqa: BLE001
+            bon, detail = False, "erreur inattendue %r" % (exc,)
         else:
-            echecs.append("code %d : PAS leve — no-op silencieux" % code)
-    print("codes 2/7/8 lèvent                    : %d/%d"
-          % (n_ok, len(CODES_NON_TRANSCRITS)))
+            bon = attendu is None
+            detail = "no-op silencieux" if attendu else "retour sans levee"
+        if bon:
+            n_ok += 1
+        else:
+            echecs.append("%s : %s" % (libelle, detail))
+        print("  %-50s %s" % (libelle, "OK" if bon else "ECHEC"))
+
+    try:
+        # code 2 : `serial_off != 0` rend la main (L18405-18406)
+        sim.serial_off, sim.new_map, sim.bring_up_two, sim.player = 1, 0, 0, 0
+        pose_new_map[0] = 0
+        lancer("code 2, liaison coupee -> retour (L18405-18406)", None,
+               lambda: pe.dispatch(0, ACT_ACTION, 0, 2))
+        # code 2 : sinon `_get_a_message` puis `_write_serial` (L18430-18468)
+        sim.serial_off = 0
+        lancer("code 2, liaison active -> _write_serial (L18430-18468)",
+               "_write_serial", lambda: pe.dispatch(0, ACT_ACTION, 0, 2))
+        # code 8, joueur local, liaison active (L18738-18753)
+        lancer("code 8, local + liaison -> _write_serial (L18738-18753)",
+               "_write_serial", lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+        # code 8, un seul joueur, mais `_game_setup` a demande un nouveau
+        # terrain : `___setup_display` n'est pas transcrit (L18924-18928)
+        sim.serial_off, pose_new_map[0] = 1, 1
+        lancer("code 8, _new_map -> ___setup_display (L18924-18928)",
+               "___setup_display", lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+        # code 8, autre tribu, liaison active (L18757-18762)
+        pose_new_map[0] = 0
+        sim.serial_off, sim.player = 0, 1
+        lancer("code 8, autre tribu + liaison -> _read_serial (L18757)",
+               "_read_serial", lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+        # code 8, un seul joueur, rien a demander : retour silencieux
+        sim.serial_off, sim.player, sim.bring_up_two = 1, 0, 0
+        lancer("code 8, un joueur -> retour (L18917-18942)", None,
+               lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+    finally:
+        g.game_setup, g.two_players = vrai_setup, vrai_two
+        (sim.serial_off, sim.new_map, sim.bring_up_two,
+         sim.player) = garde_si
+    if len(appel_setup) != 3:
+        echecs.append("_game_setup appele %d fois (attendu 3 : les codes 8 "
+                      "locaux)" % len(appel_setup))
+    if appel_two:
+        echecs.append("_two_players appele a tort %d fois" % len(appel_two))
+    print("codes 2/8, branche par branche : %d/6 conformes, "
+          "_game_setup %d appel(s)" % (n_ok, len(appel_setup)))
+
+    # --- 3bis. code 7 : `_options` (L18634-18645) ------------------------
+    # Transcrit en Phase 68 : le code 7 ne leve plus, il ouvre la boite.
+    # On l'epingle pour prouver le routage sans laisser la boucle modale
+    # attendre un clic qui n'arrivera pas.
+    appels7 = []
+    vrai_options = g.options
+
+    def options_epion(tribu):
+        appels7.append(tribu)
+        return None
+
+    g.options = options_epion
+    try:
+        pe.dispatch(0, ACT_ACTION, 1, 7)            # arg2 != 0 -> joueur
+        pe.dispatch(0, ACT_ACTION, 0, 7)            # arg2 == 0 -> autre
+    finally:
+        g.options = vrai_options
+    if appels7 != [sim.player, sim.not_player]:
+        echecs.append("code 7 : options(%s) au lieu de (%s, %s)"
+                      % (appels7, sim.player, sim.not_player))
+    print("code 7 -> _options(joueur) puis _options(autre) : %s"
+          % ("OK" if appels7 == [sim.player, sim.not_player]
+             else "ECHEC %s" % appels7))
 
     # --- 4. codes 9/10 : le calcul doit egaler le listing ---------------
     ecart_mana = []

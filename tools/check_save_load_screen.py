@@ -37,10 +37,16 @@ def check(label, cond, detail=""):
                            ("  -> " + detail) if detail else ""))
 
 
-def scenario(g, pas):
+def scenario(g, pas, cles=""):
+    """Remplace `Game._pompe` : une etape par image, plus une touche par
+    image des que `_saisie` - c'est-a-dire des que `_get_name` tourne."""
     n = [0]
+    k = [0]
 
     def pompe():
+        if cles and g._saisie and k[0] < len(cles):
+            g._touches.append(cles[k[0]])
+            k[0] += 1
         if n[0] >= len(pas):
             return
         mx, my, presse = pas[n[0]]
@@ -154,18 +160,85 @@ def main():
               r == 0 and sorted(os.listdir(d)) == avant,
               "r=%d" % r)
 
-        # ---- les deux zones d'edition lèvent ---------------------------
-        for y, nom in ((0x90, "tiroir"), (0xA4, "nom de fichier")):
-            scenario(g, [(0, 0, False), (0x60, y, True)])
-            leve, detail = False, ""
-            try:
-                g.save_load(True)
-            except NotImplementedError as exc:
-                leve, detail = True, str(exc)
+        # ---- les deux zones d'edition (L10786-10815) ---------------------
+        # Chaque zone est ouverte par un clic, puis editee une touche par
+        # image. Le tiroir part du nom court "Pop Saves" (9 octets < $10),
+        # pour que L10396 laisse la main au clavier.
+        vrai_drawer = g._saves_drawer
+        for y, nom, champ, frappe, attendu in (
+                (0x90, "tiroir", "_saves_drawer", "SAVES\r",
+                 "Pop\x82SavesSAVES"),
+                (0xA4, "nom de fichier", "_saves_nom", "FICHIER\r",
+                 "FICHIER")):
+            g._saves_drawer = "Pop Saves"       # 9 octets : le champ est
+            g._saves_nom = ""                   # assez large pour taper
+            pas = [(0, 0, False), (0x60, y, True)]
+            pas += [(0, 0, False)] * (len(frappe) + 1)   # une image par touche
+            pas += [(0, 0, False), (cancel[0] + 4, cancel[1] + 8, True)]
+            scenario(g, pas, cles=frappe)
+            r = g.save_load(True)
             del g._pompe
-            check("L10787-10815 : la zone d'edition du %s leve en nommant "
-                  "`_get_name`" % nom, leve and "_get_name" in detail,
-                  detail or "aucune leve")
+            check("L10787-10815 : le clic a y = $%X ouvre `_get_name` sur "
+                  "`x = $58`, `maxlen = $10`, et le champ du %s porte le "
+                  "texte tape" % (y, nom),
+                  getattr(g, champ) == attendu and r == 0,
+                  "%s=%r r=%d" % (champ, getattr(g, champ), r))
+            if champ == "_saves_drawer":
+                # L10800 pose `(-144) = 3`, dont le bit 0 rejoue
+                # L10573-10598 : le tiroir devenu "Pop\x82SavesSAVES" n'existe
+                # pas, `_Lock` echoue et la liste se retrouve vide - c'est
+                # la preuve que le re-listage a eu lieu.
+                check("L10800 puis L10573-10598 : editer le tiroir reliste "
+                      "le repertoire (ici introuvable, donc zero entree) et "
+                      "remet le defilement a zero",
+                      g._saves_liste == [] and g._saves_defil == 0,
+                      "liste=%d defil=%d"
+                      % (len(g._saves_liste), g._saves_defil))
+        g._saves_drawer = vrai_drawer
+
+        # ---- les positions du trace (L10520-10749) ----------------------
+        from populous.world import WORLD_TRAIT
+        traces = []
+        vrai_draw = g.ren.draw_text
+
+        def draw(dest, x, y, txt):
+            traces.append((x, y, txt))
+            return vrai_draw(dest, x, y, txt)
+
+        g.ren.draw_text = draw
+        g._saves_drawer = "Pop Saves"
+        g._saves_nom = "nom.gam"
+        g._saves_defil = 0
+        g._trace_save_load(True)
+        g.ren.draw_text = vrai_draw
+        g._saves_drawer = vrai_drawer
+        check("L10530-10535 : le titre est trace en (x, y) = ($58, $18), "
+              "soit (11, 24) - x et y ne sont pas transposes",
+              (0x58 >> 3, 0x18, "SAVE GAME") in traces,
+              "traces=%s" % traces[:4])
+        check("L10536-10559 : les fleches `$88`/`$89` en (27, $22) et "
+              "(27, $7A), DIRECTORY en (11, $84), FILE NAME en (11, $97)",
+              (0xD8 >> 3, 0x22, "\x88") in traces
+              and (0xD8 >> 3, 0x7A, "\x89") in traces
+              and (0x58 >> 3, 0x84, "DIRECTORY") in traces
+              and (0x58 >> 3, 0x97, "FILE NAME") in traces, "")
+        lignes = {(x, y) for x, y, t in traces
+                  if x == 0x58 >> 3 and 0x22 <= y <= 0x22 + 11 * 8}
+        attendues = {(0x58 >> 3, 0x22 + k * 8) for k in range(12)}
+        check("L10604-10674 : les douze lignes sont tracees en "
+              "x = $58 >> 3 = 11, y = $22 + k*8",
+              lignes == attendues, "manquantes=%s"
+              % sorted(attendues - lignes))
+        check("L10560-10571 et L10739-10744 : `LAB_525C8` (16 `$82`) sert de "
+              "fond aux deux champs et du deuxieme au champ de nom",
+              sum(1 for x, y, t in traces if t == WORLD_TRAIT
+                  and (x, y) in {(11, 0x8D), (11, 0xA0)}) == 3,
+              "%d" % sum(1 for x, y, t in traces if t == WORLD_TRAIT))
+        check("L10676-10709 puis L10745-10750 : les deux champs sont traces "
+              "en (11, $8D) et (11, $A0), completes de `$82` jusqu'a 16",
+              (11, 0x8D, "Pop Saves" + "\x82" * 7) in traces
+              and (11, 0xA0, "nom.gam" + "\x82" * 9) in traces,
+              "%s" % [t for x, y, t in traces if x == 11 and y >= 0x8D])
 
         # ---- LOAD relit ce que SAVE a ecrit -----------------------------
         import random

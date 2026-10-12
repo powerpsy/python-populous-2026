@@ -59,11 +59,20 @@ def check(label, cond, detail=""):
                            ("  -> " + detail) if detail else ""))
 
 
-def scenario(g, pas):
-    """Remplace `Game._pompe` par une sequence de (mx, my, presse)."""
+def scenario(g, pas, cles=""):
+    """Remplace `Game._pompe` par une sequence de (mx, my, presse).
+
+    `cles` est la frappe a fournir : une touche par image, des que
+    `_saisie` est vrai - c'est-a-dire des que `_get_name` tourne. C'est
+    ce que fait `handle` avec un vrai `KEYDOWN`.
+    """
     n = [0]
+    k = [0]
 
     def pompe():
+        if cles and g._saisie and k[0] < len(cles):
+            g._touches.append(cles[k[0]])
+            k[0] += 1
         if n[0] >= len(pas):
             return
         mx, my, presse = pas[n[0]]
@@ -204,21 +213,42 @@ def main():
     # l'autre, est precede de L12370 qui l'efface.
     indexes[:] = []
     g._message = "GENESIS"
-    scenario(g, [(0, 0, False), (cancel[0] + 4, cancel[1] + 8, True)])
-    leve, detail = False, ""
+    saisis = []
+    vrai_get_name = g.get_name
+
+    def espion(texte, x, y, n, ok2, cancel2):
+        saisis.append((texte, x, y, n))
+        return vrai_get_name(texte, x, y, n, ok2, cancel2)
+
+    g.get_name = espion
+    # 12 images : 2 pour le premier LAB_47236, 8 pour les huit lettres de
+    # `_get_name` ("GENESIS" + RETOUR), 2 pour le deuxieme LAB_47236.
+    pas = [(0, 0, False), (cancel[0] + 4, cancel[1] + 8, True)]
+    pas += [(0, 0, False)] * 8
+    pas += [(0, 0, False), (ok[0] + 4, ok[1] + 8, True)]
+    scenario(g, pas, cles="GENESIS\r")
     try:
-        g.show_world()
-    except NotImplementedError as exc:
-        leve, detail = True, str(exc)
+        r = g.show_world()
+        erreurs = ""
+    except Exception as exc:                      # noqa: BLE001
+        r, erreurs = None, "%s: %s" % (type(exc).__name__, exc)
     finally:
         del g._pompe
-    check("L12755-12758 : NEW GAME efface `_message` et rouvre la boite",
-          g._message == "", "message=%r" % g._message)
+        del g.get_name
+    check("L12755-12758 : NEW GAME efface `_message` avant de rouvrir la "
+          "boite - `_get_name` recoit donc un champ vide",
+          saisis == [("", 0x20, 0x2C, 0x10)],
+          "saisis=%s%s" % (saisis, erreurs))
     check("L12314 puis L12240-12249 : la deuxieme visite a `saisi = 1`, donc "
-          "la saisie passe par `_get_name`, non transcrite - la levee nomme "
-          "la routine",
-          leve and "_get_name" in detail,
-          detail if leve else "aucune levee (indexes=%s)" % indexes)
+          "elle seule passe par `_get_name` - une seule fois, avec les sept "
+          "arguments x = $20, y = $2C, maxlen = $10",
+          len(saisis) == 1 and saisis[0][1:] == (0x20, 0x2C, 0x10),
+          "saisis=%s" % (saisis,))
+    check("Le nom tape au clavier est rendu a `_message` puis valide comme "
+          "n'importe quelle premiere saisie : monde 0, level.dat relu",
+          r == 0 and indexes == [0, 0] and g._message == "GENESIS",
+          "ret=%r indexes=%s message=%r%s" % (r, indexes, g._message,
+                                              erreurs))
 
     # ---- 6. la structure du listing qui rend ce chemin possible ---------
     ls = io.open(ASM, "r", encoding="utf-8", newline="").read().splitlines()
