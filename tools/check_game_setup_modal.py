@@ -261,7 +261,9 @@ def main():
     #
     # La ligne 11 (*GAME OPTIONS*) ne leve plus depuis la Phase 71 : elle
     # ouvre `SET GAME OPTIONS`, verifie par `tools/check_set_options_modal.py`.
-    for k, nom, serie in ((9, "_show_world", 1), (15, "_ground_in", 1)):
+    # La ligne 9 (*CONQUEST*) ne leve plus depuis la Phase 75 : elle ouvre
+    # `WORLD TO CONQUER`, verifie par `tools/check_show_world_modal.py`.
+    for k, nom, serie in ((15, "_ground_in", 1),):
         depart(g)
         sim.serial_off = serie
         leve, detail = False, ""
@@ -273,6 +275,47 @@ def main():
         check("L12983-13286 : la ligne %d leve en nommant %s" % (k, nom),
               leve and nom in detail,
               detail if leve else "aucune leve (serial_off=%d)" % serie)
+
+    # ---- 11 quater. CONQUEST ouvre `WORLD TO CONQUER` (Phase 75) --------
+    # L13237-13240 : `JSR _show_world ; MOVE.W D0,(_in_conquest) ;
+    # MOVE.W #1,(_new_map) ; BRA.W LAB_47E4E`.
+    depart(g)
+    sim.serial_off = 1
+    sim.in_conquest = -1
+    sim.new_map = 0
+    appele = []
+    vrai_sw = g.show_world
+
+    def espion_sw():
+        appele.append(True)
+        return 7
+
+    g.show_world = espion_sw
+    try:
+        sortie = g._exec_game_setup(9)
+    finally:
+        g.show_world = vrai_sw
+    check("L13237 : la ligne 9 appelle `_show_world`",
+          appele == [True], "appele=%s" % appele)
+    check("L13238 : le monde rendu est range dans `in_conquest`",
+          sim.in_conquest == 7, "in_conquest=%d" % sim.in_conquest)
+    check("L13239 : `_new_map = 1`, puis sortie par LAB_47E4E",
+          sim.new_map == 1 and sortie is True,
+          "new_map=%d sortie=%s" % (sim.new_map, sortie))
+
+    # un rendu de -1 (graine numerique) passe tel quel : c'est la
+    # convention du port pour « hors conquete », deja declaree.
+    depart(g)
+    sim.serial_off = 1
+    sim.in_conquest = 5
+    vrai_sw = g.show_world
+    g.show_world = lambda: -1
+    try:
+        g._exec_game_setup(9)
+    finally:
+        g.show_world = vrai_sw
+    check("L12273/L13238 : le raccourci numerique rend -1, range tel quel",
+          sim.in_conquest == -1, "in_conquest=%d" % sim.in_conquest)
 
     # ---- 11 bis. SAVE et LOAD ouvrent l'ecran, sans lever --------------
     # La ligne 12 (*SAVE A GAME*) et la 13 (*LOAD A GAME*) sont transcrites

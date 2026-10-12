@@ -6180,20 +6180,132 @@ aussi : `close_conquest_dialog` renvoie deja un booleen de chargement.
 
 #### Verification
 
-`tools/check_show_world.py` (nouveau) : **26 controles**. Les 690 octets sont
+`tools/check_show_world.py` (nouveau) : **30 controles**. Les 690 octets sont
 relus dans le listing et compares entree par entree ; puis la coherence (le
 titre, le numero de bataille, le relief, la ligne YOU/HIM, les six puissances,
 la descente reguliere de 8 px, la boite `$120` x `$A0`, la valeur de retour
-`-1`). Le point ouvert des 15/16 est **affiche**, pas compte comme un
-echec - c'est une incertitude, pas un controle.
+`-1`). Le point ouvert des 15/16 est **resolu** (voir ci-dessous) et affiche.
 
 Suite inchangee et au vert : `autopilot` 84/84 ; `check_icons` 53/53 ;
 `check_two_players` 33/33 ; `check_level` 41/41 ;
 `check_save_load_screen` 20/20.
 
-**Reste** : la boucle de `_show_world` elle-meme - `_decode`, `_put_in_string`,
-`_get_name`, le `Seek` dans `level.dat` (L12347-12354) et les seize
-`line_N`. C'est la derniere grosse piece du dialogue *GAME SETUP*.
+**Reste** : la boucle de `_show_world` elle-meme. C'est la derniere grosse
+piece du dialogue *GAME SETUP*.
+
+### Phase 75 (2/2) - `_decode` et la boucle de `_show_world`
+
+Trois pieces, dans l'ordre du listing : `put_in_string` (L12163-12186),
+`_decode` (L14900-15119), puis la boucle elle-meme (L12190-12773).
+
+#### `_put_in_string` et `_con_text`
+
+`put_in_string(ligne, n, texte)` colle `texte` a l'octet `n` de `ligne`,
+**sans jamais depasser les 40 octets du tampon** - `n` est le nombre d'octets
+a sauter, et c'est `LAB_51EEE[i]`, la largeur de la ligne, qui le fournit.
+`con_text.py` porte les **39 entrees** de `_con_text` (L24726-24780), plus
+`CON_RELIEFS`/`CON_VITESSES`/`CON_NIVEAUX` et `CON_FIN_PARTIE`.
+
+#### `_decode` : trois syllabes, un code de 15 bits, une brute force
+
+`_decode` lit un nom de monde a trois syllabes et le ramene a une graine :
+
+1. trois tables de **32 entrees chacune** - `_start` (L25075, `$52972`),
+   `_end` (L25108, `$529F2`), `_mid` (L25141, `$52A72`) - balayees dans
+   l'ordre **start, mid, end** (les neuf `LEA` de L14914-L15069 le
+   prouvent) ;
+2. pour chaque table, `_passe` prend la **premiere** syllabe qui est un
+   prefixe de la chaine a l'endroit du curseur, puis avance le curseur de
+   sa longueur (L14921-14956). Pas la plus longue : la premiere ;
+3. le code est `start | mid << 5 | end << 10` (L15026-15028, L15096-15099) ;
+4. sinon, **force brute** : `for g in 0, 5, ..., 5000 : _seed = g ;
+   if _newrand(g) & $FFFF == code : return g`, sinon `-5` (L15101-15118).
+
+Les cinq retours negatifs sont `-1` (pas de syllabe de depart), `-2` (pas de
+milieu), `-3` (pas de fin), `-4` (`strlen != curseur`, donc lettres de trop),
+`-5` (code jamais atteignable).
+
+**Une propriete de l'original, trouvee par execution.** Les 1001 noms
+construits depuis les graines 0, 5, ..., 5000 retombent sur leur code - sauf
+deux : `NIMEAL` (graine 3095) et `BUREAL` (4685). `_mid` essaye `EA` (rang 17)
+avant `E` (rang 26), puis `_end` rend `AL` et laisse un `L` orphelin que plus
+aucune syllabe ne reprend : l'original rend `-3` sur ces deux la. Les deux
+codes sont donc **inatteignables par leur propre nom**. Ce n'est pas une
+reecriture, c'est le balayage du listing.
+
+#### La boucle de `_show_world`
+
+Trois boucles emboitees, `LAB_47064` -> `LAB_470AC` -> `LAB_47236` :
+
+* **numerique** : `atoi(_message) != 0` range le nombre en mot
+  (`$FFF4` pour -12, soit 65524 pour le generateur), efface `_message` et
+  rend **-1 sans jamais ouvrir `level.dat`** (L12262-12273) ;
+* **nom** : `GENESIS` force l'indice 0, sinon `_decode` (L12278-12295) ;
+  tant que l'indice est negatif on trace `NO SUCH WORLD` et on reboucle
+  (L12297-12312) - **sans lire le clavier**, donc une boucle infinie dans
+  l'original ;
+* **index** : `monde / 25` donne l'entree de `level.dat`, lue en
+  `Open / Seek(index*10) / Read($A) / Close` (L12340-12367).
+
+**`saisi`, le mot `(-22,A5)`.** Efface a l'ouverture (L12192), mis a 1 des
+qu'un monde est valide (L12314), relu en L12240 : c'est la que `_get_name`
+(L10307, 183 lignes) devrait prendre la main. **Il n'est atteignable que par
+un seul chemin**, et le listing le dit en quatre lignes :
+
+| ligne | effet |
+|---|---|
+| L12314 | `saisi = 1` |
+| L12370 / L12376 | echec du disque : `saisi = 0`, puis retour a `LAB_47064` |
+| L12758 | abandon *NEW GAME* : retour a `LAB_47064` **sans y toucher** |
+
+Donc : apres un premier monde accepte, *NEW GAME* reboucle avec `saisi = 1`
+et la saisie passe par `_get_name` - le port leve `NotImplementedError` a
+cet endroit. Avant, jamais.
+
+**Le `BRA.W LAB_47064` du NEW GAME n'est pas une sortie.** Le port a d'abord
+fait du rendu 2 un simple `break`, ce qui faisait de *NEW GAME* un second
+bouton OK : la sequence de L12762-12771 tournait alors qu'on avait demande a
+effacer. Le listing ne sort pas de la routine, il revient en tete de la
+boucle de dehors.
+
+**Les boutons portent leurs vrais textes.** `_cadres_boutons` prend
+maintenant la longueur des deux libelles : `START GAME` (10) et `NEW GAME`
+(8), et non plus `OK`/`CANCEL`. Les deux cadres en sortent avec des bords
+différents - `(32, 145, 144)` et `(192, 145, 288)` sur une boite
+`$10,$18,$120,$A0`. Les libelles ne sont toujours pas dessines (ECART
+declare depuis la Phase 67) ; ce sont les **cadres** qui changent.
+
+**Ce que fait OK** (L12762-12771) est neuf ecritures, verifiees une par une :
+`_player = 0`, `_not_player = 1`, `stats[1].can_build = 1`,
+`stats[0].act = 0`, `stats[0].queued = 1`, `stats[1].queued = 0`,
+`_serial_off = 1`, `_paint_map = 0`, `_war = 0`, `_level_number = monde`.
+
+La ligne 9 de *GAME SETUP* (L13237-13240) range le rendu dans
+`_in_conquest` **tel quel - y compris -1** - puis pose `_new_map = 1` et
+referme la boite par `LAB_47E4E`.
+
+**Hors portee documente** : le second appel de `_show_world` depuis
+`_animate` (L542-547), qui reboucle tant que le rendu vaut -1 quand
+`_start_of_game == 2`. Le port n'a qu'un seul appelant, la ligne 9.
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/check_con_text.py` | **64/64** - les 39 entrees relues dans le listing, `put_in_string` en 10 cas |
+| `tools/check_decode.py` | **49/49** - 96 syllabes a leur adresse, 7 100 noms confrontes a une reecriture independante, 1001 aller-retours, les cinq retours negatifs |
+| `tools/check_show_world.py` | **30/30** - la table de 690 octets |
+| `tools/check_show_world_modal.py` | **39/39** - les trois chemins, les neuf ecritures, la structure de `saisi` relue dans le listing |
+| `tools/check_game_setup_modal.py` | **50/50** - la ligne 9 appelee, `in_conquest` range, `new_map = 1` |
+
+Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
+`check_render` **OK** ; `check_assets` **OK** ; `check_funny` **OK** ;
+`smoke_sim` 3000 tours, 0 orphelin ; `stress 2000 8` **8/8**.
+
+**Reste a ce jour** : `_get_name` (L10307, 183 lignes) - le clavier pour
+*NEW GAME*, pour les tiroirs de sauvegarde (zones `$8D`, `$A0`) et pour les
+noms de monde ; et `_ground_in` + `___setup_display` (L18924), qui seuls
+peuvent rendre la ligne 15 *RESTART THIS MAP* jouable.
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la

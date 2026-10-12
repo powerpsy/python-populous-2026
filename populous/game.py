@@ -71,6 +71,30 @@ KEY_STEP = 4                    # cases par appui (le jeu d'origine fait defiler
                                 # d'une case par image, cf. pavé _zoom_map)
 
 
+def _atoi(texte: str) -> int:
+    """`___atoi` (C) : l'entier en tete de ``texte``, 0 s'il n'y en a pas.
+
+    Seul le **mot** retenu a interet : L12265 fait `TST.W D0` et L12270
+    `MOVE.W D0,(_start_seed)`. La boucle saute les espaces, prend en compte
+    un signe eventuel, puis lit jusqu'au premier caractere non chiffre.
+    """
+    i, n = 0, len(texte)
+    while i < n and texte[i] in " \t\n\r\f\v":
+        i += 1
+    signe = 1
+    if i < n and texte[i] in "+-":
+        signe = -1 if texte[i] == "-" else 1
+        i += 1
+    debut = i
+    total = 0
+    while i < n and "0" <= texte[i] <= "9":
+        total = total * 10 + (ord(texte[i]) - 48)
+        i += 1
+    if i == debut:
+        return 0
+    return signe * total
+
+
 class Game:
     def __init__(self, seed: int = 1, ground: int = 0, zoom: int = 3) -> None:
         self.seed = seed
@@ -106,6 +130,17 @@ class Game:
         # dans son cadre local (-4,A5). Ici c'est un attribut, pose par
         # `_exec_game_setup` et relu par `game_setup`.
         self._redessiner = False
+        # `_message` (L3058) : le tampon de saisie de `_show_world`, qui y
+        # recopie "GENESIS" a l'ouverture (L12203) et qui sert aussi de
+        # champ de texte aux ecrans de messages (L12234).
+        self._message = ""
+        # `_conquest` (L84bc) : les dix octets lus dans `level.dat` par
+        # `_show_world` (L12360). Le port a aussi `self.conquest`, un
+        # `ConquestLevel` reconstruit par `load_conquest` - mais ici le
+        # listing ne fait que remplir le tampon, sans interpreter.
+        self._conquest = bytearray(10)
+        # `(-18,A5)` : le mot saisi ou decode, qui devient `_level_number`.
+        self._monde = -1
         # Le tiroir des sauvegardes : `_drawer` (L302c) et le tampon de douze
         # noms `LAB_525C8` (L525c8), plus le defilement et le nom courant.
         self._saves_drawer = "Pop Saves"
@@ -1392,7 +1427,8 @@ class Game:
         self._read_buttons()
 
     def _cadres_boutons(self, x: int, y: int, largeur: int,
-                        hauteur: int):
+                        hauteur: int, texte_ok: str = "OK",
+                        texte_cancel: str = "CANCEL"):
         """Les deux cadres poses par ``_requester`` (L9991-10246).
 
         ``_requester`` remplit lui-meme les structures ``_end_ok`` et
@@ -1422,13 +1458,17 @@ class Game:
         while d6 < d5 + hauteur - 0x10:  # L9953-9960
             d6 += 0x10
         ok_x0 = (d4 + 1) << 4           # L10006
-        ok = (ok_x0, d6, ok_x0 + (2 + 4) * 8)      # L9999, L10241-10246
+        n_ok = len(texte_ok)            # `___strlen` de `end_ok+6` (L10239)
+        ok = (ok_x0, d6, ok_x0 + (n_ok + 4) * 8)      # L9999, L10241-10246
         colonnes = largeur >> 4          # L9908-9910
+        n_cancel = len(texte_cancel)    # `___strlen` de `end_cancel+6` (L10073)
         d7 = 4                          # apres l'angle + un remplissage
-        while d7 < colonnes - 3 - 3:    # L10079-10080
+        # `D1 = colonnes - strlen(cancel)/2 - 3` puis `CMP D1,D7 ; BLT`
+        # (L10076-10080) : la borne depend du **texte** du bouton CANCEL.
+        while d7 < colonnes - (n_cancel // 2) - 3:
             d7 += 1
         cx0 = (d4 + d7) << 4            # L10081-10085
-        cancel = (cx0, d6, cx0 + (6 + 4) * 8)       # L10134-10139
+        cancel = (cx0, d6, cx0 + (n_cancel + 4) * 8)  # L10134-10139
         return ok, cancel
 
     def _trace_options(self, player: int) -> None:
@@ -1749,9 +1789,14 @@ class Game:
             if sim.serial_off == 0:                  # L13225 : inerte
                 return False
             ticks[9], ticks[10] = coche, vide         # L13230-13235
-            raise NotImplementedError(               # L13237
-                "GAME SETUP : la ligne 9 (CONQUEST) appelle `_show_world` "
-                "(L12190), non transcrite")
+            # L13237-13240 : `JSR _show_world ; MOVE.W D0,(_in_conquest)
+            # ; MOVE.W #1,(_new_map) ; BRA.W LAB_47E4E`. Le monde rendu est
+            # range tel quel - y compris -1, la graine saisie - puis la
+            # boite se referme sur `LAB_47E4E` (`_return_to_game`).
+            ret = self.show_world()                   # L13237
+            sim.in_conquest = ret                     # L13238
+            sim.new_map = 1                           # L13239
+            return True                               # -> LAB_47E4E
         if i == 10:                                  # LAB_47D00 CUSTOM GAME
             ticks[10], ticks[9] = coche, vide         # L13247-13252
             sim.in_conquest = -1                     # L13253
@@ -2142,6 +2187,202 @@ class Game:
         import os
         if not os.path.exists("level.dat"):
             print("[SAVE/LOAD] level.dat est absent du repertoire courant")
+
+    def _trace_show_world(self, i: int, lignes, colonnes) -> None:
+        """Un tour de la boucle de tracé de `_show_world` (L12380-12743).
+
+        Deux choses se passent, dans cet ordre : le handler de la ligne,
+        puis `LAB_47620` qui trace le libelle. Les handlers `line_1` a
+        `line_7` ne font que remplir le tampon (`_put_in_string`) - c'est
+        fait en amont par :func:`populous.world.resumer` - et les lignes
+        9 a 14 tracent **elles-memes** leurs valeurs, a part du libelle :
+        deux ``___text`` chacune.
+
+        Les colonnes de ces deux appels sont relevees telles quelles :
+
+        * `y` = ``WORLD_Y[i] + $18`` (L12629, L12650) ;
+        * `x` = ``WORLD_X[i] + WORLD_W[i] + $10`` pour la premiere valeur
+          (L12594-12596) et ``+ $48`` de plus pour la deuxieme (L12620-12622).
+
+        ``WORLD_W[i]`` vaut 120 pour ces lignes, soit `15 * 8` : la
+        colonne YOU du libelle ``"               YOU    HIM"`` ecrit a la
+        ligne 8, qui pose le reperage des deux colonnes.
+        """
+        from populous.world import WORLD_W, WORLD_X, WORLD_Y
+        r, d = self.ren, self.frame
+        if i >= 9:                                # `line_9` puis `line_0`
+            y = WORLD_Y[i] + 0x18
+            x_vous = (WORLD_X[i] + WORLD_W[i] + 0x10) >> 3
+            x_lui = (WORLD_X[i] + WORLD_W[i] + 0x10 + 0x48) >> 3
+            r.draw_text(d, x_vous, y, colonnes[i][0])
+            r.draw_text(d, x_lui, y, colonnes[i][1])
+        # LAB_47620 (L12720-12740) : le libelle lui-meme
+        r.draw_text(d, (WORLD_X[i] + 0x10) >> 3, WORLD_Y[i] + 0x18, lignes[i])
+
+    def _lire_level_dat(self, index: int) -> bool:
+        """`Open` / `Seek` / `Read` / `Close` sur ``level.dat`` (L12340-12367).
+
+        ``Seek(h, index * 10, 1)`` part de l'ouverture, donc la position 0.
+        L'Amiga rend -1 quand la recherche echoue ; au moins une lecture a
+        lieu sinon. Un fichier plus court que l'entree rend **zero octet** :
+        le tampon `_conquest` garde alors son contenu precedent - c'est ce
+        que fait l'ecriture partielle ci-dessous, fidèle au ``Read``.
+        """
+        import os
+        from populous.conquest import _CANDIDATES
+        chemin = next((p for p in _CANDIDATES if os.path.exists(p)), None)
+        if chemin is None:                        # `Open` rend <= 0 (L12345)
+            return False
+        with open(str(chemin), "rb") as f:
+            f.seek(index * 10)                    # L12347-12355
+            donnees = f.read(0xA)                 # L12358-12363
+        self._conquest[:len(donnees)] = donnees
+        return True
+
+    def show_world(self) -> int:
+        """``_show_world()`` (asm L12190-12773). Rend le monde choisi.
+
+        L'ecran *WORLD TO CONQUER*, ouvert par la ligne 9 (CONQUEST) de
+        *GAME SETUP*. Trois boucles emboitees, dans l'ordre du listing :
+
+        **`LAB_47064`** (L12207) pose la boîte et son titre.
+        **`LAB_470AC`** (L12227) dessine le trait, le champ de saisie, et
+        lit la saisie :
+
+        * si le texte est **entierement numerique**, c'est une graine :
+          `_start_seed = _seed = n`, et la routine rend -1 sans jamais
+          toucher a ``level.dat`` (L12262-12273) ;
+        * sinon le nom passe par :func:`populous.decode.decode` ;
+          `GENESIS` force l'indice 0 (L12277-12296) ;
+        * tant que l'indice est negatif, on reste dans la boucle, apres
+          avoir affiche ``NO SUCH WORLD`` (L12297-12312).
+
+        `saisi` vaut 0 a la premiere visite (L12192 l'efface), puis 1
+        des qu'un monde a ete valide (L12314). Le point d'entree qui le
+        relit est `LAB_47064`, ou reviennent deux chemins : L12376, apres
+        L12370 qui **efface** `saisi` (disque absent), et **L12758**,
+        l'abandon *NEW GAME*, qui lui **le laisse a 1**. C'est donc par
+        NEW GAME que la saisie passe par `_get_name` (L12249), **non
+        transcrite** : le port leve `NotImplementedError` a cet endroit -
+        apres un premier monde accepte, jamais avant.
+        ``tools/check_show_world_modal.py`` relit ces quatre lignes pour
+        le montrer, puis provoque la levee.
+
+        `(-20) = (-18) / 25` (L12315-12319) donne l'entree de
+        ``level.dat``. En echec l'affichage demande le disque et la boite
+        s'ouvre de nouveau (L12345-12376) - ce qui tourne en boucle tant
+        que le fichier manque, exactement comme l'original.
+
+        **`LAB_47236`** (L12377) trace les quinze lignes, attend le
+        relachement du bouton (L12745-12747), puis :
+        `_check_cancel` rend 0 (retracer), 2 (effacer `_message` et
+        rouvrir) ou 1 (OK). OK arme une partie neuve a un joueur et rend
+        le monde (L12762-12773), que la ligne 9 range dans
+        `_in_conquest` (L13238).
+
+        **ECART declare** : `_start_seed` n'existe pas dans le port, qui
+        n'a qu'un seul mot de graine (`self.seed`, meme ecart qu'aux
+        lignes 1836-1840).
+        """
+        from populous.decode import decode
+        # `strGENESIS1` (L12782) et `strGENESIS2` (L12786) sont les memes
+        # sept octets, ecrits deux fois dans le listing : une seule constante
+        # dans le port.
+        from populous.world import (WORLD_BOXE, WORLD_GENESIS,
+                                    WORLD_GRAINE, WORLD_LEVEL_DAT,
+                                    WORLD_NB, WORLD_OK_TEXTE,
+                                    WORLD_CANCEL_TEXTE, WORLD_PAS_DE_MONDE,
+                                    WORLD_TRAIT, WORLD_TEXTE, WORLD_X,
+                                    WORLD_Y,
+                                    reinit, resumer, valeurs_colonnes)
+        r, d = self.ren, self.frame
+        sim = self.sim
+        saisi = 0                           # (-22,A5), L12192
+        monde = -1                          # (-18,A5)
+        brut = self._conquest
+        if not self._message:               # L12201-12206
+            self._message = WORLD_GENESIS
+        reinit()                            # `strWorldToConquer` au complet
+        ok, cancel = self._cadres_boutons(*WORLD_BOXE,
+                                          WORLD_OK_TEXTE, WORLD_CANCEL_TEXTE)
+
+        while True:                         # ---- LAB_47064 (L12207) ----
+            self.requester(*WORLD_BOXE, "", "")
+            # L12217-12226 : `___text(_c_text + $10, LAB_51EEC + $18,
+            # strWorldToConquer)` - les deux index non signes valent l'entree
+            # 0 : titre, puisque la boucle commence a i = 1.
+            r.draw_text(d, (WORLD_X[0] + 0x10) >> 3,
+                        WORLD_Y[0] + 0x18, WORLD_TEXTE[0])
+
+            while True:                     # ---- LAB_470AC (L12227) ----
+                r.draw_text(d, 0x20 >> 3, 0x2C, WORLD_TRAIT)   # L12228-12233
+                r.draw_text(d, 0x20 >> 3, 0x2C, self._message)  # L12234-12239
+                if saisi:                   # L12240-12250
+                    raise NotImplementedError(
+                        "_show_world : la deuxieme saisie passe par "
+                        "`_get_name` (L10307), non transcrite")
+                n = _atoi(self._message) & 0xFFFF     # L12262-12265
+                if n != 0:                  # L12266
+                    self.seed = n            # L12270-12271 `_start_seed=_seed`
+                    self._message = ""       # L12272
+                    return WORLD_GRAINE      # L12273 `MOVEQ #-1,D0`
+                if self._message:            # L12278-12279
+                    monde = (0 if self._message == WORLD_GENESIS
+                             else decode(self._message, self))   # L12281-12295
+                    if monde < 0:            # L12297-12312
+                        r.draw_text(d, (WORLD_X[0] + 0x10) >> 3,
+                                    WORLD_Y[0] + 0x18, WORLD_PAS_DE_MONDE)
+                if monde >= 0:
+                    break                    # L12313 : valide
+            saisi = 1                        # L12314
+
+            index = monde // 25              # L12315-12319 `DIVS #$0019`
+            if not self._lire_level_dat(index):     # L12340-12368
+                saisi = 0                    # L12370
+                print("[SHOW-WORLD] %s est introuvable : le jeu demande "
+                      "d'insérer le disque original (L12371-12374), et "
+                      "boucle tant qu'il n'y est pas." % WORLD_LEVEL_DAT)
+                continue                     # L12376 -> LAB_47064
+
+            # `abandon` porte le `BRA.W LAB_47064` de L12758 : un retour en
+            # tete de la boucle de dehors, **pas** une sortie de la routine.
+            abandon = False
+            while True:                      # ---- LAB_47236 (L12377) ----
+                self.left_button = 2         # L12378
+                lignes = resumer(brut, monde)          # `line_1` a `line_7`
+                colonnes = valeurs_colonnes(brut)     # `line_9`/`line_0`
+                for i in range(1, WORLD_NB):  # L12741-12743 `CMPI.W #$000f`
+                    self._trace_show_world(i, lignes, colonnes)
+                while self.left_button != 0:  # L12745-12747
+                    self._pompe()
+                    if not self.running:
+                        return WORLD_GRAINE
+                rr = self.check_cancel(ok, cancel)    # L12749-12753
+                if rr == 2:                  # L12755-12758 : NEW GAME
+                    self._message = ""
+                    abandon = True           # BRA.W LAB_47064
+                    break
+                if rr != 1:                  # L12760-12761 : on retrace
+                    continue
+                break                        # OK
+            if abandon:                      # -> LAB_47064, `saisi` = 1
+                continue
+
+            # L12762-12771 : la sequence meme du demarrage monojoueur.
+            # Les deux fiches sont adressees **en dur** - `LAB_516D8` et
+            # `LAB_516AA`, donc stats[1] et stats[0], et non `not_player`.
+            st = sim.stats
+            sim.player = 0
+            sim.not_player = 1
+            st[1].can_build = 1              # L12764
+            st[0].act = 0                    # L12765
+            st[0].queued = 1                 # L12766
+            st[1].queued = 0                 # L12767
+            sim.serial_off = 1               # L12768
+            sim.paint_map = 0                # L12769
+            sim.war = 0                      # L12770
+            self._monde = monde              # L12771 `_level_number`
+            return monde                     # L12772-12773
 
     def _trace_two_players(self, etat: int) -> None:
         """Un panneau de `_two_players` (L11284-11413)."""

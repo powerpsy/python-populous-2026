@@ -104,3 +104,123 @@ WORLD_OK = {
     "paint_map": 0,
     "war": 0,
 }
+
+
+# ------------------------------------------------------------------ chaines
+# `strStartGame` (L12774) et `strNewGame` (L12778) : ce sont les **textes des
+# boutons**, ecrits par `_requester` dans ses deux structures de boutons. Le
+# listing les recopie a `(-72)` et `(-118)` (L12193-12200) - deux blocs de 46
+# octets, soit l'ecart entre `-72` et `-118`, texte a `+6` (L789-796).
+WORLD_OK_TEXTE = "START GAME"        # copie a (-72), -66 = texte
+WORLD_CANCEL_TEXTE = "NEW GAME"      # copie a (-118), -112 = texte
+# `strGENESIS1` (L12782), pose dans `_message` quand la boite s'ouvre (L12203).
+WORLD_GENESIS = "GENESIS"
+# `strNoSuchWorld` (L12790) : affiche quand `_decode` rend nul.
+WORLD_PAS_DE_MONDE = "NO SUCH WORLD"
+# `str_level_dat` (L12794) : le fichier ouvert en L12340.
+WORLD_LEVEL_DAT = "level.dat"
+# `LAB_525C8` (L24927) : seize octets $82, le trait horizontal trace au-dessus
+# du champ de saisie (`___text(d, $20, $2C, ...)` L12228-12233). Le $82 est un
+# glyphe du jeu, pas un caractere ASCII.
+WORLD_TRAIT = "\x82" * 16
+# `_blank` (L24915) : onze cares, souligne le nom saisi (L12251-12259).
+WORLD_BLANK = "^" * 11
+
+
+# ------------------------------------------------------------ les 15 lignes
+def _valeur_5(mode: int) -> int:
+    """La regle de construction : `line_5` (L12487-12503)."""
+    if mode & (1 << 2):
+        return 14                     # `BTST #2` -> LAB_521D4
+    if mode & (1 << 4):
+        return 15                     # `BTST #4` -> LAB_521D8
+    if mode & (1 << 3):
+        return 16                     # `BTST #3` -> LAB_521DC
+    return 17                         # LAB_521E0
+
+
+def _valeur_6(mode: int) -> int:
+    """Les marais : `line_6` (L12521-12527)."""
+    return 19 if mode & (1 << 1) else 18    # BOTTOMLESS / SHALLOW
+
+
+def _valeur_7(mode: int) -> int:
+    """L'eau : `line_7` (L12545-12551)."""
+    return 21 if mode & (1 << 0) else 20    # FATAL / HARMFUL
+
+
+def _valeur_niveau(premier: int) -> int:
+    """Le niveau : `line_4` (L12465-12470), `((10 - _conquest[0]) >> 1) + 9`."""
+    return ((10 - premier) >> 1) + 9
+
+
+def _vitesse(speed: int) -> int:
+    """La vitesse : `line_3` (L12438-12443), `((10 - speed) >> 1) + 4`."""
+    return ((10 - speed) >> 1) + 4
+
+
+# Les tampons de `strWorldToConquer` : la table est modifiee **en place** par
+# `_put_in_string` (L12406, L12427, ...) et le resultat reste lisible ensuite.
+# C'est le meme effet de bord qu'en `.data` dans l'original.
+_BUF = [bytearray(t.encode("latin-1")) + bytearray(40 - len(t))
+        for t in WORLD_TEXTE]
+
+
+def tampons() -> list:
+    """Une copie fraiche des quinze tampons (les tests en ont besoin)."""
+    return [bytearray(b) for b in _BUF]
+
+
+def reinit() -> None:
+    """Remet `strWorldToConquer` dans son etat d'origine."""
+    for i, t in enumerate(WORLD_TEXTE):
+        _BUF[i][:] = bytearray(t.encode("latin-1")) + bytearray(40 - len(t))
+
+
+def resumer(brut: bytes, monde: int) -> list:
+    """Les quinze lignes affichees, apres `_put_in_string`.
+
+    ``brut`` sont les dix octets lus dans ``level.dat`` (ou encore vides :
+    le tampon `_conquest` est **reutilise**, L12360). ``monde`` est le
+    mot `(-18)`, qui devient `_level_number` (L12771).
+
+    Les lignes 1 a 7 sont le libelle fixe plus la valeur, colles a la
+    colonne `WORLD_W[i]` - qui vaut exactement la longueur du libelle
+    (16, 17, 20, 18, 14, 5, 15, 9). Les lignes 8 a 14 ne passent pas par
+    `_put_in_string` : leurs valeurs sont tracees a part (`line_9` et
+    `line_0` font deux ``___text`` chacun).
+    """
+    from populous.con_text import CON_TEXT, put_in_string
+
+    val = {
+        1: str(monde // 5),                     # `DIVS #$0005` (L12391)
+        2: CON_TEXT[brut[5]],                   # conq_05_terrain
+        3: CON_TEXT[_vitesse(brut[1])],         # conq_01_speed
+        4: CON_TEXT[_valeur_niveau(brut[0])],   # _conquest[0]
+        5: CON_TEXT[_valeur_5(brut[4])],        # conq_04_mode
+        6: CON_TEXT[_valeur_6(brut[4])],        # conq_04_mode bit 1
+        7: CON_TEXT[_valeur_7(brut[4])],        # conq_04_mode bit 0
+    }
+    for i in (1, 2, 3, 4, 5, 6, 7):
+        put_in_string(_BUF[i], WORLD_W[i], val[i])
+    return [bytes(_BUF[i]).split(b"\x00")[0].decode("latin-1")
+            for i in range(WORLD_NB)]
+
+
+def valeurs_colonnes(brut: bytes):
+    """Les valeurs des lignes 9 a 14, tracées a part par les handlers.
+
+    Renvoie une liste de quinze ``(you, him)`` : `(None, None)` sauf pour
+    les deux colonnes. `line_9` (L12574-12627) affiche les deux
+    populations, `line_0` (L12631-12698) affiche YES/NO selon le bit
+    ``i - 10`` de `conq_03_yourpow` puis `conq_02_enemypow`.
+    """
+    from populous.con_text import CON_TEXT
+    out = [(None, None)] * WORLD_NB
+    out[9] = (str(brut[6]), str(brut[7]))       # conq_06 / conq_07
+    for i in range(10, WORLD_NB):
+        bit = i - 10                            # `SUB.W #$000a` (L12520)
+        vous = CON_TEXT[22] if brut[3] & (1 << bit) else CON_TEXT[23]
+        lui = CON_TEXT[22] if brut[2] & (1 << bit) else CON_TEXT[23]
+        out[i] = (vous, lui)
+    return out

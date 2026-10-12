@@ -1345,19 +1345,118 @@ def draw_mouth(index):                               # L19894
 
 ## 6.5 `_show_world` et le choix du monde
 
-Appelé depuis `_animate` en début de partie (lignes 542‑553) :
+Deux appels. Dès l'amorce de la partie (lignes 537‑553), si
+`_start_of_game == 2` :
 
 ```python
+    if _start_of_game != 2: goto LAB_3E7E4           # L537‑538
+    _start_of_game = 0 ; clr_wsc() ; swap_screens()  # L539‑541
     while True:                                      # L542‑547
         in_conquest = show_world()
         if in_conquest != -1: break
     return_to_game() ; setup_display(-1, 0)           # L549‑553
 ```
 
-`show_world` est l'écran de sélection de monde, qui affiche les 16 lignes issues de
-`level.dat` (dispatch en 12384 → `line_1 … line_16`, lignes 12388‑12797) :
-numéro de monde, terrain (`_con_text[conq_05_terrain]`), vitesse, pouvoirs,
-populations, mode de jeu…
+Le bouclage sur `-1` est le raccourci numerique : une saisie entierement
+numerique est une **graine**, pas un monde, et la boite se rouvre aussitot.
+Le second appel est la ligne 9 de *GAME SETUP* (L13237‑13240), qui lui
+**ne boucle pas** :
+
+```python
+    in_conquest = show_world(); new_map = 1           # L13237‑13239
+    goto LAB_47E4E                                    # _return_to_game
+```
+
+### Structure (L12190‑12773)
+
+Trois boucles emboitees :
+
+| label | ligne | rôle |
+|---|---|---|
+| `LAB_47064` | L12207 | `_requester($10,$18,$120,$A0, end_ok, end_cancel)` + titre |
+| `LAB_470AC` | L12227 | trait, champ de saisie, lecture de la saisie |
+| `LAB_47236` | L12377 | trace des **14** lignes (i = 1..14), attente du clic |
+
+La saisie (L12240‑12313) a trois issues :
+
+1. **numerique** — `atoi(_message) != 0` : le nombre est range en **mot**
+   (`$FFF4` pour -12), `_message` efface, et la routine rend **-1 sans
+   ouvrir `level.dat`** (L12262‑12273) ;
+2. **`GENESIS`** → indice 0 (L12281‑12288, `strGENESIS1` L12782 et
+   `strGENESIS2` L12786 sont les memes sept octets) ;
+3. **nom** → `_decode` (L14900‑15119). Tant que l'indice est negatif, on
+   trace `NO SUCH WORLD` et on reboucle **sans lire le clavier**
+   (L12297‑12312) : dans l'original c'est une attente infinie.
+
+L'indice devient ensuite l'entree de `level.dat` :
+`index = monde / 25` (`DIVS #$0019`, L12315‑12319), lue par
+`Open / Seek(index*10, 1) / Read($A) / Close` (L12340‑12367). Une entree
+hors fichier rend zero octet et le tampon `_conquest` garde son contenu
+precedent.
+
+### `saisi` — le mot `(-22,A5)`
+
+Efface a l'ouverture (L12192), mis a 1 des qu'un monde est valide
+(L12314), relu en L12240 : la ou `_get_name` (L10307) prendrait la main.
+Seul **un** chemin le laisse a 1 :
+
+| ligne | effet |
+|---|---|
+| L12314 | `saisi = 1` |
+| L12370 / L12376 | echec du disque : `saisi = 0`, retour a `LAB_47064` |
+| L12758 | *NEW GAME* : retour a `LAB_47064` **sans y toucher** |
+
+Donc la saisie clavier n'est reachable qu'apres un premier monde accepte,
+en passant par *NEW GAME*.
+
+### `_decode` (L14900‑15119)
+
+Trois tables de 32 syllabes — `_start` L25075, `_end` L25108,
+`_mid` L25141 — balayees **dans l'ordre start, mid, end** (neuf `LEA`,
+L14914 à L15069). Pour chaque table, `_passe` prend la **premiere** syllabe
+prefixe de la chaine a l'endroit du curseur (pas la plus longue), puis
+avance de sa longueur. Le code en resulte :
+
+```python
+    code = start_i | mid_i << 5 | end_i << 10       # L15026‑15099
+    for g in range(0, 5001, 5):                     # force brute, L15101
+        jeu.seed = g
+        if Rng(g).raw() & 0xFFFF == code: return g
+    return -5
+```
+
+Retours : `-1` pas de syllabe de depart, `-2` pas de milieu, `-3` pas de
+fin, `-4` (`strlen != curseur`), `-5` code jamais atteignable.
+
+### Les 15 lignes de `strWorldToConquer`
+
+`level.dat` apporte dix octets, interpretes par dix handlers (les
+`line_1 … line_9`, `line_0`) :
+
+| i | ligne | valeur |
+|---|---|---|
+| 0 | WORLD TO CONQUER | — (titre, trace en L12217) |
+| 1 | BATTLE NUMBER IS | `monde / 5` |
+| 2 | WORLDS LANDSCAPE IS | `_con_text[conq_05_terrain]` |
+| 3 | HIS REACTIONS ARE | `_con_text[((10 - conq_01_speed) >> 1) + 4]` |
+| 4 | HIS RATING IS | `_con_text[((10 - _conquest[0]) >> 1) + 9]` |
+| 5 | LAND | `_con_text[14..17]` selon les bits 2/4/3 de `conq_04_mode` |
+| 6 | THE SWAMPS ARE | bit 1 → BOTTOMLESS, sinon SHALLOW |
+| 7 | WATER IS | bit 0 → FATAL, sinon HARMFUL |
+| 8 | `…YOU   HIM` | — (entete de colonnes) |
+| 9 | POPULATION | `conq_06_yourpop` / `conq_07_enemypop` |
+| 10‑14 | EARTHQUAKES…FLOODS | YES/NO sur le bit `i-10` de `conq_03_yourpow` puis `conq_02_enemypow` |
+
+Les lignes 1 a 7 passent par `_put_in_string(buffer, LAB_51EEE[i], texte)`;
+les lignes 9 a 14 tracent elles-memes **deux fois** chacune, en
+`(WORLD_X[i] + WORLD_W[i] + $10) >> 3` et `+ $48`, `y = WORLD_Y[i] + $18`.
+
+### Ce que fait OK (L12762‑12771)
+
+`_player = 0` ; `_not_player = 1` ; `stats[1].can_build = 1` ;
+`stats[0].act = 0` ; `stats[0].queued = 1` ; `stats[1].queued = 0` ;
+`_serial_off = 1` ; `_paint_map = 0` ; `_war = 0` ; `_level_number = monde`.
+La routine rend alors ce monde.
 
 ---
 
