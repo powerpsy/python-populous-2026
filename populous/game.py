@@ -717,6 +717,7 @@ class Game:
         fait de meme, sa boucle d'ecran s'arrêtant sur l'ecran de fin.
         """
         if self.game_ended:
+            self._update_victory_screen()
             self.compose()
             return
         self.tick()
@@ -782,6 +783,122 @@ class Game:
             # L14497 : `_seed = _level_number` — le relief est regenere, donc
             # on ramene l'index dans les 99 paliers que contient level.dat.
             self.conquest_next = (nouveau % 99) + 1
+
+        # Initialisation de l'ecran de victoire (_won_conquest, L14460+)
+        self._init_victory_screen()
+
+    def _init_victory_screen(self) -> None:
+        """Initialise l'ecran de victoire (_won_conquest L14460-14603).
+
+        - Charge `lord.pic` (portrait PIL "P" + palette 16 mots -> _tcmap)
+        - Pre-calcule 16 versions du portrait avec palette decalee (cycle cuivre)
+        - Charge `mouths.pic` (6 bouches x 35 frames)
+        - Prepare le cycle de palette (16 entrees, copper offset +16)
+        - Lance la boucle d'attente de clic avec animation bouche/palette
+        """
+        from populous.assets import load_portrait, load_mouth_frames, _surface
+        pil_img, self.victory_palette_words, palette_rgb = load_portrait()
+        self.victory_palette_rgb = palette_rgb          # 768 valeurs RGB
+        # Pre-rendre 16 versions du portrait avec palette decalee (cycle cuivre)
+        self.victory_portraits = []
+        for shift in range(16):
+            # Creer une nouvelle palette decalee de `shift` positions
+            shifted = palette_rgb[shift * 3:] + palette_rgb[:shift * 3]
+            img_shifted = pil_img.copy()
+            img_shifted.putpalette(shifted)
+            # Convertir en surface pygame RGBA
+            self.victory_portraits.append(_surface(img_shifted.convert("RGBA")))
+        self.victory_portrait = self.victory_portraits[0]  # version par defaut
+        self.victory_mouths = load_mouth_frames()      # 6 x 35 frames 48x4
+        self.victory_pal_idx = 0                        # index dans le cycle 16
+        self.victory_mouth_idx = 0                      # frame courante (0-34)
+        self.victory_mouth_id = 0                       # quelle bouche (0-4, 5=yeux)
+        self.victory_counter = 0                        # compteur general (-120,A5)
+        self.victory_pal_counter = 0                    # compteur palette (-108,A5)
+        self.victory_pal_dir = 1                        # direction palette (-110,A5)
+        self.victory_wait_click = True                  # attente clic gauche
+        # Sons a jouer a certains compteurs (L14624-14703)
+        self.victory_sounds_played = set()
+
+    def _update_victory_screen(self) -> None:
+        """Met a jour l'ecran de victoire (une image) — transcription de L14590-14742.
+
+        Boucle principale qui attend le clic gauche :
+        - Cycle la palette (16 entrees, offset copper +16)
+        - Anime la bouche (35 frames, changement a chaque tour)
+        - Joue les sons aux bons compteurs
+        - Quitte sur clic gauche -> `_next_conquest`
+        """
+        if not self.game_ended or not self.victory_wait_click:
+            return
+
+        # Cycle palette : 16 entrees, recopie _palette -> _tcmap avec offset +16
+        # L14590-14603 : recopie 16 mots, puis _make_copper / _show_screen
+        # victory_pal_counter (0-15) choisit la version pre-rendue du portrait
+        self.victory_pal_counter = (self.victory_pal_counter + 1) % 16
+
+        # Compteur principal (-120,A5) : incremente a chaque frame
+        self.victory_counter += 1
+
+        # Direction palette (-110,A5) : alterne +1/-1 tous les 4 cycles
+        if self.victory_counter % 4 == 0:
+            self.victory_pal_dir = -self.victory_pal_dir
+
+        # Animation bouche : change de frame a chaque tour
+        self.victory_mouth_idx = (self.victory_mouth_idx + 1) % 35
+
+        # Changement de bouche (toutes les ~10 frames) - L14646-14658
+        if self.victory_counter % 10 == 0:
+            self.victory_mouth_id = (self.victory_mouth_id + 1) % 5  # 0-4 (pas les yeux)
+
+        # Sons aux compteurs specifiques (L14624-14703)
+        self._play_victory_sounds()
+
+        # Attente clic gauche pour sortir (L14619-14621)
+        if self.left_button == 0:         # clic detecte
+            self.victory_wait_click = False
+            self._return_to_game()
+            self._next_conquest()
+
+    def _play_victory_sounds(self) -> None:
+        """Joue les sons de l'ecran de victoire selon les compteurs (L14624-14703)."""
+        c = self.victory_counter
+        if c in self.victory_sounds_played:
+            return
+
+        # L14624-14629 : compteur 0x0A (10) -> son 2
+        if c == 10:
+            self.sound.play_effect(2, 0)
+            self.victory_sounds_played.add(c)
+        # L14672-14677 : compteur 0x0A (10) + son 2
+        # L14678-14703 : compteur 0x0B-0x0C (11-12) avec verification _words
+        # L14721-14727 : compteur 0xFA (250) -> son 5, 0x23, 0x87, 0x12
+        # Pour l'instant on joue les effets principaux
+        if c == 250:
+            self.sound.play_effect(5, 0)
+            self.sound.play_effect(0x23, 0)
+            self.sound.play_effect(0x87, 0)
+            self.sound.play_effect(0x12, 0)
+            self.victory_sounds_played.add(c)
+
+    def draw_victory_screen(self) -> None:
+        """Dessine l'ecran de victoire complet (portrait + texte + bouche animee)."""
+        if not self.game_ended:
+            return
+
+        # 1. Fond : portrait du Seigneur avec palette cyclique (copper 16 entrees)
+        # victory_pal_counter (0-15) choisit la version pre-rendue
+        self.frame.blit(self.victory_portraits[self.victory_pal_counter], (0, 0))
+
+        # 2. Bouche animee : 6 bouches x 35 frames, position fixe sur le portrait
+        # L14655-14727 : _draw_mouth appele periodiquement
+        mouth_frames = self.victory_mouths[self.victory_mouth_id]
+        frame = mouth_frames[self.victory_mouth_idx]
+        # Position approximative de la bouche sur lord.pic (x=100, y=120)
+        self.frame.blit(frame, (100, 120))
+
+        # 3. Texte de fin (requester) - deja fait par draw_end_screen
+        self.draw_end_screen()
 
     def _next_conquest(self) -> None:
         """Passe au palier suivant — la validation de l'ecran de fin.
@@ -855,6 +972,9 @@ class Game:
         5. ``_show_the_shield`` puis les jauges de population (L403F4) ;
         6. la barre de population du joueur.
         """
+        if self.game_ended:
+            self.draw_victory_screen()
+            return
         self.frame.blit(self.backdrop, (0, 0))
         self._apply_icon_toggles()          # etat persistant des icones (_back_scr)
         self.ren.draw_minimap(self.frame, self.terrain, colours=self.colours)

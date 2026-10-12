@@ -6655,6 +6655,46 @@ les trois branches.
   rythme original. L'ancienne hypothese des « 10 a 15 tours/s » est
   retiree : elle etait fausse.
 ---
+### Phase 80 - Ecran de victoire : `_read_lord`, `_read_mouth`, `_draw_mouth`
+
+L'ecran de fin de conquete (`_won_conquest`, L14460-14768) etait affiche
+mais sans l'animation de la bouche du Seigneur ni le cycle de palette.
+
+**Ce qui est implemente (Phase 80)** :
+* **Chargement `lord.pic`** (L14460-14475) : portrait 320x200 4 plans +
+  palette 16 mots (`_tcmap`). Le port pre-calcule 16 versions du portrait
+  avec palette decalee (cycle cuivre, L14590-14603).
+* **Chargement `mouths.pic`** (L14475-14480) : 6 bouches x 35 frames,
+  decodage bitplan par bitplan (4 bitplanes x 6 octets = 48 pixels/frame).
+  Chaque frame = 48x2 pixels (duplication ligne pour hauteur 2).
+* **Cycle de palette (L14590-14603)** : 16 entrees, rotation continue via
+  le cuivre. Le port utilise les 16 versions pre-calculees du portrait.
+* **Animation bouche (L14655-14727)** : 6 bouches (0-4) + yeux (5),
+  35 frames chacune. Changement de bouche toutes les ~10 frames,
+  cycle de frames continu. Position fixee sur le portrait (x=100, y=120).
+* **Sons ponctuels** (L14624-14703) : effets aux compteurs 10, 250, etc.
+* **Boucle d'attente clic** (L14619-14742) : attend `left_button == 0`,
+  puis `_return_to_game` + `_next_conquest`.
+
+**ECART declares** :
+* Le cuivre original modifie la palette en temps reel ; le port pre-calcule
+  16 surfaces RGBA (acceptable, meme resultat visuel).
+* Position bouche fixe (x=100, y=120) au lieu de la position calculee
+  par l'original (parametres passes a `_draw_mouth`).
+* Sons `_words` non implémentes (tableau non decode).
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/autopilot.py` | **84/84** |
+| `tools/check_*.py` | **31/31** |
+| `check_render` | **OK** (9 ecarts reels inchanges) |
+| `check_funny` | **OK** |
+| `smoke_sim` | 3000 tours OK |
+| `stress 2000 8` | **8/8** |
+
+**Reste a ce jour** : la liaison serie (codes 2 et 8).
 
 ## Note honnête sur l'équilibrage
 

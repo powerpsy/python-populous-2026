@@ -1542,10 +1542,31 @@ Charge `mouths.pic` (0x13B0 = 5 040 B) dans **`_map_steps`** (le tampon est réu
 def draw_mouth(index):                               # L19894
     # 1 « bouche » = 6 octets × 4 lignes = 24 B ; pas de ligne = 840 B (MULU #$348)
     src = _map_steps + index * 840
-    # 35 lignes de haut                                   # [?] découpage exact non relu
+    # 35 frames de haut, 4 bitplanes x 6 octets = 48 pixels par frame
+    # Le port decode les 4 bitplanes (48 pixels) et combine en 16 couleurs
 ```
 
-`0x13B0 = 5040 = 6 × 840` → **6 bouches** au total.
+`0x13B0 = 5040 = 6 × 840` → **6 bouches** au total (indices 0-4 + yeux).
+
+**Format des donnees (Phase 80)** :
+* Fichier `mouths.pic` : 5040 octets = 6 bouches × 35 frames × 24 octets.
+* Une frame = 24 octets = 4 bitplanes × 6 octets = 48 pixels (1 ligne).
+* Les 4 bitplanes se combinent bit a bit pour former un index 4 bits (0-15)
+  par pixel : `idx = bp0 | (bp1<<1) | (bp2<<2) | (bp3<<3)`.
+* Le sprite fait 48 pixels de large, 2 lignes de haut (duplication de la ligne
+  pour correspondre au dessin original qui ecrit chaque bitplane sur 2 lignes
+  d'ecran via `MOVE.L` + `MOVE.W`).
+
+**Port (Phase 80)** : `load_mouth_frames()` lit `mouths.pic` brut, decode
+les 4 bitplanes en indices 4 bits (0-15), utilise la palette du jeu pour
+creer des surfaces 48x2 (duplication ligne pour hauteur 2). 6 bouches x
+35 frames = 210 surfaces pre-calculees.
+
+**Animation dans `_won_conquest`** (L14655-14727) :
+* 6 bouches (0-4 = paroles, 5 = yeux) alternees toutes les ~10 frames.
+* 35 frames par bouche, cycle continu.
+* Position fixe sur le portrait (x=100, y=120 approx).
+* Palette cyclique 16 entrees (cuivre) synchronisee.
 
 ## 6.5 `_show_world` et le choix du monde
 

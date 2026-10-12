@@ -237,7 +237,11 @@ def load_sprites(name: str, w: int = 16, h: int = 16) -> list[pygame.Surface]:
 
 # ------------------------------------------------------------------- bouches
 def load_mouths() -> list[pygame.Surface]:
-    """6 images de 48x35 px (animations du portrait du Seigneur)."""
+    """6 images de 48x35 px (animations du portrait du Seigneur).
+
+    Chaque image contient 35 frames empilees verticalement (1 ligne = 1 frame
+    compressee). Pour l'animation, utiliser :func:`load_mouth_frames`.
+    """
     p = (GAME / "mouths.pic")
     if not p.exists():
         p = DATA / "mouths.pic"
@@ -260,6 +264,49 @@ def load_mouths() -> list[pygame.Surface]:
                     px[x, y] = (*pal[idx], 255)
         out.append(_surface(img))
     return out
+
+
+def load_mouth_frames() -> list[list[pygame.Surface]]:
+    """Extraits les frames d'animation des 6 bouches depuis le fichier brut.
+
+    Chaque frame = 24 octets = 4 bitplanes x 6 octets = 48 pixels (1 ligne).
+    Le sprite original fait 2 lignes de haut (chaque bitplane duplique sur 2 lignes).
+    Retourne 6 bouches x 35 frames, chaque frame = surface 48x2 (duplication ligne).
+    """
+    p = (GAME / "mouths.pic")
+    if not p.exists():
+        p = DATA / "mouths.pic"
+    b = p.read_bytes()
+    # Utiliser la palette standard du jeu (16 couleurs)
+    pal = palette_rgb()  # 16 couleurs RGB
+
+    all_mouths = []
+    for k in range(6):                          # 6 bouches (0-4 + yeux)
+        d = b[k * 840:(k + 1) * 840]            # 840 octets = 35 frames x 24
+        frames = []
+        for f in range(35):                     # 35 frames par bouche
+            frame_data = d[f * 24:(f + 1) * 24]  # 24 octets = 4 bitplanes x 6
+            # Decoder les 48 indices de couleur (4 bits/pixel)
+            indices = []
+            for x in range(48):
+                bi = x // 8
+                bit = 7 - (x % 8)
+                idx = 0
+                for bp in range(4):
+                    byte = frame_data[bp * 6 + (x // 8)]
+                    if (byte >> (7 - (x % 8))) & 1:
+                        idx |= (1 << bp)
+                indices.append(idx)
+            # Creer surface 48x2 (duplication ligne pour hauteur 2)
+            img = Image.new("RGBA", (48, 2), (0, 0, 0, 0))
+            px = img.load()
+            for y in range(2):
+                for x, idx in enumerate(indices):
+                    if idx:
+                        px[x, y] = (*pal[idx], 255)
+            frames.append(_surface(img))
+        all_mouths.append(frames)
+    return all_mouths
 
 
 # -------------------------------------------------------------------- .pic
@@ -300,9 +347,43 @@ def load_pic(name: str, planes: int = 4) -> pygame.Surface:
     return _surface(img.convert("RGBA"))
 
 
-def load_portrait() -> pygame.Surface:
-    """lord.pic : portrait 320x200 + 16 mots de palette."""
-    return load_pic("lord.pic", planes=4)
+def load_portrait() -> tuple[object, list[int], list[int]]:
+    """lord.pic : portrait 320x200 + 16 mots de palette.
+
+    Retourne (pil_image_p, palette_words, palette_rgb) où :
+    - pil_image_p est l'image PIL en mode "P" (indexée) 320x200
+    - palette_words sont les 16 mots Amiga $0RGB (pour _tcmap)
+    - palette_rgb est la palette RGB étendue (768 valeurs) pour l'affichage
+    """
+    for folder in (GAME, DATA):
+        p = folder / "lord.pic"
+        if p.exists():
+            break
+    else:
+        raise FileNotFoundError("lord.pic")
+    b = p.read_bytes()
+    total = 320 * 200 // 8 * 4            # 32000 octets image
+    pal_words = list(struct.unpack_from(">16H", b, total))
+    # Construire l'image PIL en mode P
+    img = Image.new("P", (320, 200))
+    px = img.load()
+    rb, ps = 40, 8000
+    for y in range(200):
+        for x in range(320):
+            bi, bit = x // 8, 7 - x % 8
+            idx = 0
+            for q in range(4):
+                off = q * ps + y * rb + bi
+                if off < total and (b[off] >> bit) & 1:
+                    idx |= 1 << q
+            px[x, y] = idx
+    # Palette RGB complete (768 valeurs) pour l'affichage
+    flat = []
+    for w in pal_words:
+        flat += list(rgb4(w))
+    flat += flat[:3] * (768 - len(flat))
+    img.putpalette(flat[:768])
+    return img, pal_words, flat[:768]
 
 
 # ------------------------------------------------------------------- icones
