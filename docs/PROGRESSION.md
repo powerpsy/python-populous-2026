@@ -6529,6 +6529,56 @@ Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
 `smoke_sim` 3000 tours ; `stress 2000 8` **8/8** ; et les 31 controles
 `tools/check_*.py` rendent tous 0.
 
+### Phase 78 - `_place_first_people` : le depart fidele (L7652-7859)
+
+L'original `_place_first_people` (L7652-7859) etait approxe depuis la
+Phase 61 par un placement sur les deux meilleurs cases plates. La
+Phase 78 le transcrit **ligne a ligne**, remplacant l'heuristique
+equitable par l'algorithme reel :
+
+* **Nombre de villageois** (`(-4,A5)`, L7654-7678 / L7756-7780) :
+  - conquete : colonne `conq_06_yourpop` / `conq_07_enemypop` de `level.dat` ;
+  - deux joueurs (`serial_off == 0`) : exactement 1 par tribu ;
+  - sinon : `2 * (seuil > 4) + 1` — la tribu Amiga (seuil `.data` = 5)
+    demarre avec **3** villageois, la tribu humaine (seuil `.data` = 1)
+    avec **1**.
+* **Score** : `+10 points` par villageois pose, pour la tribu jouee
+  seulement (L7680-7686 / L7782-7788).
+* **Balayage tribu 0** (L7688-7754) : depart bloc `$80` (x=0, y=2), avance
+  vers `$FFF` ; cherche `_map_blk == $0F`. Chaque case consomme un
+  villageois ; le **dernier** a `magnet = 1`.
+* **Balayage tribu 1** (L7790-7856) : depart bloc `$0F80` (x=0, y=62),
+  recule vers `$80` ; meme logique.
+* **Second balayage** (L7718-7754 / L7820-7856) : si des villageois
+  restent (aucune case `$0F` trouvee), on prend n'importe quelle case
+  non vide et non occupee (`_map_who == 0`).
+
+**ECART declares** :
+* La tribu 1 initialise son second balayage a `$1000 = 4096`, **hors**
+  des 4096 cases — un debordement reel du listing. Le byte lu est
+  `_map_alt[0]` (le tableau suit `_map_blk` en memoire) et
+  `_map_who[4096]` un mot d'une autre table. Le port ne garde pas
+  `_map_alt` (4096 octets ≠ 4225 sommets de `disp_alt`) : il modele
+  cette case comme vide, c'est-a-dire comme si la boucle commencait a
+  `$FFF`.
+* Dans le second balayage tribu 1, le test `magnet` est fait **avant**
+  de decremente `(-4,A5)` (L7833-7839), contrairement a la tribu 0.
+
+`_settle_peoples` garde les ecritures `can_build` / `colour` (L11256-11259,
+L408, L12070) et appelle desormais `_place_first_people`. Le reset de
+`players[t].magnet = 0` (L3ed4e, `_clear_map`) est fait avant placement.
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/autopilot.py` | **84/84** — placement initial change (peep 0 en (0,2), peep 1 en (59,61) sur graine 59), recentrage pave borne a 0 par `clamp_off` (L2426-2440) |
+| `tools/check_*.py` | **31/31** |
+| `check_render` | **OK** (9 ecarts reels inchanges) |
+| `check_funny` | **OK** |
+| `smoke_sim` | 3000 tours OK |
+| `stress 2000 8` | **8/8** |
+
 **Reste a ce jour** : le second appel de `_show_world` depuis `_animate`
 (L542-547, `_start_of_game`), et la liaison serie (codes 2 et 8).
 ### Reste a faire

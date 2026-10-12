@@ -244,61 +244,150 @@ class Game:
     def _settle_peoples(self) -> None:
         """Pose les deux tribus sur la carte reellement generee.
 
-        L'original appelle ``_place_people(0, magnet, 0)`` puis
-        ``_place_people(1, 0, 0)`` ; le magnet est choisi par
-        ``_set_magnet_to`` sur une case constructible.
+        Deux ecritures de fiche, puis :meth:`_place_first_people`, qui est
+        la transcription ligne a ligne de L7652-7859 (Phase 78).
 
-        Comme les cartes generees sont tres asymetriques (la graine 1 a 73
-        cases plates en haut contre 10 en bas), on ne fige pas un coin : on
-        score **toutes** les cases constructibles et on prend les **deux
-        meilleures**, ce qui garantit un depart equitable.
+        `can_build` : L11256-11259 (fin de la routine qui precede
+        `_two_players`, $46492-4649E) ne pose que
+        ``can_build[_not_player] = 1`` ; ``can_build[_player]`` garde sa
+        valeur `.data`, qui est 0. `can_build[t] == 1` veut dire « l'Amiga
+        conduit la tribu t » (menu Game Setup, L12849-12866) : c'est ce qui
+        autorise l'auto-releve des noyes (L3497), le sculptage
+        `one_block_flat` (L4112) et le seuil avide 0x131 (L3830). Comme le
+        port n'a pas encore d'interface de pouvoir, la tribu joueur cesse
+        donc de reagir toute seule.
+
+        `colour` garde 11/14 : le `.data` porte 5/1 (L24203 / L24229), mais
+        L408 et L12070 reecrivent le champ au demarrage et le port
+        travaille avec une autre table de palettes.
+        """
+        sim = self.sim
+        sim.stats[sim.player].can_build = 0
+        sim.stats[sim.not_player].can_build = 1
+        for t in (0, 1):
+            sim.stats[t].colour = 11 if t == 0 else 14
+            sim.players[t].magnet = 0          # L3ed4e: _clear_map efface _magnet
+        self._place_first_people()
+
+    # ------------------------------------------- _place_first_people (L7652)
+    def _nb_peeps(self, tribu: int) -> int:
+        """Le mot `(-4,A5)` de `_place_first_people` : villageois a poser.
+
+        L7654-7678 pour la tribu 0, L7756-7780 pour la tribu 1 — le
+        squelette est identique, seule la colonne de `level.dat` change
+        (`conq_06_yourpop` contre `conq_07_enemypop`) et le test de seuil
+        porte sur `stats[0]` contre `stats[1]` (`LAB_516B0` / `LAB_516DE`,
+        les deux `+0x0C` de `_stats`).
+
+        * **conquête** : la colonne de `level.dat` elle-meme. Le listing
+          y joint aussi le mode demo (`_start_of_game == 3`, L7656 /
+          L7758) — le port n'a pas encore `_start_of_game` ;
+        * **deux joueurs** (`serial_off == 0`) : exactement un ;
+        * **sinon** : ``2 * (seuil > 4) + 1``, donc 3 quand la tribu est
+          avide (`threshold > 4`), 1 sinon. La tribu Amiga (`.data` = 5)
+          demarre donc avec trois villageois, la tribu humaine (`.data` =
+          1) avec un.
+        """
+        sim = self.sim
+        if sim.in_conquest != -1:                   # L7654-7655 / L7756-7757
+            return self._conquest[6 if tribu == 0 else 7]   # L7658 / L7760
+        if sim.serial_off == 0:                     # L7664-7666 / L7766-7768
+            return 1
+        return ((1 if sim.stats[tribu].threshold > 4 else 0) << 1) + 1
+
+    def _peupler(self, tribu: int, n: int, depart: int, pas: int) -> int:
+        """Le balayage d'une tribu (L7688-7754 pour la 0, L7790-7856 pour la 1).
+
+        ``pas`` est ``+1`` pour la tribu 0 (elle avance dans `_map_blk`,
+        de ``$80`` = (x=0, y=2) vers ``$FFF``) et ``-1`` pour la tribu 1
+        (elle recule, de ``$0F80`` = (x=0, y=62) vers ``$80``). Renvoie le
+        nombre de villageois **non poses**.
+
+        Premier balayage (L7689-7717 / L7791-7819) : les seules cases
+        retenues sont celles dont ``_map_blk == $0F`` (constructibles), et
+        chaque case trouvee en consomme un. Le **dernier** villageois est
+        pose avec ``magnet = 1`` (L7694-7701), les autres avec 0 — c'est
+        ce qui en fait le point d'aimantation de la tribu.
+
+        Second balayage (L7718-7754 / L7820-7856) : seulement si des
+        villageois restent (carte sans aucun ``$0F``). Le fait que la case
+        soit **vide** ne suffit plus, il faut en plus ``_map_who == 0`` —
+        case non occupee.
+
+        **ECART declare, L7823** : la tribu 1 initialise son second
+        balayage a ``$1000 = 4096``, **hors** des 4096 cases — un debord
+        reel du listing. Le byte lu est `_map_alt[0]` (le tableau suit
+        `_map_blk` en memoire, a `$00060F88`) et `_map_who[4096]` est un
+        mot d'une autre table. Le port ne garde pas `_map_alt` (4096
+        octets ≠ les 4225 sommets de `disp_alt`) : il modele cette case
+        comme vide, c'est-a-dire comme si la boucle commencait a `$FFF`.
         """
         sim = self.sim
         blk = self.terrain.blk
-        # L11256-11259 : le setup monojoueur ne pose que
-        # `can_build[_not_player] = 1` ; `can_build[_player]` garde sa
-        # valeur `.data`, qui est 0. `can_build[t] == 1` veut dire
-        # « l'Amiga conduit la tribu t » (menu Game Setup, L12849-12866) :
-        # c'est ce qui autorise l'auto-releve des noyes (L3497), le
-        # sculptage `one_block_flat` (L4112) et le seuil avide 0x131
-        # (L3830). Comme le port n'a pas encore d'interface de pouvoir,
-        # la tribu joueur cesse donc de reagir toute seule.
-        sim.stats[sim.player].can_build = 0
-        sim.stats[sim.not_player].can_build = 1
-        # `colour` garde 11/14 : le `.data` porte 5/1 (L24203 / L24229),
-        # mais L408 et L12070 reecrivent le champ au demarrage et le port
-        # travaille avec une autre table de palettes.
-        for t in (0, 1):
-            sim.stats[t].colour = 11 if t == 0 else 14
+        who = self.terrain.who
 
-        scored = []
-        for y in range(64):
-            row = y << 6
-            for x in range(64):
-                i = row + x
-                if blk[i] != BLK_FLAT:            # 0x0F = case constructible
-                    continue
-                n_flat = 0
-                for dy in range(-3, 4):
-                    yy = y + dy
-                    if not 0 <= yy < 64:
-                        continue
-                    for dx in range(-3, 4):
-                        xx = x + dx
-                        if 0 <= xx < 64 and blk[(yy << 6) + xx] == BLK_FLAT:
-                            n_flat += 1
-                scored.append((n_flat, i))
-        scored.sort(reverse=True)
-        chosen = []
-        for score, i in scored:
-            x, y = i & 63, i >> 6
-            # on exige une distance minimale entre les deuxTribes
-            if all(abs(x - (j & 63)) + abs(y - (j >> 6)) >= 16 for j in chosen):
-                chosen.append(i)
-            if len(chosen) == 2:
+        i = depart                                # L7688 / L7790
+        while True:                               # LAB_43A18 / LAB_43B26
+            if 0 <= i < 4096 and blk[i] == BLK_FLAT:   # L7692 / L7794
+                n -= 1                            # L7694 / L7796
+                sim.place_people(tribu, i,
+                                 1 if n <= 0 else 0)     # L7697-7710
+                if n == 0:                        # L7712-7713 / L7814-7815
+                    return 0
+            i += pas                              # L7715 / L7817
+            if (pas > 0 and i >= 0x1000) or (pas < 0 and i < 0x80):
+                break                             # L7716-7717 / L7818-7819
+
+        if n == 0:                                # L7719-7720 / L7821-7822
+            return 0
+        i = 0 if pas > 0 else 0x1000              # L7721 / L7823
+        while True:                               # LAB_43A70 / LAB_43B82
+            if 0 <= i < 4096 and blk[i] != 0 and who[i] == 0:   # L7725-7730
+                if pas < 0:                       # L7833-7839 : la tribu 1
+                    # teste **avant** de decremente — `magnet` porte alors
+                    # l'ancienne valeur de `(-4,A5)`.
+                    sim.place_people(tribu, i, 1 if n <= 0 else 0)
+                    n -= 1                        # L7850
+                    if n == 0:                    # L7851-7852
+                        return 0
+                else:                             # L7731-7738 : la tribu 0
+                    n -= 1
+                    sim.place_people(tribu, i, 1 if n <= 0 else 0)
+                    if n == 0:                    # L7749-7750
+                        return 0
+            i += pas                              # L7752 / L7854
+            if i == 0 or i == 0x1000:             # bornes L7753 / L7855-7856
                 break
-        for t, i in enumerate(chosen):
-            sim.place_people(t, i, 0)
+        return n
+
+    def _place_first_people(self) -> None:
+        """``_place_first_people`` — L7652-7859, appele par `_setup_display` (L495).
+
+        Deux fois le meme squelette, une par tribu :
+
+        1. le **nombre** de villageois, `(-4,A5)` (:meth:`_nb_peeps`) ;
+        2. ``+10 points`` par villageois (L7680-7686 / L7782-7788) : seule
+           la tribu **jouee** encaisse — c'est le score de fin de partie,
+           pas le mana ;
+        3. le balayage de `_map_blk` (:meth:`_peupler`), en **ligne
+           d'horizon** depuis le centre de la carte : la tribu 0 depuis
+           (0, 2), la tribu 1 depuis (0, 62), donc l'une vers le haut et
+           l'autre vers le bas.
+
+        **ECART declare** : le port posait avant la Phase 78 les deux
+        tribus sur les **deux meilleures cases constructibles** (cela
+        garantissait un depart equitable sur des cartes tres
+        asymetriques). Le listing, lui, s'arrete a la **premiere** case
+        `0x0F` trouvee dans l'ordre lineaire — les deux tribus peuvent
+        donc tomber cote a cote sur une carte ou le relief est borne. Le
+        code d'origine gagne, conformement a la regle du projet.
+        """
+        sim = self.sim
+        for tribu, depart, pas in ((0, 0x80, 1), (1, 0x0F80, -1)):
+            n = self._nb_peeps(tribu)
+            if sim.player == tribu:               # L7680-7681 / L7782-7783
+                self.score += n * 10              # L7682-7686 / L7784-7788
+            self._peupler(tribu, n, depart, pas)
 
     # ------------------------------------------------------------ Conquest
     #: Les champs de `Sim` que `_setup_display` (L380-498) reconstruit, ou

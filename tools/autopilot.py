@@ -195,11 +195,13 @@ def main() -> int:
         b = g.sim.peeps[0].block
         g.xoff, g.yoff = 0, 0
         press(g,*find_pad(4, 1))
+        # L2426-2440 : l'original borne _xoff/_yoff a 0..0x38 (CLR si negatif)
+        att_x = max(0, (b & 63) - 3)
+        att_y = max(0, (b >> 6) - 3)
         results.append(ok("centre du pave : recentre sur l'habitant",
-                          (g.xoff, g.yoff) == ((b & 63) - 3, (b >> 6) - 3),
+                          (g.xoff, g.yoff) == (att_x, att_y),
                           "xoff/yoff = %s, attendu %s"
-                          % (str((g.xoff, g.yoff)),
-                             str(((b & 63) - 3, (b >> 6) - 3)))))
+                          % (str((g.xoff, g.yoff)), str((att_x, att_y)))))
     shot(g, "05_pave")
 
     # ---------------------------------------- palette d'outils (LAB_3F670)

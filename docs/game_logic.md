@@ -256,10 +256,38 @@ def place_people(tribe, x, y, magnet):           # L6982  $43164
 | 9 | `place_people(0, x, y, magnet=1)` | 18034‑18038 |
 | 10 | `place_people(1, x, y, magnet=1)` | 18042‑18046 |
 
-Population de départ : `_place_first_people` (ligne 7652) prend `conq_06_yourpop` en
-mode conquête/tutoriel (ligne 7660), sinon 1 (mode série, ligne 7666) ou
-`2*(LAB_516B0 > 4) + 1` (lignes 7669‑7678). Le joueur 0 gagne `10 * population_initiale`
-points (lignes 7680‑7686).
+Population de départ : `_place_first_people` (ligne 7652, **transcrit en Phase 78**).
+
+**Nombre de villageois** (`(-4,A5)`, L7654‑7678 / L7756‑7780) :
+* **conquête** (ou tutoriel `_start_of_game == 3`, L7656 / L7758) :
+  `conq_06_yourpop` / `conq_07_enemypop` (octets 6 et 7 de `level.dat`) ;
+* **deux joueurs** (`serial_off == 0`, L7664‑7666 / L7766‑7768) : **1** par tribu ;
+* **sinon** : `2 * (seuil > 4) + 1` — la tribu Amiga (`.data` `threshold` = 5)
+  demarre avec **3**, la tribu humaine (`.data` = 1) avec **1**.
+
+**Score** : `+10` points par villageois pose, tribu jouee seulement (L7680‑7686 /
+L7782‑7788).
+
+**Balayage tribu 0** (L7688‑7754) : depart bloc `$80` (x=0, y=2), avance vers
+`$FFF` ; retient `_map_blk == $0F`. Chaque case consomme un villageois ;
+le **dernier** a `magnet = 1`.
+
+**Balayage tribu 1** (L7790‑7856) : depart bloc `$0F80` (x=0, y=62), recule
+vers `$80` ; meme logique.
+
+**Second balayage** (L7718‑7754 / L7820‑7856) : si des villageois restent
+(aucune case `$0F` trouvee), on prend n'importe quelle case non vide et
+non occupee (`_map_who == 0`).
+
+**ECART declares** :
+* La tribu 1 initialise son second balayage a `$1000 = 4096`, **hors**
+  des 4096 cases — debordement reel du listing. Le byte lu est
+  `_map_alt[0]` (tableau qui suit `_map_blk` en memoire) et
+  `_map_who[4096]` un mot d'une autre table. Le port ne garde pas
+  `_map_alt` (4096 octets ≠ 4225 sommets de `disp_alt`) : il modele
+  cette case comme vide (boucle effective a partir de `$FFF`).
+* Dans le second balayage tribu 1, le test `magnet` est fait **avant**
+  de decremente `(-4,A5)` (L7833‑7839), contrairement a la tribu 0.
 
 ## 2.2 Boucle d'un tour : `_move_peeps` — ligne 3245 ($4059A)
 
