@@ -253,28 +253,20 @@ def main():
     check("L12969-12972 : un clic hors de toute ligne rend 17",
           g._survol_game_setup() == 17, "survol=%d" % g._survol_game_setup())
 
-    # ---- 11. les deux handlers qui levent ------------------------------
-    # Branche active de chaque ligne : TWO PLAYERS ne montre son
-    # `_two_players` que si la liaison est **active** (L13009 `TST` / L13010
-    # `BEQ`) et CONQUEST que si elle est **coupee** (L13225-13226). C'est
-    # l'inverse des deux, et c'est le listing qui le dit.
-    #
-    # La ligne 11 (*GAME OPTIONS*) ne leve plus depuis la Phase 71 : elle
-    # ouvre `SET GAME OPTIONS`, verifie par `tools/check_set_options_modal.py`.
-    # La ligne 9 (*CONQUEST*) ne leve plus depuis la Phase 75 : elle ouvre
-    # `WORLD TO CONQUER`, verifie par `tools/check_show_world_modal.py`.
-    for k, nom, serie in ((15, "_ground_in", 1),):
-        depart(g)
-        sim.serial_off = serie
-        leve, detail = False, ""
-        try:
-            g._exec_game_setup(k)
-        except NotImplementedError as exc:
-            leve = True
-            detail = str(exc)
-        check("L12983-13286 : la ligne %d leve en nommant %s" % (k, nom),
-              leve and nom in detail,
-              detail if leve else "aucune leve (serial_off=%d)" % serie)
+    # ---- 11. la ligne 15 : `_new_map = _ground_in + 2` (Phase 77) -------
+    # Jusqu'a la Phase 77 la ligne 15 levait, le port ne suivant pas
+    # `_ground_in` (L396-399, L438-441). `_setup_display` (L380-498)
+    # etant desormais transcrit, L13282-13284 pose simplement le
+    # drapeau : il est consomme par `_do_action` code 8 (L18917-18931).
+    depart(g)
+    sim.serial_off = 1
+    sim.in_conquest = -1
+    sim.new_map = 0
+    sortie = g._exec_game_setup(15)
+    check("L13282-13284 : la ligne 15 ne leve plus, elle pose `_new_map`",
+          sortie is True and sim.new_map == g.ground + 2,
+          "new_map=%d _ground_in=%d sortie=%r" % (sim.new_map, g.ground,
+                                                  sortie))
 
     # ---- 11 quater. CONQUEST ouvre `WORLD TO CONQUER` (Phase 75) --------
     # L13237-13240 : `JSR _show_world ; MOVE.W D0,(_in_conquest) ;

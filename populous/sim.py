@@ -201,9 +201,8 @@ class Game:
         self.serial_off = 1
         # `_bring_up_two` (L12812) : demande d'ouvrir l'ecran deux
         # joueurs ; `_new_map` (L18733) : changement de terrain a
-        # charger, consomme par `___setup_display(0, new_map - 2)`
-        # (L18924-18928). Les deux ne sont pas encore consommes cote
-        # port - voir `Game.game_options`.
+        # charger. Les deux sont **consommes** depuis la Phase 69/77 :
+        # `_do_action` code 8 les lit en LAB_4C070 (L18917-18942).
         self.bring_up_two = 0
         self.new_map = 0
         # Les dix-sept coches du dialogue `GAME SETUP` sont un etat
@@ -222,8 +221,10 @@ class Game:
         # `conq_04_mode` au chargement d'un palier.
         self.game_mode = 0
         # `_ground_in` (L396-399) : l'index du terrain en cours de jeu,
- # borne a 0..3. Le port ne le suivait pas ; il est ecrit et
- # relu par `_save_game` / `_load_game` (L17289, L17529).
+        # borne a 0..3. Ecrit par `_save_game` / `_load_game` (L17289,
+        # L17529) et par `_setup_display` (L399 en conquete, L438-441 en
+        # partie libre - Phase 77) ; `Game.ground` est la copie que
+        # `set_ground` (L4C12A) tient a jour.
         self.ground_in = 0
         # `_land_checksum` (L17189) : somme de controle du terrain,
  # ecrite en dernier champ du fichier de sauvegarde et relue au

@@ -6411,9 +6411,126 @@ Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
 `smoke_sim` 3000 tours ; `stress 2000 8` **8/8** ; et les 30 controles
 `tools/check_*.py` rendent tous 0.
 
-**Reste a ce jour** : `_ground_in` + `___setup_display` (L18924), qui
-seuls peuvent rendre la ligne 15 *RESTART THIS MAP* jouable ; et le
-second appel de `_show_world` depuis `_animate` (L542-547).
+**Reste a ce jour** : le second appel de `_show_world` depuis `_animate`
+(L542-547), qui conditionne `_start_of_game`. Le point ouvert de la
+ligne 15 (`_ground_in` + `___setup_display`) a ete resolu en **Phase 77**.
+
+### Phase 77 - `_setup_display` : le sol, le tampon, et `_new_map` qui existe
+
+`_setup_display(a, ground)` (L380-498) etait la derniere routine appelee
+depuis le port et jamais transcrite. Cinq sites l'atteignent, **tous** avec
+`a == 0` : `_animate` L511 `(0, 1)`, L552 `(0, -1)`, `_two_players`
+L11815 `(0, -2)`, `_won_conquest` L14432 `(0, -1)`, et `_do_action` code 8
+L18928 `(0, _new_map - 2)`.
+
+#### `_start_seed` : le mot qui n'existait pas
+
+L430 (`_start_seed = _seed`), L392 (`_start_seed = D0`) et L18922
+(`_seed = _start_seed`) ecrivent une variable que le port n'avait pas.
+`Game.start_seed` existe desormais, pose la ou l'est `_seed` :
+`__init__`, `set_seed`, le raccourci numerique de `_show_world`
+(L12270-12271, **deux** ecritures distinctes, non une seule) et les deux
+branches de la routine. Les trois ECART declares a ce sujet (Phases 71,
+75 et 76) sont retires.
+
+#### Les deux branches
+
+* **Conquête** (L382-427) : le tampon `_conquest` relu tel quel, par
+  `_palier()` - `conq_01_speed` ... ` conq_08_seed` ne sont que des alias
+  d'octets de ces dix octets. Puis `_seed = _start_seed = (in_conquest & 7)
+  + conq_08` (L388-392), `_ground_in = conq_05_terrain` (L399 - le `CMP` de
+  L396 est une ecriture morte, son drapeau n'est jamais lu) et les quatre
+  ecritures de L407-427, reprises de `load_conquest` dans
+  `_ecritures_palier`.
+* **Partie libre** (L429-458) : `_start_seed = _seed`, puis un `_newrand`
+  **inconditionne** (L433 avance `_seed` meme si `ground != -1`) dont le
+  bit0 autorise `ground == -1` a faire tourner `_ground_in` de +1, avec
+  `BLE` (L440) : au dela de 3 il revient a 0. Enfin L448-456 recharge le
+  sol **courant** si `ground != _ground_in` et `ground != -1` : l'argument
+  ne sert qu'aux deux tests, il n'est jamais affecte a `_ground_in`.
+
+#### `set_ground(conserver_etat=True)` : ce que le port jetait
+
+Le listing ne re-instantie **rien** : `_load_ground` re-chargera les
+tables de sol, `_clear_map` effacera les cases, `_make_alt` /
+`_make_map` / `_make_woods_rocks` regenereront le relief. Le port, lui,
+doit reconstruire `Terrain` + `Renderer` + `Sim` d'un bloc, car `Sim`
+porte `land` (les tables du sol) et `map` (les 4096 cases) : il jette donc
+la fiche de simulation **entiere** a chaque changement de carte.
+
+Le nouveau parametre `conserver_etat` remet a plat, sur la fiche neuve,
+tout ce que L380-498 n'a jamais touche : `_in_conquest`, `_player`,
+`_serial_off`, `_stats`, `_game_mode`, `_new_map`, `_bring_up_two`,
+`_mana`, les coches de *GAME SETUP*, les extrema... Seuls sont recrees les
+champs que la routine d'origine ecrit elle-meme ou qui dependent du sol
+(`_RECONSTRUIT` : `map`, `terrain`, `rng`, `land`, `peeps`, `no_peeps`,
+`seed`, `weapons_order`).
+
+C'est la correction d'un **vrai** ecart, pas d'un confort : `_show_world`
+L12762-12771 ecrit `serial_off`, `can_build`, `act`, `queued` juste avant
+que la ligne 9 ne consomme `_new_map`, et ces quatre ecritures etaient
+jetees par la fiche neuve. Idem pour `game_setup()` ouvert depuis
+`_do_action` code 8 : la boite modale modifie `_stats` et `serial_off`, et
+l'ecran suivant repartait de zéro.
+
+`_ground_in` a desormais un miroir tenu a jour : `sim.ground_in` (le champ
+que `_save_game` / `_load_game` portent) suit `Game.ground` aux deux
+endroits ou le listing ecrit `_ground_in` (L399 et L438-441).
+
+#### Ligne 15 et la consommation de `_new_map`
+
+`_new_map` (L18733, L13239, L13279, L13284, L18918) n'etait ecrit nulle
+part et jamais lu. Il l'est desormais :
+
+* ligne 15 *RESTART THIS MAP* (L13282-13284) : `_new_map = _ground_in + 2`
+  — les lignes 9 et 14 gardent leur `= 1` ;
+* `_do_action` code 8 (L18917-18931) : `if _new_map : if _new_map != 1 :
+  _seed = _start_seed ; _setup_display(0, _new_map - 2)`. Le `!= 1` (L18920)
+  est le point subtil : les lignes 9 et 14 ont deja mis `_seed` a jour
+  (L12270-12271 pour la premiere, L430 pour la seconde), la ligne 15 doit
+  au contraire **rembobiner** avant de regenerer le meme relief.
+
+Les deux derniers `raise` de `_exec_game_setup` tombent. Les ECART
+declares a `game.py` (ligne 1836-1840, 1919, 2536) et a `sim.py` (ligne
+224) sont retires ou remplaces.
+
+#### ECART declares
+
+* `_place_first_people` (L495) devient `_settle_peoples`, appele dans
+  `set_ground` ; il **efface** les peeps existants, que le listing laisse
+  en place sur la nouvelle carte. `Terrain.build` ne produit pas de carte
+  effacee sans relief, donc la branche `a != 0` (L460-461) leve — et
+  n'est jamais atteinte, les cinq appels passant `a = 0`.
+* L471-L487 (`Setscreen`, `_draw_map(0,0,63,63)`, deux `_copy_screen`)
+  sont le rendu : le port les fait par `compose()` a chaque image.
+* `_seed += 1` (L496) vaut `vivant + 1` en partie libre, `graine + 1` en
+  conquete. Les deux cas sont ecrits explicitement.
+* Le port a deux generateurs (le mot de graine de la carte `Game.seed`, et
+  l'etat du simulateur `sim.rng`) la ou l'Amiga n'en a qu'un (`_seed`,
+  `$00052DD0`, que `_newrand` avance). `Rng` reste la copie ligne a ligne de
+  L19129-19135.
+
+`load_conquest` partage desormais `_construire_palier` avec la branche
+conquête, et remplit le tampon `_conquest` — sans quoi un rappel de
+`_setup_display` en conquête (`_animate` L552, `_won_conquest` L14432)
+aurait relu des octets vides.
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/check_setup_display.py` | **27/27** — `a != 0`, les quatre chemins de la branche libre (bit0 a 1, a 0, `_seed == 0`, plafond 3 → 0), `-2`, `_start_seed`/`_seed`, les quatre ecritures + `_game_mode`, `_palier()`, la ligne 15, et les trois chemins de la queue de code 8 (`_new_map` consomme, non efface, restaure `_seed` seulement si `!= 1`) |
+| `tools/check_game_setup_modal.py` | **51/51** — la ligne 15 ne leve plus : elle pose `_new_map = _ground_in + 2` |
+| `tools/check_dispatch.py` | **vert** — le code 8 appelle `setup_display(0, _new_map - 2)` et ne leve plus sur cette branche ; seul le code 2 leve encore |
+| `tools/check_level.py` | **vert** — `load_conquest` partage les memes ecritures |
+
+Le retour d'execution du projet, au vert : `autopilot` **84/84** ;
+`check_render` **OK** ; `check_assets` **OK** ; `check_funny` **OK** ;
+`smoke_sim` 3000 tours ; `stress 2000 8` **8/8** ; et les 31 controles
+`tools/check_*.py` rendent tous 0.
+
+**Reste a ce jour** : le second appel de `_show_world` depuis `_animate`
+(L542-547, `_start_of_game`), et la liaison serie (codes 2 et 8).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
@@ -6433,8 +6550,12 @@ second appel de `_show_world` depuis `_animate` (L542-547).
   de 1300 lignes de listing - plus la liaison serie du code 2
   (`LAB_4BA34`, L18400). **Les seize codes sont desormais
   transcrits** : le 7 en Phase 68, le 8 en Phase 69, le 2 en
-  Phase 70.
-* **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (2441 lignes de liaison serie / options - codes 2, 7, 8).
+  Phase 70. **Phase 77** a acheve le code 8 : sa queue (L18917-18942,
+  consommation de `_new_map` par `_setup_display`) ne leve plus. Il ne
+  reste, dans les codes 2 et 8, que les deux branches de liaison serie
+  (`_write_serial` L18738-18753 et `_read_serial` L18757-18762), qui
+  demandent un second Amiga.
+* **Marqueurs `[APPROX]`** : il n'en reste **aucun**. `_do_place_funny` est tombe en Phase 56 (suite), la derniere branche ouverte - `LAB_45196` de `_set_devil_magnet` - en Phase 57. Tout le reste de `populous/` est transcrit, ou hors portee de facon documentee (l'ecriture et la lecture serie des codes 2 et 8, dont `_setup_display` n'attendait plus que le transcrit en Phase 77).
 * **Cadence** : tranche en Phase 62. La boucle d'origine est rythmee par le
   vblank (`_show_screen`, L19782-19790, tourne sur `INTREQR & $0020`), soit
   un tour par image et un plafond de 50 tours/s en PAL. `TURNS_PER_SECOND`

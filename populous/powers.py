@@ -988,10 +988,16 @@ class PowerEngine:
                     "(_message, $0C, $1B)` (L18759-18762), non transcrit")
             # LAB_4C070, L18917-18942 : la queue commune aux deux branches.
             if sim.new_map:                      # L18918-18931
-                raise NotImplementedError(
-                    "_do_action code 8 : `_new_map = %d` demande "
-                    "`___setup_display(0, new_map - 2)` (L18924-18928), non "
-                    "transcrit" % sim.new_map)
+                # L18920-18922 : `_new_map == 1` (les lignes 9 et 14)
+                # laisse `_seed` tel quel - `_show_world` (L12270-12271) ou
+                # `_setup_display` (L430) s'en sont deja occupes. Sinon
+                # (ligne 15, `_new_map = _ground_in + 2`) L18922 remet
+                # `_seed = _start_seed` **avant** de regenerer, ce qui rend
+                # au listing la meme carte **et** le meme flot de tirages.
+                if sim.new_map != 1:             # L18920-18921 `CMPI #1 / BEQ`
+                    self.g.sim.rng.seed = self.g.start_seed   # L18922
+                self.g.setup_display(0, sim.new_map - 2)      # L18924-18928
+                return                           # L18930-18931 `MOVEQ #1,D0`
             if sim.bring_up_two:                 # L18933-18940
                 # LAB_4C09A le consomme avant d'appeler la routine
                 sim.bring_up_two = 0

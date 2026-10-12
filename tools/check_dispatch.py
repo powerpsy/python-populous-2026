@@ -13,10 +13,11 @@ et non suppose :
 3. le calcul du mana (codes 9/10) doit egaler le listing, reference
    reecrite ici de maniere independante (flottant, pas ``divs_long``) ;
 4. les codes ``2, 7, 8`` : le 7 est **transcrit** depuis la Phase 68 et
-   doit appeler ``_options`` une fois par tribu ; les codes ``2`` et ``8``
-   doivent **lever** ``NotImplementedError`` sur leurs branches serie et
-   surtout pas retomber silencieusement en no-op - c'est la regle de
-   Phase 22, et c'est exactement ce que ``_sub_action`` faisait ;
+   doit appeler ``_options`` une fois par tribu ; le code 8 l'est
+   **entierement depuis la Phase 77**, queue de L18917-18942 comprise
+   (``setup_display(0, _new_map - 2)``) ; seul le code 2 doit encore
+   **lever** ``NotImplementedError`` sur sa branche serie — c'est la regle
+   de Phase 22, et c'est exactement ce que ``_sub_action`` faisait ;
 5. le code 12 doit **bien vider la carte** (Phase 52) — 4225 sommets,
    4096 cases ``who``, puis ``_no_peeps`` a 0 — et appeler
    ``_make_map(0,0,$3F,$3F)`` et ``_draw_map(0,0,$3F,$3F)`` dans cet ordre.
@@ -112,7 +113,7 @@ def main() -> int:
 
     def setup_epion():
         appel_setup.append(1)
-        sim.new_map = pose_new_map[0]               # L13239 / L13279
+        g.sim.new_map = pose_new_map[0]             # L13239 / L13279
 
     g.game_setup, g.two_players = setup_epion, \
         lambda: appel_two.append(1)
@@ -151,10 +152,27 @@ def main() -> int:
         lancer("code 8, local + liaison -> _write_serial (L18738-18753)",
                "_write_serial", lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
         # code 8, un seul joueur, mais `_game_setup` a demande un nouveau
-        # terrain : `___setup_display` n'est pas transcrit (L18924-18928)
+        # terrain : `_setup_display` (L380-498) a ete transcrit en
+        # **Phase 77**, donc la queue de L18918-18931 appelle pour de bon
+        # `setup_display(0, _new_map - 2)` — ici `(0, -1)`. On l'epingle
+        # pour isoler le routage : la vraie regenererait `Sim`, et les
+        # alias `sim` des sections suivantes pointeraient la fiche jetee.
         sim.serial_off, pose_new_map[0] = 1, 1
-        lancer("code 8, _new_map -> ___setup_display (L18924-18928)",
-               "___setup_display", lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+        appel_disp = []
+        vrai_disp = g.setup_display
+
+        def disp_epion(a, ground):
+            appel_disp.append((a, ground))
+
+        g.setup_display = disp_epion
+        try:
+            lancer("code 8, _new_map -> _setup_display (L18924-18928)",
+                   None, lambda: pe.dispatch(0, ACT_ACTION, 0, 8))
+        finally:
+            g.setup_display = vrai_disp
+        if appel_disp != [(0, -1)]:
+            echecs.append("code 8, _new_map : setup_display appele %s "
+                          "(attendu [(0, -1)])" % appel_disp)
         # code 8, autre tribu, liaison active (L18757-18762)
         pose_new_map[0] = 0
         sim.serial_off, sim.player = 0, 1

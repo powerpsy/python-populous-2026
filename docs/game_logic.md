@@ -1014,7 +1014,7 @@ la routine manquante - mieux vaut une erreur nommée qu'un écart muet :
 | 9 | CONQUEST | `serial_off != 0` | `_show_world` (L12190), L13237 |
 | 12 | SAVE A GAME | toujours | `_save_load(1)` (L10493), L13261 |
 | 13 | LOAD A GAME | `serial_off == 0` | `_save_load(0)` (L10493), L13071 |
-| 15 | RESTART THIS MAP | toujours | `_ground_in` + `___setup_display` (L18924), L13282 |
+| 15 | RESTART THIS MAP | toujours | `_new_map = _ground_in + 2`, L13282-13284 |
 
 La ligne 11 (*GAME OPTIONS*) est transcrite depuis la Phase 71 : elle ouvre
 `_set_options`, décrit en §4.4 quater.
@@ -1025,7 +1025,9 @@ la liaison est **active**, CONQUEST ne part que si elle est **coupée**
 
 La queue commune du handler, `LAB_4C070` (L18917-18942), consomme `_new_map`
 (`___setup_display(0, new_map - 2)`, L18924) puis `_bring_up_two`
-(`_two_players(1)`, L18936) : les deux lèvent également.
+(`_two_players(1)`, L18936). La ligne 15 et cette queue sont transcrits
+depuis la **Phase 77** : L13282-13284 pose `_new_map`, L18917-18931 le lit
+et restaure `_seed = _start_seed` (L18922) seulement si `_new_map != 1`.
 
 ## 4.4 quater `_set_options` — ligne 13362 (`$47E56`) — l'écran *SET GAME OPTIONS*
 
@@ -1264,21 +1266,34 @@ def load_level_entry(selected_level):               # L12315‑12363
 ## 5.2 Application des paramètres : `_setup_display` — ligne 380 ($3E5CE)
 
 ```python
-def setup_display(a5_1):                             # L380  $3E5CE
-    if in_conquest != -1:                            # L382  mode conquête
-        seed = start_seed = (_in_conquest & 7) + conq_08_seed   # L388‑392
-        ground_in = conq_05_terrain                  # L395‑399   0..3
-        load_ground(ground_in, 0) ; clear_map()      # L400‑404
-        LAB_516DE = _conquest[0]                     # L407‑408   _stats[1]+0x0C
-        LAB_516E2 = conq_01_speed                    # L410‑411   _stats[1]+0x10  PÉRIODE IA
-        LAB_516E0 = (conq_02_enemypow << 3) | 7      # L415‑418   pouvoirs ennemis
-        LAB_516B2 = (conq_03_yourpow  << 3) | 7      # L420‑423   pouvoirs joueur
-        _game_mode = conq_04_mode                    # L426‑427   bits : gens/villes/haut/marais/eau
-    else:                                            # L429  partie libre
-        start_seed = seed                            # L430
-        if seed != 0 and (newrand() & 1) and a5_1 == -1:   # L431‑437
-            ground_in = (ground_in + 1) % 4          # L438‑441  terrain aléatoire
-            load_ground(ground_in, 0)                # L443‑445
+def setup_display(a, ground):                                  # L380  $3E5CE
+    if in_conquest != -1:                                      # L382‑383
+        seed = start_seed = (in_conquest & 7) + conq_08_seed   # L388‑392
+        ground_in = conq_05_terrain                            # L399  0..3
+        load_ground(ground_in, 0) ; clear_map()                # L400‑404
+        stats[1].threshold  = _conquest[0]                     # L407‑408
+        stats[1].period     = conq_01_speed                    # L410‑411
+        stats[1].power_mask = (conq_02_enemypow << 3) | 7      # L414‑418
+        stats[0].power_mask = (conq_03_yourpow  << 3) | 7      # L419‑423
+        _game_mode          = conq_04_mode                     # L425‑427
+        goto LAB_3E6AE                                         # L428
+    else:                                                      # L429‑458
+        start_seed = seed                                      # L430
+        if seed != 0:                                          # L431‑432
+            seed = newrand()                                   # L433  tirage NON conditionné
+            if (seed & 1) != 0 and ground == -1:               # L434‑437
+                ground_in += 1                                 # L438
+                if ground_in > 3: ground_in = 0                # L439‑441  BLE
+                load_ground(ground_in, 0)                      # L443‑446
+        if ground != ground_in and ground != -1:               # L448‑456
+            load_ground(ground_in, 0)
+        clear_map()                                            # L458
+    if a != 0: goto LAB_3E6CE                                  # L460‑461
+    make_alt() ; make_map(0,0,63,63) ; make_woods_rocks()      # L462‑469
+LAB_3E6CE:                                                     # L471‑487
+    Setscreen ×2 ; draw_map(0,0,63,63) ; copy_screen ×2        # rendu
+    place_first_people()                                       # L495
+    seed += 1                                                  # L496
 ```
 
 * `conq_01_speed` → `_stats[1]+0x10` = **période, en tours, entre deux décisions de
@@ -1287,6 +1302,41 @@ def setup_display(a5_1):                             # L380  $3E5CE
   autorisées), les 8 bits suivants sont les pouvoirs.
 * `_game_mode` bits testés en 12488‑12546 : `bit0…bit4` =
   construire sur gens / villes / uniquement en haut / marais / eau **[?] ordre exact**.
+
+### Les cinq appels, et le rôle des deux arguments
+
+`a` = `(8,A5)` (premier argument), `ground` = `($A,A5)` (second). Les cinq
+appels du listing passent **tous** `a == 0` : `_animate` L511 `(0, 1)`,
+L552 `(0, -1)`, `_two_players` L11815 `(0, -2)`, `_won_conquest` L14432
+`(0, -1)` et `_do_action` code 8 L18928 `(0, _new_map - 2)`. La branche
+`a != 0` (L460‑461), qui sauterait `make_alt` / `make_map` /
+`make_woods_rocks` après `_clear_map`, n'est donc jamais atteinte.
+
+`ground`, lui, **n'est jamais affecté à `_ground_in`** : il ne sert qu'aux
+deux tests des L436 et L448‑451. Il autorise, il ne prescrit pas.
+
+Trois conséquences, toutes vérifiées par `tools/check_setup_display.py`
+(Phase 77) :
+
+* `ground == -1` est la seule valeur qui puisse faire tourner le terrain
+  — et seulement si `seed != 0` **et** si le bit0 du prochain `newrand`
+  vaut 1. `ground == ground_in` (le « RESTART THIS MAP », `_new_map - 2`
+  avec `_new_map = _ground_in + 2`) regénère le même relief.
+* L433 tire **avant** de tester : le `newrand` a lieu même si
+  `ground != -1`, donc il n'est jamais conditionné.
+* L496 (`seed += 1`) est la toute dernière écriture de la routine, après
+  `_place_first_people`.
+
+### Ce que le port en fait (`Game.setup_display`, Phase 77)
+
+Le port ne peut pas découper `Terrain.build` (clear + alt + map + bois en
+une passe) et doit reconstruire `Terrain` + `Renderer` + `Sim` d'un bloc.
+`set_ground(..., conserver_etat=True)` reprend alors, sur la fiche
+neuve, tout ce que la routine n'a jamais touché — `_in_conquest`,
+`_stats`, `_player`, `_serial_off`, `_game_mode`, les coches de GAME
+SETUP — et `Game.start_seed` porte `_start_seed` (L430, L392, L18922).
+`_ground_in` vit dans `Game.ground`, avec `sim.ground_in` en miroir (le
+champ que `_save_game` / `_load_game` écrivent).
 
 ## 5.3 Le rythme de l'IA : `_get_message` + `_move_peeps`
 
@@ -1449,7 +1499,7 @@ Deux appels. Dès l'amorce de la partie (lignes 537‑553), si
     while True:                                      # L542‑547
         in_conquest = show_world()
         if in_conquest != -1: break
-    return_to_game() ; setup_display(-1, 0)           # L549‑553
+    return_to_game() ; setup_display(0, -1)           # L549-553
 ```
 
 Le bouclage sur `-1` est le raccourci numerique : une saisie entierement
@@ -1582,7 +1632,7 @@ def animate():                                       # L502
     if start_of_game == 2:                           # L537
         clr_wsc() ; swap_screens()
         while (in_conquest := show_world()) == -1: pass   # L542‑547
-        return_to_game() ; setup_display(-1, 0)      # L549‑553
+        return_to_game() ; setup_display(0, -1)      # L549-553
     start_of_game = 0                                # L555
 
   LOOP:                                              # L556  LAB_3E7E8
@@ -1812,11 +1862,12 @@ Ce que l'on sait *pour certain* :
   l'intention d'origine ne l'est pas.
 * `_do_action` sous‑commandes 7 (ligne 18607) et 8 (`LAB_4BE12`, ligne 18729) :
   **transcrites** (phases 68 et 69). Les seize codes de la table le sont
-  maintenant. Restent non transcrites des **routines appelées en aval**, qui
-  lèvent `NotImplementedError` et sont nommées dans le message :
+  maintenant, queue de L18917‑18942 comprise depuis la **Phase 77**.
   `_two_players` (L11265), `_show_world` (L12190), `_set_options` (L13362),
-  `_save_load` (L10493), `_ground_in`, et `_write_serial` (L20141) /
-  `_read_serial` (L20080) pour la liaison série.
+  `_save_load` (L10493) et `_setup_display` (L380) sont tous transcrits.
+  Seules routines appelées en aval encore **non** transcrites, qui lèvent
+  `NotImplementedError` et sont nommées dans le message :
+  `_write_serial` (L20141) / `_read_serial` (L20080) pour la liaison série.
 * `_end_game` cas 5 (`LAB_4883E`) : non relu.
 * `peep+0x0C == 0x2A (42)` : utilisé comme marqueur « grande ville » par `_set_town`
   (ligne 5946) et filtré dans `_end_game` (ligne 14128). Le lien exact entre ce champ

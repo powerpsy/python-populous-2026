@@ -143,6 +143,11 @@ def _remplir(texte, n: int = 16) -> str:
 class Game:
     def __init__(self, seed: int = 1, ground: int = 0, zoom: int = 3) -> None:
         self.seed = seed
+        # `_start_seed` (L392, L430, L18922) : la copie de `_seed` que la
+        # ligne 15 de GAME SETUP restaure **avant** de rappeler
+        # `_setup_display`. Le port n'en avait pas (ECART des Phases 71 et
+        # 75) ; il est desormais pose partout ou l'est `_seed`.
+        self.start_seed = seed
         self.ground = ground
         self.zoom = max(1, zoom)
         self.xoff = 24
@@ -296,12 +301,89 @@ class Game:
             sim.place_people(t, i, 0)
 
     # ------------------------------------------------------------ Conquest
+    #: Les champs de `Sim` que `_setup_display` (L380-498) reconstruit, ou
+    #: qui dependent du sol : ils ne sont **pas** repris de la fiche
+    #: precedente par :meth:`set_ground` en mode `conserver_etat`. Tout le
+    #: reste est intact dans le listing.
+    _RECONSTRUIT = frozenset((
+        "map", "terrain", "rng", "land", "peeps", "no_peeps", "seed",
+        "weapons_order",
+    ))
+
+    def _ecritures_palier(self, lv) -> None:
+        """`_setup_display` L407-427 : les quatre ecritures, puis `_game_mode`.
+
+        Colonnes 0 et 1 : une seule tribu geree en conquete, d'ou deux
+        ecritures par champ::
+
+            L407-408  stats[1].threshold  = _conquest[0]     (lv.threshold)
+            L410-411  stats[1].period     = conq_01_speed    (lv.ai_period)
+            L414-418  stats[1].power_mask = (conq_02 << 3) | 7
+            L419-423  stats[0].power_mask = (conq_03 << 3) | 7
+            L425-427  _game_mode          = conq_04_mode     (lv.mode)
+
+        L'asm n'a **aucune** mana de depart par niveau : L1070 pose
+        $18F = 399 pour les deux tribus, et `conq_08` n'est lu que L390,
+        comme graine. L'ancienne formule `start_mana * 100` venait de la
+        colonne 8-9 lue comme deux octets de mana - elle disparait.
+
+        L425-427 est le seul endroit du port qui alimente les cinq options
+        de l'ecran *SET GAME OPTIONS* (Phase 71) : les cinq bits de bas
+        poid sont les cinq paires de choix exclusifs.
+        """
+        sim = self.sim
+        sim.stats[1].threshold = lv.threshold
+        sim.stats[1].period = lv.ai_period
+        sim.stats[1].power_mask = (lv.enemypow << 3) | 7
+        sim.stats[0].power_mask = (lv.yourpow << 3) | 7
+        sim.game_mode = lv.mode
+
+    def _palier(self):
+        """Le palier porte par le tampon ``_conquest`` (L12340-12368).
+
+        Dix octets lus dans ``level.dat`` par :meth:`_lire_level_dat`, que
+        le listing reutilise tel quels a L395-L427 : `conq_01_speed` ...
+        `conq_08_seed` ne sont que des alias d'octets de ce tampon
+        (:class:`populous.conquest.ConquestLevel` les lit un par un).
+        """
+        from populous.conquest import ConquestLevel
+        return ConquestLevel(0, bytes(self._conquest))
+
+    def _construire_palier(self, lv, in_conquest: int) -> None:
+        """`_setup_display` L388-427 : pose le palier de conquete.
+
+        ``in_conquest`` est `_in_conquest` du listing (L388). Le port passe
+        soit `sim.in_conquest` (chemin `_setup_display`), soit
+        `lv.number` (chemin :meth:`load_conquest`, qui part d'un numero
+        saisi et non d'un monde) - les deux ecritures sont distinctes dans
+        le code d'origine comme dans le port.
+        """
+        # L388-392 : `_seed = _start_seed = (in_conquest & 7) + conq_08`.
+        # `conq_08` est un MOT (octets 8-9) - `lv.seed`.
+        self.seed = (in_conquest & 7) + lv.seed
+        self.start_seed = self.seed
+        # L395-399 : le `CMP` de L396 compare `conq_05_terrain` a
+        # `_ground_in` mais son drapeau n'est **jamais lu** - une ecriture
+        # morte, suivie de `_ground_in = conq_05_terrain` (L399).
+        # L400-404 `_load_ground(_ground_in)` puis `_clear_map` ; L458
+        # (meme routine), L462-469 (`a == 0`), L495 (`_place_first_people`)
+        # et L496 (`_seed += 1`) sont rendus par `set_ground` - dont les
+        # quatre ecritures de L407-427 doivent **suivre**, sinon elles
+        # tomberaient sur la fiche qui vient d'etre jetee.
+        self.set_ground(lv.terrain, conserver_etat=True)
+        # `_ground_in` (L399) et le `_seed += 1` de L496, appliques a la
+        # fiche neuve.
+        self.sim.ground_in = self.ground
+        self.sim.rng.seed = (self.seed + 1) & 0xFFFF
+        self._ecritures_palier(lv)
+
     def load_conquest(self, n: int) -> bool:
         """Charge le palier de conquete ``n`` (1..99) et reconstruit la partie.
 
         ``seed = (in_conquest & 7) + graine`` et ``sol = terrain`` (§5.2 de
         ``docs/game_logic.md``). Les quatre ecritures de `_setup_display`
-        (L407-423) y sont posees.
+        (L407-427) y sont posees, par :meth:`_construire_palier` qu'elle
+        partage desormais avec :meth:`setup_display`.
         Renvoie ``False`` si ``level.dat`` est absent.
         """
         levels = load_levels()
@@ -310,37 +392,100 @@ class Game:
         lv = levels[max(0, min(len(levels) - 1, n - 1))]
         self.conquest = lv
         self.conquest_no = n                 # le palier courant, pour l'ecran
-        # L388-391 : `seed = (in_conquest & 7) + conq_08_seed`. `conq_08`
-        # est un MOT (octets 8-9) - `lv.seed`, et non plus `data[3]`.
-        self.seed = (lv.number & 7) + lv.seed
-        # L395-402 : `conq_05_terrain` puis `_load_ground`. Attention a
-        # l'ordre : `set_ground` regenere le relief **et** reinstantie
-        # `self.sim`, donc les quatre ecritures de L407-423 doivent suivre,
-        # sinon elles tomberaient sur la fiche qui vient d'etre jetee.
-        self.set_ground(lv.terrain)
-        sim = self.sim
-        # _setup_display, L407-423 : les ecritures conditionnees au mode
-        # conquest (`_in_conquest != -1`). Colonnes 0 et 1 : tribu 1 seule.
-        #   L407-408  stats[1].threshold  = _conquest[0]
-        #   L410-411  stats[1].period     = conq_01_speed
-        #   L414-418  stats[1].power_mask = (conq_02_enemypow << 3) | 7
-        #   L419-423  stats[0].power_mask = (conq_03_yourpow  << 3) | 7
-        sim.stats[1].threshold = lv.threshold
-        sim.stats[1].period = lv.ai_period
-        sim.stats[1].power_mask = (lv.enemypow << 3) | 7
-        sim.stats[0].power_mask = (lv.yourpow << 3) | 7
-        # L'asm n'a **aucune** mana de depart par niveau : L1070 pose
-        # $18F = 399 pour les deux tribus, et `conq_08` n'est lu que L390,
-        # comme graine. L'ancienne formule `start_mana * 100` venait de la
-        # colonne 8-9 lue comme deux octets de mana - elle disparait.
-        # L425-427 : `_game_mode = conq_04_mode`. C'est le seul endroit du
-        # port qui alimente les cinq options de l'ecran *SET GAME OPTIONS*
-        # (Phase 71) - les cinq bits de bas poid sont les cinq paires de
-        # choix exclusifs. Le port posait 0.
-        sim.game_mode = lv.mode
+        # Le tampon `_conquest` (L12340-12368) doit suivre : c'est lui que
+        # L395-L427 relira si `_setup_display` est rappelle en conquete
+        # (`_animate` L552, `_won_conquest` L14432). `load_levels` et
+        # `_lire_level_dat` lisent les memes `_CANDIDATES`, donc les memes
+        # octets ; l'ecriture partielle de L12365 est retombee sur les dix
+        # octets du niveau, pas sur zere. Un echec (fichier disparu entre
+        # les deux) laisse le tampon tel quel : `lv` fait foi.
+        self._lire_level_dat(max(0, min(len(levels) - 1, n - 1)))
+        self._construire_palier(lv, lv.number)
         return True
 
-# ---------------------------------------- saisie du numero (asm L11942)
+    def setup_display(self, a: int, ground: int) -> None:
+        """``_setup_display(a, ground)`` (L380-498) : (re)construit la carte.
+
+        Cinq appels dans le listing, **tous** avec ``a == 0`` :
+        `_animate` L511 ``(0, 1)``, L552 ``(0, -1)``, `_two_players`
+        L11815 ``(0, -2)``, `_won_conquest` L14432 ``(0, -1)`` et
+        `_do_action` code 8 L18928 ``(0, _new_map - 2)``. Le corps
+        ``a != 0`` (L460-461), qui sauterait `_make_alt` /
+        `_make_map` / `_make_woods_rocks`, n'est donc jamais atteint.
+
+        **Ce que l'argument `ground` peut faire.** Rien d'autre qu'
+        autoriser le changement de sol : la branche partie libre (L429-458)
+        ne l'affecte **jamais** a `_ground_in`. Il ne sert qu'aux tests des
+        L436 (``== -1``) et L448/L451 (``!= -1`` et ``!= _ground_in``).
+
+        * ``ground == -1`` — le « nouveau monde » des lignes 9 et 14 —
+          fait tourner `_ground_in` de +1 (L438-441 : ``BLE``, donc reset a
+          0 des qu'il depasse 3) si et seulement si ``_seed != 0`` (L431)
+          **et** si le bit0 du prochain `_newrand` vaut 1 (L433-435).
+        * ``ground == _ground_in`` — *RESTART THIS MAP* — ne change rien :
+          on regenere le meme relief a partir de ``self.seed``, et
+          ``_start_seed``/``_seed`` ont ete restaures juste avant
+          (L18920-18922).
+        * le ``-2`` de `_two_players` recharge le sol courant (L453-456).
+
+        **RNG : ou est `_seed` ?** `_newrand` (L19129-19135) n'est pas une
+        methode, c'est un LCG sur la variable absolue `_seed` ($00052DD0) :
+        le relief, la simulation et cette routine passent tous par la meme.
+        Dans le port c'est :attr:`sim.rng
+        <populous.sim.Game.rng>` - `populous.rng.Rng` est la copie ligne a
+        ligne de L19129-19135. ``self.seed``, lui, est le mot de graine de
+        la carte que `build_map` relit : **les deux existent**, et c'est la
+        pour cela que :meth:`set_ground` doit pouvoir rendre ``rng``.
+
+        **ECART declare.** Le port separe ce que l'Amiga n'ecrit pas en
+        un seul bloc :
+
+        * `_place_first_people` (L495) devient `_settle_peoples`, appele
+          dans `set_ground` ; il efface les peeps existants, que le listing
+          **laisse** en place sur la nouvelle carte ;
+        * L471-L487 (`Setscreen`, `_draw_map(0,0,63,63)`, deux
+          `_copy_screen`) sont le rendu : le port les fait par
+          :meth:`compose` a chaque image ;
+        * `_seed += 1` (L496) vaut ``vivant + 1`` en partie libre et
+          ``(graine du palier + 1)`` en conquete - les deux cas sont
+          rendus explicitement ci-dessous.
+        """
+        sim = self.sim
+        if a != 0:                                   # L460-461
+            raise NotImplementedError(
+                "_setup_display(a = %d) : la branche `a != 0` (L460-461) "
+                "veut une carte effacee mais sans relief, et "
+                "`Terrain.build` ne produit pas cet etat. Les cinq appels "
+                "du listing passent tous a = 0." % a)
+        if sim.in_conquest != -1:                    # L382-383
+            # Le tampon `_conquest` (L12360) est la source : `_in_conquest`
+            # y pointe via `monde / 25` (L12315-12319).
+            lv = self._palier()
+            self.conquest = lv
+            self._construire_palier(lv, sim.in_conquest)   # L388-427
+            return                                   # L428 -> LAB_3E6AE
+
+        # ---- LAB_3E652, L429-458 : partie libre -------------------------
+        self.start_seed = sim.rng.seed               # L430 `_start_seed = _seed`
+        if sim.rng.seed != 0:                        # L431-432
+            # L433 : `_newrand` avance `_seed` **meme** si `ground != -1` —
+            # le tirage n'est conditionne par rien.
+            tirage = sim.rng.raw() & 1               # L434 `BTST #0,D0`
+            if tirage and ground == -1:              # L436-437
+                self.ground += 1                     # L438
+                if self.ground > 3:                  # L439-440 `BLE`
+                    self.ground = 0                  # L441
+                # L443-446 `_load_ground(_ground_in)` : le sol **apres**
+                # incrementation, rendu par `set_ground` plus bas.
+        # L448-456 : `_load_ground(_ground_in)` si `ground != _ground_in` et
+        # `ground != -1` — c'est toujours le sol **courant**, jamais
+        # l'argument. `set_ground` recharge les tables, donc couvert.
+        vivant = sim.rng.seed                        # L453 (etat post-tirage)
+        self.set_ground(self.ground, conserver_etat=True)   # L458 `_clear_map`
+        self.sim.rng.seed = (vivant + 1) & 0xFFFF    # L496 `_seed += 1`
+        self.sim.ground_in = self.ground             # `_ground_in` (L438-441)
+
+    # ---------------------------------------- saisie du numero (asm L11942)
     # L asm ecrit la boite Â« TRY NUMBER Â» puis boucle sur le clavier :
     #   * `_word_asc` convertit la valeur en decimal dans un tampon ;
     #   * `CMPI.W #$7530` borne la saisie a 30000 ;
@@ -1710,13 +1855,16 @@ class Game:
         6. `_check_cancel` : `0` retrace, `2` restaure la sauvegarde et
            sort, `1` sort (L13316-13358).
 
-        **Six handlers restent non transcrits** parce qu'ils appellent une
-        routine qui ne l'est pas - ils levent `NotImplementedError` en
-        nommant la routine : ligne 2 (`_two_players`, L11265) sur sa branche
-        active, ligne 9 (`_show_world`, L12190), ligne 11 (`_set_options`,
-        L13362), lignes 12 et 13 (`_save_load`, L10493), ligne 15
-        (`_ground_in` + `___setup_display`, L18924). Le port ne peut pas
-        faire semblant : mieux vaut une erreur nommee qu'un ecart muet.
+        **Tous les handlers sont transcrits depuis la Phase 75.** Ce
+        paragraphe annoncait autrefois six levages (`_two_players`,
+        `_show_world`, `_set_options`, `_save_load`, et l'absence de
+        `_ground_in`) : les cinq premiers sont tombes au fil des Phases 68
+        a 75, et la **Phase 77** a transcrit `_setup_display` (L380-498) -
+        la ligne 15 pose donc simplement `_new_map = _ground_in + 2`
+        (L13282-13284), consomme par `_do_action` code 8 (L18917-18931).
+        Seule la liaison serie (`_write_serial` / `_read_serial`) reste hors
+        portee : elle demande un second Amiga, et l'implementation
+        `NotImplementedError` nomme toujours la routine manquante.
         """
         sim = self.sim
         st = sim.stats
@@ -1916,10 +2064,17 @@ class Game:
             sim.new_map = 1                          # L13279, puis LAB_47E4E
             return True
         if i == 15:                                  # LAB_47D7C RESTART
-            raise NotImplementedError(               # L13282-13284
-                "GAME SETUP : la ligne 15 (RESTART THIS MAP) veut "
-                "`_new_map = _ground_in + 2` ; le port ne suit pas "
-                "`_ground_in` (L396-399, L438-441)")
+            # L13282-13284 : `_new_map = _ground_in + 2`, puis `BRA.W
+            # LAB_47E4E` (`_return_to_game`). Le `+2` est la marque «
+            # regenere tel quel » : `_do_action` code 8 en fera
+            # `_setup_display(0, _new_map - 2)` = `_setup_display(0,
+            # _ground_in)`, en passant par L18920-18922 qui restaure
+            # `_seed = _start_seed` puisque `_new_map != 1`.
+            # `self.ground` **est** `_ground_in` du listing : c'est ce que
+            # `set_ground` (L4C12A `_ground_in = $A(A5)`) et
+            # `_setup_display` (L399, L438-441) tiennent a jour.
+            sim.new_map = self.ground + 2            # L13282-13284
+            return True                              # -> LAB_47E4E
         # i == 16                                    # LAB_47D8A SURRENDER
         self.surrender = sim.player                  # L13287, puis LAB_47E4E
         return True
@@ -1972,13 +2127,12 @@ class Game:
         # et l'affiche sous la derniere paire, avec un y de `+ $22` et non
         # `+ $18`.
         #
-        # ECART declare : le listing y met `_start_seed`, le port n'a qu'un
-        # seul mot de graine, `self.seed`. Les deux sont egaux juste apres
-        # `load_conquest` (L430 `_start_seed = _seed`) et ne divergent qu'au
-        # milieu d'une partie, quand `_seed` est regenere (L18922 fait
-        # l'inverse). Le port lit donc `self.seed`.
+        # Le listing y met `_start_seed` (L13451-13458) : c'est le mot que
+        # `_setup_display` pose en tete de branche (L430, L392) et que la
+        # ligne 15 restaure (L18922). Le port le suit desormais - le mot
+        # unique `self.seed` a ete double en Phase 77.
         prefixe, decalage = SET_OPTIONS_PASTICHE
-        buf = prefixe + str(self.seed)
+        buf = prefixe + str(self.start_seed)
         i = 2 * 4 + col                                       # L13459-13463
         x = SET_OPTIONS_X[i] + 0x20                           # L13473-13475
         y = SET_OPTIONS_Y[i] + 0x22                           # L13465-13467
@@ -2533,9 +2687,10 @@ class Game:
         le monde (L12762-12773), que la ligne 9 range dans
         `_in_conquest` (L13238).
 
-        **ECART declare** : `_start_seed` n'existe pas dans le port, qui
-        n'a qu'un seul mot de graine (`self.seed`, meme ecart qu'aux
-        lignes 1836-1840).
+        **Rendu numerique** (L12267-12273) : `_start_seed = _seed = n`,
+        deux ecritures distinctes (L12270 puis L12271) - le port les suit
+        depuis la Phase 77, ou `self.start_seed` a ete cree a cote de
+        `self.seed`.
         """
         from populous.decode import decode
         # `strGENESIS1` (L12782) et `strGENESIS2` (L12786) sont les memes
@@ -2578,7 +2733,10 @@ class Game:
                         self._message, 0x20, 0x2C, 0x10, ok, cancel)
                 n = _atoi(self._message) & 0xFFFF     # L12262-12265
                 if n != 0:                  # L12266
-                    self.seed = n            # L12270-12271 `_start_seed=_seed`
+                    # L12270-12271 : `MOVE.W D0,(_start_seed)` **puis**
+                    # `MOVE.W D0,(_seed)` - deux ecritures, deux variables.
+                    self.start_seed = n
+                    self.seed = n
                     self._message = ""       # L12272
                     return WORLD_GRAINE      # L12273 `MOVEQ #-1,D0`
                 if self._message:            # L12278-12279
@@ -3235,7 +3393,31 @@ class Game:
             self.sim.stats[k].t1a = self.terrain.t1a[k]
             self.sim.stats[k].t18 = self.terrain.t18[k]
 
-    def set_ground(self, g: int) -> None:
+    def set_ground(self, g: int, conserver_etat: bool = False) -> None:
+        """Regenere le relief ``g`` - et, dans le port, re-instantie ``Sim``.
+
+        **ECART de port** : l'Amiga n'a pas besoin de recréer quoi que ce
+        soit - `_load_ground` (L16468) re-chargera les tables de sol,
+        `_clear_map` (L1088) effacera les cases, `_make_alt` / `_make_map`
+        / `_make_woods_rocks` (L462-469) regenereront le relief. Le port,
+        lui, doit construire `Terrain` + `Renderer` + `Sim` ensemble, car
+        `Sim` porte `land` (les tables du sol) et `map` (les cases). Il
+        jette donc la fiche de simulation **entiere** a chaque changement
+        de carte.
+
+        `conserver_etat=True` remet a plat, sur la fiche neuve, tout ce que
+        `_setup_display` (L380-498) n'a **jamais** touche : le listing ne
+        regenere que la carte, il laisse `_in_conquest`, `_player`,
+        `_serial_off`, `_stats`, `_game_mode`, `_new_map`, `_bring_up_two`,
+        `_mana` et les coches de *GAME SETUP* intacts. Sans cette reprise,
+        la ligne 9 de *GAME SETUP* perdrait L12762-12771 ecrits une
+        seconde plus tot, et chaque nouvelle carte remettrait la partie
+        a zero.
+
+        Les champs reconstruits (:data:`_RECONSTRUIT`) sont ceux que la
+        routine d'origine ecrit elle-meme ou qui dependent du sol.
+        """
+        ancien = self.sim
         self.ground = g
         self.terrain, _ = build_map(self.seed, g)
         self.ren = Renderer(g)
@@ -3243,11 +3425,16 @@ class Game:
         self.sim = Sim(self.seed + 1, load_land(g),
                        map=self.terrain.game_map())
         self.sim.terrain = self.terrain
+        if conserver_etat:
+            for nom, valeur in vars(ancien).items():
+                if nom not in self._RECONSTRUIT:
+                    setattr(self.sim, nom, valeur)
         self._sync_level_stats()
         self._settle_peoples()
 
     def set_seed(self, s: int) -> None:
         self.seed = s
+        self.start_seed = s
         self.set_ground(self.ground)
 
     def run(self) -> None:
