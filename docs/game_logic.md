@@ -1440,6 +1440,37 @@ def start_game():                                   # L13966
     Setscreen(back_scr, back_scr, -1)               # L14004‑14007
 ```
 
+## 6.1.1 `_start_of_game` — mot de configuration initial (L3E2A2, L4860A)
+
+`_start_of_game` est initialise au tout debut du programme (`_main`,
+L3E28C-3E2B6) :
+
+```asm
+CMPI.W  #$0002,(8,A5)          ; argc == 2 ?
+BNE.S   LAB_3E2A8
+MOVEA.L ($A,A5),A0             ; argv
+MOVE.L  (4,A0),-(A7)           ; argv[1]
+JSR     (___atoi,A4)           ; atoi(argv[1])
+MOVE.W  D0,(_start_of_game,A4)
+...
+LAB_3E2A8:
+MOVE.L  #$00000042,(-6,A5)     ; $42 = adresse du packet de demarrage Amiga
+MOVEA.L (-6,A5),A0
+MOVE.W  (2,A0),(_start_of_game,A4)   ; champ 2 du packet OS
+```
+
+Trois valeurs ont un sens dans le jeu :
+
+| Valeur | Nom | Effet |
+|---|---|---|
+| **0** (defaut) | Partie normale | `_clear_map` pose `_set_mode_icons(1,6)` et `_set_tend_icons(3,4)` (L1026-1035) |
+| **2** | Choix monde direct | `_animate` L3E7B0-3E7E3 : `___clr_wsc`, `___swap_screens`, boucle `_show_world` jusqu'a choix, puis `_return_to_game` + `_setup_display(0,-1)` |
+| **3** | Tutoriel/demo | `_start_game` L4860A-48660 : copie `_tutorial` (46 octets) sur `_stats`, `LAB_5172E` sur `strABC`, `_pause=1`, `_seed=_start_seed=0x69BC`, `_game_mode=1`, `toggle_icon(1,3,0x17E4)` |
+
+`_place_first_people` (L7656, L7758) teste aussi `_start_of_game == 3` pour utiliser les colonnes `conq_06/07` de `level.dat` comme en conquete.
+
+Le port expose `Game.start_of_game` (defaut 0), definissable par le 6e argument CLI.
+
 ## 6.2 `_end_game` — ligne 14019 ($48698)
 
 Table de 7 entrées (lignes 14284‑14290, dispatch borné à 7 en 14291‑14297) :

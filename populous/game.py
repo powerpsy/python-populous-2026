@@ -148,6 +148,9 @@ class Game:
         # `_setup_display`. Le port n'en avait pas (ECART des Phases 71 et
         # 75) ; il est desormais pose partout ou l'est `_seed`.
         self.start_seed = seed
+        # `_start_of_game` (L3E2A2, L3E2B4, L3E7B0, L3EC9A, L439C6,
+        # L43AD2, L4860A) : 0=normal, 2=choix monde direct, 3=tutoriel/demo.
+        self.start_of_game = 0
         self.ground = ground
         self.zoom = max(1, zoom)
         self.xoff = 24
@@ -228,6 +231,13 @@ class Game:
         self.sound = SoundEngine()
         self.music = MusicEngine(self.sound)
         self.effect = 0
+
+        # _start_of_game == 3 : mode tutoriel/demo (L4860A)
+        # _start_game copie _tutorial (46 octets) sur _stats, pose _seed=0x69bc,
+        # _start_seed=0x69bc, _game_mode=_tutorial_game_mode=1, _pause=1.
+        if self.start_of_game == 3:
+            self._init_tutorial_mode()
+
         self._settle_peoples()
         # qaz.pic est le fond permanent de l'ecran (_clr_wsc le recopie a chaque
         # image) ; la mini-carte y est ecrite en place, comme dans l'original.
@@ -279,9 +289,9 @@ class Game:
         porte sur `stats[0]` contre `stats[1]` (`LAB_516B0` / `LAB_516DE`,
         les deux `+0x0C` de `_stats`).
 
-        * **conquête** : la colonne de `level.dat` elle-meme. Le listing
-          y joint aussi le mode demo (`_start_of_game == 3`, L7656 /
-          L7758) — le port n'a pas encore `_start_of_game` ;
+        * **conquête** (ou **mode tutoriel** `_start_of_game == 3`,
+          L7656 / L7758) : la colonne de `level.dat` elle-meme
+          (`conq_06_yourpop` / `conq_07_enemypop`) ;
         * **deux joueurs** (`serial_off == 0`) : exactement un ;
         * **sinon** : ``2 * (seuil > 4) + 1``, donc 3 quand la tribu est
           avide (`threshold > 4`), 1 sinon. La tribu Amiga (`.data` = 5)
@@ -289,7 +299,7 @@ class Game:
           1) avec un.
         """
         sim = self.sim
-        if sim.in_conquest != -1:                   # L7654-7655 / L7756-7757
+        if sim.in_conquest != -1 or self.start_of_game == 3:  # L7654-7656 / L7756-7758
             return self._conquest[6 if tribu == 0 else 7]   # L7658 / L7760
         if sim.serial_off == 0:                     # L7664-7666 / L7766-7768
             return 1
@@ -713,6 +723,14 @@ class Game:
         self._audio()
         self.compose()
 
+    def _return_to_game(self) -> None:
+        """`___return_to_game` (L13954, L13960, L18938) : retour d'une boite modale.
+
+        L'asm y met `left_button = 2` (bouton stable/relache) pour eviter le
+        rebond au retour dans la boucle principale.
+        """
+        self.left_button = 2
+
     # ------------------------------------------------- fin de partie (L4323)
     def _check_end(self) -> None:
         """Le test de fin de partie — asm L4323-4352, appele chaque tour.
@@ -873,7 +891,15 @@ class Game:
         Les quatre mots empiles avant chaque appel sont `0, 0, $3F, $3F`
         (le dernier empile est celui de l'offset 8), donc `(x0, y0, x1,
         y1)` — bien l'integralite de la carte.
+
+        **_start_of_game == 0** (L1026-1035) : avant le nettoyage,
+        `_set_mode_icons(1, 6)` et `_set_tend_icons(3, 4)`.
         """
+        # L1026-1035 : _start_of_game == 0 -> pose icones mode/tend
+        if self.start_of_game == 0:
+            self.set_mode_icons(1, 6)
+            self.set_tend_icons(3, 4)
+
         sim = self.sim
         terr = self.terrain
         alt, who = terr.alt, terr.who
@@ -3469,6 +3495,76 @@ class Game:
         self.colours = map_colours(ren.header)
         return True
 
+    def _init_tutorial_mode(self) -> None:
+        """Initialise le mode tutoriel/demo (`_start_of_game == 3`).
+
+        `_start_game` (L4860A-48660) :
+        - Copie `_tutorial` (46 octets = 2 x 23 = deux fiches `_stats`) sur `_stats`
+        - Copie `LAB_5172E` (46 octets) sur `strABC` (zone texte)
+        - `_pause = 1` (L48636)
+        - `_seed = _start_seed = 0x69bc` (L48654, L4865A)
+        - `_game_mode = _tutorial_game_mode = 1` (L48660)
+        - Bascule icone (1,3) masque 0x17e4 (L4863C-4864C)
+
+        Le port recree les fiches `Tribe` avec les valeurs du tutoriel.
+        """
+        sim = self.sim
+        # _tutorial (L24233-24248) -> deux fiches Tribe (23 octets chacune)
+        # Valeurs decodees depuis le listing :
+        # Tribu 0 : act=0x61, p1=0x62, p2=0x63, can_build=0, queued=1,
+        #           threshold=1, period=10, power_mask=0x003F, tend=0,
+        #           castles=0, towns=0, colour=5, ...
+        # Tribu 1 : act=0x61, p1=0x62, p2=0x63, can_build=0, queued=1,
+        #           threshold=5, period=10, power_mask=0x000A, tend=0,
+        #           castles=0, towns=0, colour=1, ...
+        t0, t1 = sim.stats[0], sim.stats[1]
+        # Champs communs initiaux (act/p1/p2 = 'abc')
+        for t in (t0, t1):
+            t.act = 0x61
+            t.p1 = 0x62
+            t.p2 = 0x63
+            t.can_build = 0
+            t.queued = 1
+            t.tend = 0
+            t.castles = 0
+            t.towns = 0
+            t.t12 = t.t1a = t.t18 = t.t1c = t.t1e = 0
+            t.strongest = -1
+            t.p26 = -1
+            t.p2a = -1
+        # Tribu 0 (humaine dans le tutoriel)
+        t0.threshold = 1
+        t0.period = 10
+        t0.power_mask = 0x003F
+        t0.colour = 5
+        # Tribu 1 (Amiga dans le tutoriel)
+        t1.threshold = 5
+        t1.period = 10
+        t1.power_mask = 0x000A
+        t1.colour = 1
+
+        # _seed = _start_seed = 0x69bc (L48654, L4865A)
+        self.seed = 0x69BC
+        self.start_seed = 0x69BC
+        # Re-seed le RNG de la simulation
+        sim.rng.seed = (self.seed + 1) & 0xFFFF
+
+        # _game_mode = 1 (L48660 : _tutorial_game_mode)
+        sim.game_mode = 1
+
+        # _pause = 1 (L48636)
+        sim.pause = 1
+
+        # Re-regenerer la carte avec la graine tutelle
+        # Note: build_map utilise self.seed, qui est maintenant 0x69BC
+        self.terrain, _ = build_map(self.seed, self.ground)
+        self.ren = Renderer(self.ground)
+        self.colours = map_colours(self.ren.header)
+        sim.terrain = self.terrain
+        sim.land = load_land(self.ground)
+        sim.map = self.terrain.game_map()
+        self._sync_level_stats()
+
     def _sync_level_stats(self) -> None:
         """``_clear_map`` L1088-1121 : `t1a` / `t18` recopies dans `_stats`.
 
@@ -3542,6 +3638,25 @@ class Game:
            compteur entier, afin que `TURNS_PER_FRAME` accepte n'importe
            quelle valeur (1.0, 3.0, 7.5...) sans derivation cumulative.
         """
+        # _start_of_game == 2 : choix de monde direct (L3E7B0-3E7E3)
+        # L'original : clear _start_of_game, ___clr_wsc, ___swap_screens,
+        # boucle ___show_world jusqu'a retour != -1, puis ___return_to_game,
+        # puis _setup_display(0, -1).
+        if self.start_of_game == 2:
+            self.start_of_game = 0
+            self.frame.blit(self.backdrop, (0, 0))  # ___clr_wsc equivalent
+            # ___swap_screens : la boucle modale gerera son propre affichage
+            while True:
+                monde = self.show_world()  # remplit self._conquest, retourne monde
+                if monde != -1:
+                    self.sim.in_conquest = monde
+                    break
+            self._return_to_game()
+            self.setup_display(0, -1)
+
+        # L3E7E4 : _start_of_game efface dans tous les cas
+        self.start_of_game = 0
+
         par_image = max(0.0, TURNS_PER_FRAME)
         tps = max(0.0, config.TURNS_PER_SECOND)
         # images par seconde ; 0.0 = sans plafond
@@ -3571,13 +3686,16 @@ def main(argv: list[str]) -> None:
 
     .. code-block:: none
 
-        python -m populous.game [graine] [sol] [zoom] [tours_par_image] [tours/s]
+        python -m populous.game [graine] [sol] [zoom] [tours_par_image] [tours/s] [start_of_game]
 
     Les deux derniers arguments sont les leviers de cadence. Par defaut :
     ``tours_par_image = 1.0`` (un tour par image, la regle du listing,
     L681) et ``tours/s = 30.0``. ``0.0`` en tours/s enleve tout plafond,
     ``50.0`` rejoue le plafond VBlank de la boucle d'origine. Voyez
     :data:`populous.config.TURNS_PER_SECOND` pour la preuve au listing.
+
+    ``start_of_game`` (entier 0/2/3, defaut 0) : 0 = normal, 2 = choix de
+    monde direct (L3E7B0), 3 = tutoriel/demo (L4860A).
     """
     seed = int(argv[0]) if len(argv) > 0 else DEFAULT_SEED
     ground = int(argv[1]) if len(argv) > 1 else DEFAULT_GROUND
@@ -3586,7 +3704,10 @@ def main(argv: list[str]) -> None:
         config.TURNS_PER_FRAME = float(argv[3])
     if len(argv) > 4:
         config.TURNS_PER_SECOND = float(argv[4])
-    Game(seed, ground, zoom).run()
+    start_of_game = int(argv[5]) if len(argv) > 5 else 0
+    g = Game(seed, ground, zoom)
+    g.start_of_game = start_of_game
+    g.run()
 
 
 if __name__ == "__main__":

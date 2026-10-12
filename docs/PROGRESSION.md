@@ -6581,6 +6581,47 @@ L408, L12070) et appelle desormais `_place_first_people`. Le reset de
 
 **Reste a ce jour** : le second appel de `_show_world` depuis `_animate`
 (L542-547, `_start_of_game`), et la liaison serie (codes 2 et 8).
+### Phase 79 - `_start_of_game` : mode tutoriel et choix monde direct
+
+`_start_of_game` (L3E2A2, L3E2B4, L3E7B0, L3EC9A, L439C6, L43AD2,
+L4860A) est un mot initialise au demarrage depuis la ligne de commande
+Amiga (`argc == 2 ? atoi(argv[1])` : champ OS `($2,A0)`). Trois valeurs
+significatives :
+
+* **0 (defaut)** : partie normale. `_clear_map` (L1026-1035) pose
+  `_set_mode_icons(1, 6)` et `_set_tend_icons(3, 4)` avant d'effacer.
+* **2** : choix de monde direct. `_animate` (L3E7B0-3E7E3) efface l'ecran,
+  echange les buffers, boucle sur `_show_world` jusqu'a choix valide,
+  puis `_return_to_game` + `_setup_display(0, -1)`.
+* **3** : mode tutoriel/demo. `_start_game` (L4860A-48660) copie `_tutorial`
+  (46 octets = 2 x 23 = deux fiches `_stats`) sur `_stats`, copie
+  `LAB_5172E` sur `strABC`, pose `_pause = 1`, `_seed = _start_seed = 0x69BC`,
+  `_game_mode = 1`, bascule icone (1,3) masque 0x17E4. `_place_first_people`
+  utilise les colonnes `conq_06/07` de `level.dat` pour le nombre de
+  villageois (L439C6, L43AD2).
+
+Le port ajoute `Game.start_of_game` (defaut 0, modifiable via 6e
+argument CLI `python -m populous.game ... [start_of_game]`) et transcrit
+les trois branches.
+
+**ECART declares** :
+* `LAB_5172E` -> `strABC` (46 octets de texte) n'est pas modelle ; le
+  port n'a pas de zone `strABC` equivalente.
+* L'icone (1,3) masque 0x17E4 (`___toggle_icon`) n'est pas rejouee ;
+  l'ecran tutoriel n'a pas d'affichage dedie dans le port.
+
+#### Verification
+
+| controle | resultats |
+|---|---|
+| `tools/autopilot.py` | **84/84** |
+| `tools/check_*.py` | **31/31** |
+| `check_render` | **OK** (9 ecarts reels inchanges) |
+| `check_funny` | **OK** |
+| `smoke_sim` | 3000 tours OK |
+| `stress 2000 8` | **8/8** |
+
+**Reste a ce jour** : la liaison serie (codes 2 et 8).
 ### Reste a faire
 
 * **Conquest** : les 99 paliers de `level.dat` sont decodes et appliques, la
