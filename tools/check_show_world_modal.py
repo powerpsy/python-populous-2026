@@ -104,15 +104,21 @@ def main():
     # ---- 0. la geometrie des deux boutons --------------------------------
     # `_cadres_boutons` prend la longueur des deux textes : ici
     # "START GAME" (10) et "NEW GAME" (8), et non "OK"/"CANCEL".
+    #
+    # Phase 82 : `D5` n'est pas divise par 16 (L9904-9910), donc avec
+    # WORLD_BOXE = ($10, $18, $120, $A0) la ligne des boutons tombe a
+    # `$18 + $A0 - $10 = $A8 = 168`, et non plus a `($18 >> 4) + $A0 - $10
+    # = 145`. La boite occupe desormais les lignes 24 a 183, soit les 160
+    # lignes de `hauteur` a l'endroit meme ou l'asm les appelle.
     ok, cancel = g._cadres_boutons(*WORLD_BOXE, WORLD_OK_TEXTE,
                                    WORLD_CANCEL_TEXTE)
     check("L12193-12200 : les deux boutons portent START GAME (10) et "
           "NEW GAME (8), donc deux largeurs differentes",
-          ok == (32, 145, 32 + 14 * 8) and cancel == (192, 145, 192 + 12 * 8),
+          ok == (32, 168, 32 + 14 * 8) and cancel == (192, 168, 192 + 12 * 8),
           "ok=%s cancel=%s" % (str(ok), str(cancel)))
     check("L9991-10246 : le bouton NEW GAME est a droite de START GAME, "
-          "tous deux sur la ligne y = 145",
-          cancel[0] > ok[0] and ok[1] == cancel[1] == 145,
+          "tous deux sur la ligne y = 168",
+          cancel[0] > ok[0] and ok[1] == cancel[1] == 168,
           "ok=%s cancel=%s" % (str(ok), str(cancel)))
 
     # ---- 1. les espions, poses une seule fois ----------------------------

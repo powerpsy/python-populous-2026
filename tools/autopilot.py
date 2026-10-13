@@ -623,9 +623,13 @@ def main() -> int:
     g.compose()
     avant = sum(1 for y in range(200) for x in range(320)
                 if g.frame.get_at((x, y))[:3] != g.backdrop.get_at((x, y))[:3])
-    # _requester : le cadre est fait d icones, le titre et le message sont
+    # `_requester` : le cadre est fait d icones, le titre et le message sont
     # ecrits avec la police du jeu. On utilise les VRAIS arguments de l asm :
     # _requester(_d_screen, 0x30, 0x46, 0xE4, 0x40, titre, message)
+    #
+    # Phase 82 : `D5` n'est PAS divise par 16 (L9904-9910 : seule `x` l'est),
+    # donc le bandeau haut tombe a la ligne `y = 0x46 = 70`, et non a
+    # `0x46 >> 4 = 4`. Le titre suit a `70 + 16 + 2 = 88`.
     g.compose()
     avant = sum(1 for y in range(200) for x in range(320)
                 if g.frame.get_at((x, y))[:3] != g.backdrop.get_at((x, y))[:3])
@@ -634,17 +638,17 @@ def main() -> int:
                 if g.frame.get_at((x, y))[:3] != g.backdrop.get_at((x, y))[:3])
     results.append(ok("la boite de dialogue est tracee", apres > avant,
                       "%d pixels de plus qu avant" % (apres - avant)))
-    # le titre est ecrit sous le bandeau, donc a y = 4 + 16 + 3 = 23
-    titre = sum(1 for y in range(23, 31) for x in range(320)
+    # le titre est ecrit sous le bandeau, donc a y = 0x46 + 16 + 2 = 88
+    titre = sum(1 for y in range(88, 96) for x in range(320)
                 if g.frame.get_at((x, y))[:3] != g.backdrop.get_at((x, y))[:3])
-    results.append(ok("le titre est ecrit sous le cadre (y+16+3)", titre > 0,
-                      "%d pixels entre y=23 et y=31" % titre))
-    # l icone 0x0C pose en haut a gauche doit avoir change le pixel (48, 4)
-    results.append(ok("l icone 0x0C est posee en (48, 4)",
-                      g.frame.get_at((48, 4))[:3]
-                      != g.backdrop.get_at((48, 4))[:3],
-                      "pixel (48,4) = %s"
-                      % str(g.frame.get_at((48, 4))[:3])))
+    results.append(ok("le titre est ecrit sous le bandeau (y+16+2)", titre > 0,
+                      "%d pixels entre y=88 et y=95" % titre))
+    # l icone 0x0C pose en haut a gauche doit avoir change le pixel (48, 70)
+    results.append(ok("l icone 0x0C est posee en (48, 70)",
+                      g.frame.get_at((48, 70))[:3]
+                      != g.backdrop.get_at((48, 70))[:3],
+                      "pixel (48,70) = %s"
+                      % str(g.frame.get_at((48, 70))[:3])))
     shot(g, "13_requester")
 
 

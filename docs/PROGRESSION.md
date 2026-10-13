@@ -313,6 +313,11 @@ par une — 0x0C a gauche, 0x0D jusqu'a n, 0x0E ; 0x0F et 0x10 en bas ; 0x12 et
 0x14 sur les cotes ; 0x13 et 0x17 aux coins — puis le titre a `y + 3` et le
 message centre dans la largeur.
 
+> **Corrige en Phase 82.** `D5` n'est **pas** divise : L9904-9910 ne
+> decalent que `D4` et `largeur`, et `D5` va tel quel dans `_draw_icon`,
+> qui veut un `y` en lignes. Toutes les boites etaient tracees seize fois
+> trop haut. Voir la section Phase 82.
+
 **Le piege des unites.** `_draw_icon` recoit un `x` en unites de 16 px mais un
 `y` **en lignes** (`y * 0x28`). C'est asymetrique, et c'est ce qui faisait que
 le premier essai de `_requester` produisait un cadre ecrase en hauteur.
@@ -340,6 +345,8 @@ avec `D4 = x >> 4`, `largeur >> 4` (colonnes), `D5 = y >> 4` (premiere ligne).
 Le cadre est fait d'icones : 0x0C / 0x0D… / 0x0E en haut, 0x12 et 0x13 sur les
 cotes, 0x0F / 0x10… en bas ; le titre est ecrit 3 lignes sous le bandeau et le
 message 5 lignes plus bas, centre sur `(colonnes * 16 - strlen) / 2`.
+
+> **Corrige en Phase 82** : `D5 = y`, sans decalage (voir plus haut).
 
 ### Bug important : `self.frame` sans canal alpha
 
@@ -3807,8 +3814,9 @@ dans `tools/check_dispatch.py`.
      il produit bien un tri croissant.
 
   Renvoie 1. Le chemin d'erreur LAB_4A426 appelle `_do_message`
-  (sous-systeme de messages, non transcrit) : `load_ground` **leve** plutot
-  que de renvoyer silencieusement 0.
+  (sous-systeme de messages, **transcrit en Phase 82**) : `load_ground(n,
+  msg)` boucle sur la boite et ne rend 0 que sur CANCEL — voir la section
+  Phase 82.
 * `powers.py` : `do_action` code 13. Point d'appel a lire attentivement :
   `MOVE.W #$0001,-(A7)` puis `MOVE.W ($A,A5),-(A7)`, donc **`n` = `$A(A5)`
   = `arg2`** (le sol), et 1 est l'identifiant de message — le sol n'est
@@ -6744,6 +6752,109 @@ transparence, les deux positions, la cadence de 4 vblanks, le triangle
 
 **Reste a ce jour** : la liaison serie (codes 2 et 8), et le sous-systeme
 `_do_message` (L11098) — la seule `NotImplementedError` qui reste au port.
+
+### Phase 82 - `_do_message` : la boite « INSERT THE ORIGINAL POPULOUS DISK »
+
+Le sous-systeme de dialogue que Phase 81 laissait ouvert. `populous/message.py`
+nouveau, trois appels recables dans `game.py`.
+
+**Ce que le listing contient.** `_do_message(texte, annuler)` (L11098-11139)
+pose une boite sur `_d_screen`, ecrit le texte, attend un clic, et rend la
+main. Les deux autres routines du bloc — `_get_a_message` (L11143) et
+`_serial_message` (L11185) — n'ont pour appelants que les handlers de la
+liaison serie (L18434, L17759 a L18767) : hors portee, comme le reste du
+port serie.
+
+**`annuler` decide si CANCEL existe.** A 0, `(-4,A5)` est mis a zero
+(L11105-11106), `_check_cancel(_end_ok, NULL)` ne peut rendre que 0 ou 1, et
+la boucle est **infinie**. C'est le comportement voulu : le listing boucle
+jusqu'a ce que le disque soit insere. A 1, CANCEL rend 2 et `_load_ground`
+sort en echec.
+
+**Les trois appels, tous avec `strInsertDisk`** (L21255-21256) :
+
+| site | appel | annuler |
+| --- | --- | --- |
+| `_save_load`, `level.dat` illisible | L10943-10950 | 0 |
+| `_show_world`, entree absente | L12370-12376 | 0 |
+| `_load_ground`, `Open("LANDn")` nul | L16611-16622 | `($A,A5)` |
+
+`_load_ground` est le seul qui peut recevoir 1 : L18985 le passe. Les trois
+chemins sont recables :
+
+* `_verifier_level_dat` (L10931-10950) boucle maintenant sur `do_message`
+  tant que `level.dat` est introuvable — la boucle du listing, en entier ;
+* `show_world` appelle `do_message` a la place de son `print` ;
+* `load_ground(n, msg)` prend le second argument du listing et boucle :
+  CANCEL rend `False`, sinon on retente `Open`. `(-4,A5)` vaut 0 dans ce
+  chemin, donc `TST.L (-4,A5) ; BEQ LAB_4A425` (L16618-16619) retente
+  **toujours**. La `NotImplementedError` qui restait au port est levee.
+
+**Un seul ecart** : `do_message` rend 0 si la fenetre est fermee. La boucle
+infinie deviendrait un gel sur un poste sans disque, et l'Amiga n'a pas de
+croix pour fermer. C'est le seul emprunt au monde reel.
+
+**Correction de Phase 82 sur `_requester`** — c'est la decouverte importante,
+et elle n'etait visible qu'a l'oeil.
+
+`_requester` divise `x` et `largeur` par 16 (`ASR.W #4,D4` L9907,
+L9908-9910) mais **pas `y`** : `MOVE.W ($E,A5),D5` (L9905) passe `D5` tel
+quel a `_draw_icon`, qui prend `y` en **lignes** (`MULU #$0028`, L19191).
+Le port faisait `d5 = y >> 4` dans `requester` **et** dans
+`_cadres_boutons` : toutes les boites du jeu etaient tracees seize fois trop
+haut, et leurs boutons avec.
+
+Le test est sous les yeux dans `_do_message` : la boite est posee en
+`y = $3C = 60` avec `hauteur = $30`, donc les lignes 60 a 107 ; le texte
+tombe en `y = $48 = 72` (L11119). **Il n'est dans la boite que si `D5` n'est
+pas divise.** Un controle qui se contente de verifier l'existence du cadre
+l'aurait rate — c'est le rendu qui l'a fait apparaitre.
+
+Deux points encore, corriges en meme temps :
+
+* le port ne posait, sur les cotes, que 0x12 a gauche et 0x13 a droite,
+  laissant le milieu vide — alors que L9961-9970 remplit aussi les colonnes
+  interieures avec **0x14**. Les cotes sont desormais completes ;
+* le port comptait les rangees laterales avec `haut = hauteur >> 4`, la ou
+  le listing boucle sur ``D6 < D5 + hauteur - $10`` (L9986-9990). Les deux
+  se confondaient quand `D5` etait divise ; la boucle du listing est
+  desormais transcrite telle quelle.
+
+Consequences immediates :
+
+* `WORLD_BOXE = ($10, $18, $120, $A0)` occupe desormais les lignes 24 a 183,
+  soit les 160 lignes de `hauteur` a l'endroit ou l'asm les appelle ; la
+  ligne des boutons passe de 145 a `$18 + $A0 - $10 = 168` ;
+* la boite « TRY NUMBER » (`($30, $46, $E4, $40)`) commence a la ligne 70
+  et non 4. Son titre, que le port ecrit en `d5 + 16 + 2`, tombe a la
+  ligne **88** — exactement `$58`, l'ordonnee de `_text` que l'appelant
+  trace a L11937-11940. Le `+3` du port faisait 23 pour 88 ; le `+2` est
+  le listing, et c'est la deuxieme confirmation.
+* L'abscisse du titre, `(d4 + 1) * 2`, vaut `$40` pour `x = $30` — c'est
+  `end_ok.x0` (L10006), l'abscisse de L11937.
+
+Les deux controles qui figeaient les anciennes valeurs
+(`autopilot` « icone 0x0C en (48, 4) » et `check_show_world_modal`
+« ligne y = 145 ») sont corriges avec leurs commentaires : ils mesuraient
+le bug, pas le listing.
+
+**Verification** (Phase 82) :
+
+| commande | resultat |
+| --- | --- |
+| `autopilot 59 0 3` | **84/84** |
+| les 33 `check_*.py` | **0 echec** |
+| `check_render` | OK |
+| `check_assets` | OK |
+| `check_funny` | OK |
+| `smoke_sim` (3000 tours) | OK |
+| `stress 2000 8` | **8/8** |
+
+**Reste a ce jour** : la liaison serie (codes 2 et 8), et l'etape A de
+l'ecran de fin — le boite `_requester(d_screen, $10, $10, $120, $A6, (-60),
+NULL)` de `_end_game` (L14356-14363) et ses sept lignes tirees de
+`_end_text` / `LAB_5226E` (L24790-24793). `draw_end_screen` garde pour
+l'instant quatre boites approximatives en lieu et place.
 
 ## Note honnête sur l'équilibrage
 

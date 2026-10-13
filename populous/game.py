@@ -1401,8 +1401,16 @@ class Game:
         ``_options`` (L13636-13640) et ``(d_screen, $30, $46, $E4, $40,
         ...)`` pour la saisie du niveau (L11927).
 
-        avec ``D4 = x >> 4``, ``D1 = largeur >> 4`` (nombre de colonnes) et
-        ``D5 = y >> 4`` (premiere ligne).
+        **Unites** (L9904-9910) : ``D4 = x >> 4`` et
+        ``colonnes = largeur >> 4`` sont seuls divises — ``_draw_icon``
+        prend ``x`` en colonnes de 16 px (``LSL.W #1``, L19192) mais ``y``
+        en **lignes** (``MULU #$0028``, L19191), et ``_requester`` passe
+        ``D5`` **tel quel** : la boite commence a la ligne ``y``, pas a la
+        ligne ``y >> 4``. Correction de Phase 82 ; la consequence se voit
+        a l'oeil : ``_do_message`` trace sa boite en ``y = $3C = 60`` et
+        son texte en ``y = $48 = 72`` — le texte tombe **dans** la boite
+        (lignes 72 a 87, la boite faisant 60 a 107) seulement si ``D5``
+        n'est pas divise.
 
         Le cadre est fait d'icones de 16x16 posees une par une :
 
@@ -1412,22 +1420,24 @@ class Game:
           ``0x10`` tant que ``D6 < D5 + hauteur - 0x10`` ; a chaque tour on
           pose 0x12 a gauche, 0x14 sur les colonnes centrales et 0x13 a
           droite ;
-        * bandeau bas (L9991-9996) : 0x0F puis 0x10 ;
-        * titre (L10045-10057) : `_text` trois lignes plus bas ;
-        * message (L10059-10126) : `_text` cinq lignes plus bas, centre sur
-          ``(colonnes * 16 - strlen) / 2``.
+        * bandeau bas (L9991-9996) : 0x0F, puis 0x10 sur le reste de la
+          ligne — sauf la derniere colonne, prise par l'angle 0x11 du
+          bouton (L10247-10254). Ce port ne pose pas les boutons
+          (ECART Phase 67) et laisse donc l'angle bas-droit absent.
+
+        Le titre et le message sont, eux, des ajouts du port : le listing
+        ne sait tracer que les etiquettes ``OK`` / ``CANCEL`` (L10045-10057
+        et L10140-10152), et c'est l'**appelant** qui trace ses propres
+        lignes apres le retour de ``_requester`` (L11935-11940 pour
+        *TRY NUMBER*).
 
         Comme `_draw_icon` ecrase les 4 plans, l'interieur de la boite est
         **noir** — c'est bien ce que fait l'original.
         """
         r, d = self.ren, self.frame
-        d4 = x >> 4                      # colonne de depart, en unites de 16 px
-        d5 = y >> 4                      # premiere ligne, en LIGNES
-        n = max(2, largeur >> 4)         # nombre de colonnes
-        # L9949-9960 : `D6` va de `D5+$10` a `D5+hauteur-$10` par pas de
-        # `$10`, soit `hauteur/16 - 1` rangees. Le port prenait `hauteur`
-        # brut, soit 16x trop de rangees.
-        haut = max(2, hauteur >> 4)     # hauteur, en LIGNES (L9953)
+        d4 = x >> 4                      # colonne de depart (L9907)
+        d5 = y                           # premiere ligne, EN LIGNES (L9905)
+        n = max(2, largeur >> 4)         # nombre de colonnes (L9908-9910)
 
         px = lambda col: d4 + col        # noqa: E731  colonne
 
@@ -1438,25 +1448,34 @@ class Game:
         r.draw_icon(d, px(n - 1), d5, 0x0E)
 
         # ---- cotes (L9949-9990) : D6 de D5+0x10, par pas de 0x10 --------
-        for j in range(1, haut - 1):
-            yj = d5 + j * 16
-            r.draw_icon(d, px(0), yj, 0x12)
-            r.draw_icon(d, px(n - 1), yj, 0x13)
+        bas = d5 + 0x10
+        while bas < d5 + hauteur - 0x10:  # L9986-9990
+            r.draw_icon(d, px(0), bas, 0x12)
+            for j in range(1, n - 1):
+                r.draw_icon(d, px(j), bas, 0x14)
+            r.draw_icon(d, px(n - 1), bas, 0x13)
+            bas += 0x10
 
         # ---- bandeau bas (L9991-9996) ----------------------------------
-        bas = d5 + (haut - 1) * 16
         r.draw_icon(d, px(0), bas, 0x0F)
         for i in range(1, n - 1):
             r.draw_icon(d, px(i), bas, 0x10)
 
-        # ---- titre (L10045-10057) : sous le bandeau, en px ---------------
+        # ---- titre (port) : a l'abscisse `end_ok.x0`, calque sur l'ecran
+        # de saisie du niveau. L'asm ne trace pas de titre dans
+        # `_requester` : c'est l'appelant qui le fait, et pour la boite
+        # « TRY NUMBER » (L11926-11940) il ecrit
+        # `_text(d_screen, $40, $58, "TRY NUMBER")`. Or `end_ok.x0 =
+        # (D4 + 1) << 4` (L10006) vaut bien `$40` pour `x = $30`, et
+        # `D5 + $10 + $2 = 0x46 + 18 = $58` pour `y = $46` : les deux
+        # coordonnees du port sont celles du listing, et non une
+        # approximation.
         if titre:
-            r.draw_text(d, px(0) * 2 + 1, d5 + 16 + 3, titre)
+            r.draw_text(d, (d4 + 1) * 2, d5 + 16 + 2, titre)
 
-        # ---- message (L10059-10126) : centre dans la largeur -----------
+        # ---- message (port) : la ligne suivante, meme abscisse ---------
         if message:
-            cx = (px(0) * 16 + (n * 16 - r.text_width(message)) // 2) // 8
-            r.draw_text(d, cx, d5 + 16 + 5, message)
+            r.draw_text(d, (d4 + 1) * 2, d5 + 16 + 10, message)
 
 
     # --------------------------------------------- jauges de population (L403F4)
@@ -2039,7 +2058,10 @@ class Game:
         ``_end_cancel`` sur la ligne du bas de la boite. L'arithmetique,
         relevee telle quelle :
 
-        * ``D4 = x >> 4``, ``D5 = y >> 4`` (L9904-9905) ;
+        * ``D4 = x >> 4`` (L9904, L9907) mais ``D5 = y`` **sans
+          decalage** (L9905) : seuls ``x`` et ``largeur`` sont divises,
+          car ``_draw_icon`` prend ``y`` en lignes (L19191). Correction
+          de Phase 82 — voir :meth:`requester` ;
         * ``D6`` part de ``D5 + $10`` et avance de ``$10`` tant que
           ``D6 < D5 + hauteur - $10`` (L9949-9990) : c'est la ligne des
           boutons ;
@@ -2057,7 +2079,7 @@ class Game:
         le port fait pareil.
         """
         d4 = x >> 4                     # L9907
-        d5 = y >> 4                     # L9905
+        d5 = y                          # L9905 : pas de decalage
         d6 = d5 + 0x10                  # L9949
         while d6 < d5 + hauteur - 0x10:  # L9953-9960
             d6 += 0x10
@@ -2643,7 +2665,7 @@ class Game:
             return False                         # LAB_4B226
         if not unpack_moteur(self, donnees):     # L17453, LAB_4B21C
             return False
-        self.load_ground(self.sim.ground_in)     # L17586-17589
+        self.load_ground(self.sim.ground_in, 0)  # L17586-17589 (`CLR.W`)
         self.set_tend_icons(-1, -1)              # L17597-17603
         self.set_mode_icons(-1, -1)
         sim = self.sim
@@ -2951,14 +2973,35 @@ class Game:
     def _verifier_level_dat(self) -> None:
         """L10931-10950 : `level.dat` doit etre lisible, sinon on le demande.
 
-        La routine boucle sur `Open("level.dat", $3ED)` tant que le fichier
-        manque : elle ne rend la main qu'apres l'avoir referme. Le port
-        n'insere pas de disque - il n'y en a pas - mais l'echec reste
-        signale.
+        La boucle du listing est ``LAB_46110`` a ``LAB_4613E``::
+
+            h = Open("level.dat", $3ED)
+            if h > 0: Close(h)
+            else:     _do_message(strInsertDisk, 0)
+            if h <= 0: goto LAB_46110
+
+        Le point d'entree est en tete, donc on **reteste** apres le
+        dialogue : le fichier peut etre apparu. Le port n'a pas de disque
+        a insérer et les candidats sont fixes au demarrage — le dialogue
+        tourne donc tant que la fenetre reste ouverte, exactement comme
+        l'original en l'absence de disque. ``do_message`` rend 0 si la
+        fenetre est fermee, et c'est la seule sortie.
+        """
+        from populous.message import INSERT_DISK
+        while not self._level_dat_present():       # LAB_46110, L10931-10938
+            if self.do_message(INSERT_DISK) == 0:  # L10943-10946, annuler=0
+                return                             # ECART : fenetre fermee
+
+    def _level_dat_present(self) -> bool:
+        """``Open("level.dat", $3ED) > 0`` (L10931-10938), sans l'ouvrir.
+
+        Le port cherche les memes ``_CANDIDATES`` que
+        :meth:`_lire_level_dat`, donc les memes endroits que l'original
+        cherche son fichier.
         """
         import os
-        if not os.path.exists("level.dat"):
-            print("[SAVE/LOAD] level.dat est absent du repertoire courant")
+        from populous.conquest import _CANDIDATES
+        return any(os.path.exists(str(p)) for p in _CANDIDATES)
 
     def _trace_show_world(self, i: int, lignes, colonnes) -> None:
         """Un tour de la boucle de tracé de `_show_world` (L12380-12743).
@@ -3058,11 +3101,12 @@ class Game:
         `self.seed`.
         """
         from populous.decode import decode
+        from populous.message import INSERT_DISK
         # `strGENESIS1` (L12782) et `strGENESIS2` (L12786) sont les memes
         # sept octets, ecrits deux fois dans le listing : une seule constante
         # dans le port.
         from populous.world import (WORLD_BOXE, WORLD_GENESIS,
-                                    WORLD_GRAINE, WORLD_LEVEL_DAT,
+                                    WORLD_GRAINE,
                                     WORLD_NB, WORLD_OK_TEXTE,
                                     WORLD_CANCEL_TEXTE, WORLD_PAS_DE_MONDE,
                                     WORLD_TRAIT, WORLD_TEXTE, WORLD_X,
@@ -3117,9 +3161,12 @@ class Game:
             index = monde // 25              # L12315-12319 `DIVS #$0019`
             if not self._lire_level_dat(index):     # L12340-12368
                 saisi = 0                    # L12370
-                print("[SHOW-WORLD] %s est introuvable : le jeu demande "
-                      "d'insérer le disque original (L12371-12374), et "
-                      "boucle tant qu'il n'y est pas." % WORLD_LEVEL_DAT)
+                # `diskerr_47222` (L12371-12376) : `_do_message(strInsertDisk,
+                # 0)` puis `BRA.W LAB_47064`. Sans CANCEL, la boucle ne
+                # sort que quand le fichier est la — et `do_message` rend 0
+                # si la fenetre est fermee, ce qui n'existe pas sur Amiga.
+                if self.do_message(INSERT_DISK) == 0:
+                    return WORLD_GRAINE
                 continue                     # L12376 -> LAB_47064
 
             # `abandon` porte le `BRA.W LAB_47064` de L12758 : un retour en
@@ -3227,6 +3274,58 @@ class Game:
         self.left_button = 2                       # `_return_to_game`
         self.compose()
         return 1                                   # L11891 puis LAB_46BDC
+
+    def do_message(self, texte: str, annuler: int = 0) -> int:
+        """``_do_message(texte, annuler)`` (L11098-11139).
+
+        Une boite de dialogue sur ``_d_screen``, un texte, et la main
+        rendue au clic. **Ce n'est pas une erreur : c'est le dialogue
+        « montrez-moi le disque »** que le listing ouvre quand il ne
+        trouve pas un fichier. Voir :mod:`populous.message`.
+
+        La sequence, relevee telle quelle :
+
+        * ``annuler != 0`` pose ``_end_cancel`` dans la structure locale,
+          sinon elle la met a **zero** (L11100-11106) ;
+        * `_requester(_d_screen, $28, $3C, $100, $30, _end_ok, (-4))`
+          (L11108-11116) ;
+        * `_text(_d_screen, $38, $48, texte)` (L11117-11122) — en pixels,
+          `_text` divise par 8 ;
+        * ``_left_button = 2``, puis spin jusqu'a ce que le VBI le mette a
+          0 (L11123-11128) ;
+        * `_check_cancel(_end_ok, (-4))` (L11129-11135) : **0 reboucle sur
+          la boite**, 1 rend la main.
+          Le ``BEQ`` de L11135 teste ``Z`` pose par ``MOVE.W D0,(-6,A5)``
+          — ``MOVE`` modifie le CCR et ``ADDQ`` vers ``A7`` non -, donc
+          bien le retour de ``_check_cancel`` ;
+        * ``_left_button = 2`` une derniere fois (L11136), puis rend D0.
+
+        Renvoie donc 1 sur OK, 2 sur CANCEL, et 0 si la fenetre a ete
+        fermee : c'est le seul ecart, et il n'existe pas sur Amiga.
+
+        ``annuler = 0`` ne laisse que le bouton OK : la boucle est
+        **infinie** tant que la fenetre reste ouverte. C'est voulue — le
+        listing boucle jusqu'a ce que le disque soit insere — mais le port
+        n'a pas de disque a insérer, d'ou le recours 0.
+        """
+        from populous.message import (MESSAGE_BOXE, MESSAGE_CANCEL,
+                                      MESSAGE_OK, MESSAGE_X, MESSAGE_Y)
+        while True:                                    # LAB_462E6, L11123
+            self.requester(*MESSAGE_BOXE, "", "")      # L11108-11116
+            self.ren.draw_text(self.frame, MESSAGE_X >> 3, MESSAGE_Y,
+                               texte)                  # L11117-11122
+            self.left_button = 2                       # L11124
+            while self.left_button != 0:               # L11126-11128
+                self._pompe()
+                if not self.running:
+                    return 0
+            ok, cancel = self._cadres_boutons(*MESSAGE_BOXE,
+                                              MESSAGE_OK, MESSAGE_CANCEL)
+            r = self.check_cancel(ok, cancel if annuler else None)  # L11129
+            if r == 0:                                 # L11135 : on retrace
+                continue
+            self.left_button = 2                       # L11136
+            return r
 
     def check_cancel(self, ok, cancel) -> int:
         """``_check_cancel(end_ok, end_cancel)`` (L12106-12159).
@@ -3705,7 +3804,7 @@ class Game:
                                               pygame.FULLSCREEN)
 
     # ---------------------------------------------------- _load_ground (L16468)
-    def load_ground(self, n: int) -> bool:
+    def load_ground(self, n: int, msg: int = 0) -> bool:
         """``_load_ground(n, msg)`` (L16468-4A444) — le code 13 de ``_do_action``.
 
         Ce n'est **pas** la creation du relief : la routine ne touche ni
@@ -3724,17 +3823,38 @@ class Game:
         4. ``_weapons_order[0..10] = _weapons_add[0..10]`` puis tri croissant
            (L4A372-4A41E).
 
-        Renvoie 1, comme le ``MOVEQ #1,D0`` du listing. Le chemin d'erreur
-        LAB_4A426 appelle ``_do_message``, sous-systeme non transcrit : cette
-        methode **leve** plutot que de renvoyer silencieusement 0.
+        Renvoie 1, comme le ``MOVEQ #1,D0`` du listing.
+
+        **Le chemin d'erreur** (``LAB_4A426``, L16611-16622) est transcrit
+        depuis la Phase 82. Quand ``Open("LANDn")`` rend nul :
+
+
+            r = _do_message(strInsertDisk, msg)
+            if r == 2:                 # CANCEL
+                return 0               # LAB_4A442
+            goto LAB_4A25A             # on retente l'Open
+
+        ``(-4,A5)`` vaut 0 dans ce chemin, donc ``TST.L (-4,A5) ; BEQ
+        LAB_4A25A`` (L16618-16619) retente **toujours**. `msg` est le
+        second argument du listing (`($A,A5)`) : 0 chez les trois appels a
+        0 de la boucle de jeu (L400, L17586), 1 chez celui de L18985. Seul
+        ``msg = 1`` donne un CANCEL ; avec ``msg = 0`` la boucle est
+        infinie tant que la fenetre reste ouverte — c'est voulu, le
+        disque doit arriver.
         """
-        try:
-            tables = load_land(n)                 # LandTables : l'en-tete
-            header, tiles = load_tiles(n)         # + les 0x8340 octets de tuiles
-        except (FileNotFoundError, ValueError):
-            raise NotImplementedError(
-                "_load_ground : chemin d'erreur LAB_4A426 (_do_message) "
-                "non transcrit") from None
+        from populous.message import INSERT_DISK
+        while True:                                   # LAB_4A25A, L4A25A
+            try:
+                tables = load_land(n)                 # LandTables : l'en-tete
+                header, tiles = load_tiles(n)         # + les 0x8340 de tuiles
+            except (FileNotFoundError, ValueError):
+                r = self.do_message(INSERT_DISK, msg)  # L16612-16615
+                if r == 2:                             # L16616-16617
+                    return False                       # LAB_4A442
+                if r == 0:                             # ECART : fenetre fermee
+                    return False
+                continue                               # L16618-16619
+            break
 
         ren = self.ren
         sprites_in = ren.header["sprites_no"]     # _sprites_in (L4A334)
