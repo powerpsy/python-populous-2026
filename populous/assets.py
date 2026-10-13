@@ -236,21 +236,53 @@ def load_sprites(name: str, w: int = 16, h: int = 16) -> list[pygame.Surface]:
 
 
 # ------------------------------------------------------------------- bouches
-def load_mouths() -> list[pygame.Surface]:
-    """6 images de 48x35 px (animations du portrait du Seigneur).
+def load_mouths(pal: list | None = None) -> list[pygame.Surface]:
+    """``_read_mouth`` (L16668-16687) et les 5040 octets qu'il met dans `_map_steps`.
 
-    Chaque image contient 35 frames empilees verticalement (1 ligne = 1 frame
-    compressee). Pour l'animation, utiliser :func:`load_mouth_frames`.
+    ``mouths.pic`` est lu **sans la moindre transformation** —
+    ``PEA $13B0.W / PEA (_map_steps,A4)`` (L16677-16678) — soit
+    ``0x13B0 = 5040`` octets, et ``_draw_mouth`` (L19894-19923) les recopie
+    tels quels dans ``_w_screen``. Le format se lit donc dans ``_draw_mouth`` :
+
+    * **une bouche** pese ``MULU #$0348 = 840`` octets (L19906) ; il y en a
+      donc ``5040 / 840 = 6``, numerotees 0 a 5. Le listing n'en appelle que
+      **deux** : le numero **5** pour les **yeux** (L14657) et un numero qui
+      oscille entre **0 et 4** pour la **bouche** (L14726, puis L14733-14740) ;
+    * **une bouche = 35 lignes x 24 octets** : la boucle ``DBF`` de L19920
+      avance ``A0`` de ``$28 = 40`` octets — une ligne d'ecran 320 px — et
+      ``A1`` de 24 octets a chaque tour ;
+    * **une ligne = 6 octets x 4 bitplans** : les quatre couples ``MOVE.L``/
+      ``MOVE.W`` de L19911-19918 ecrivent les 6 octets du bitplan 0 dans
+      ``_w_screen``, ceux du bitplan 1 dans ``_w_screen + $1F40`` (= 8000),
+      du bitplan 2 dans ``+ $3E80`` (= 16000) et du bitplan 3 dans
+      ``+ $5DC0`` (= 24000) — les debuts des quatre plans d'un ecran 320x256
+      plan-majeur. L'index du pixel ``x`` est donc ``b3b2b1b0``, un bit pris
+      dans chacun des quatre plans.
+
+    **Les couleurs viennent du portrait.** Ces indexes pointent dans
+    ``_tcmap[0..15]``, que ``_read_lord`` remplit avec les 16 mots de
+    ``lord.pic`` (L16645-16648) : la bouche se teinte avec la palette de
+    l'image de fond du discours, **pas** avec la palette generale du jeu.
+    C'est l'argument ``pal`` ; ``None`` retombe sur la palette generale, ce
+    qui n'est que la convention de ``tools/preview_assets.py``.
+
+    **Pas de transparence.** Contrairement aux sprites du jeu, aucun des six
+    ``MOVE`` ne teste un masque : l'index 0 est **opaque**, et c'est ce qui
+    fait fondre la bouche dans le portrait. On rend donc des surfaces
+    opaques 48x35.
+
+    Renvoie les 6 bouches dans l'ordre du fichier : 0 a 4 sont les bouches,
+    5 est la paire de yeux.
     """
     p = (GAME / "mouths.pic")
     if not p.exists():
         p = DATA / "mouths.pic"
     b = p.read_bytes()
-    pal = palette_rgb()
+    couleurs = palette_rgb() if pal is None else list(pal)
     out = []
     for k in range(len(b) // 840):
         d = b[k * 840:(k + 1) * 840]
-        img = Image.new("RGBA", (48, 35), (0, 0, 0, 0))
+        img = Image.new("RGB", (48, 35))
         px = img.load()
         for y in range(35):
             base = y * 24
@@ -260,53 +292,9 @@ def load_mouths() -> list[pygame.Surface]:
                 for q in range(4):
                     if d[base + q * 6 + bi] >> bit & 1:
                         idx |= 1 << q
-                if idx:
-                    px[x, y] = (*pal[idx], 255)
+                px[x, y] = couleurs[idx]
         out.append(_surface(img))
     return out
-
-
-def load_mouth_frames() -> list[list[pygame.Surface]]:
-    """Extraits les frames d'animation des 6 bouches depuis le fichier brut.
-
-    Chaque frame = 24 octets = 4 bitplanes x 6 octets = 48 pixels (1 ligne).
-    Le sprite original fait 2 lignes de haut (chaque bitplane duplique sur 2 lignes).
-    Retourne 6 bouches x 35 frames, chaque frame = surface 48x2 (duplication ligne).
-    """
-    p = (GAME / "mouths.pic")
-    if not p.exists():
-        p = DATA / "mouths.pic"
-    b = p.read_bytes()
-    # Utiliser la palette standard du jeu (16 couleurs)
-    pal = palette_rgb()  # 16 couleurs RGB
-
-    all_mouths = []
-    for k in range(6):                          # 6 bouches (0-4 + yeux)
-        d = b[k * 840:(k + 1) * 840]            # 840 octets = 35 frames x 24
-        frames = []
-        for f in range(35):                     # 35 frames par bouche
-            frame_data = d[f * 24:(f + 1) * 24]  # 24 octets = 4 bitplanes x 6
-            # Decoder les 48 indices de couleur (4 bits/pixel)
-            indices = []
-            for x in range(48):
-                bi = x // 8
-                bit = 7 - (x % 8)
-                idx = 0
-                for bp in range(4):
-                    byte = frame_data[bp * 6 + (x // 8)]
-                    if (byte >> (7 - (x % 8))) & 1:
-                        idx |= (1 << bp)
-                indices.append(idx)
-            # Creer surface 48x2 (duplication ligne pour hauteur 2)
-            img = Image.new("RGBA", (48, 2), (0, 0, 0, 0))
-            px = img.load()
-            for y in range(2):
-                for x, idx in enumerate(indices):
-                    if idx:
-                        px[x, y] = (*pal[idx], 255)
-            frames.append(_surface(img))
-        all_mouths.append(frames)
-    return all_mouths
 
 
 # -------------------------------------------------------------------- .pic
@@ -347,25 +335,33 @@ def load_pic(name: str, planes: int = 4) -> pygame.Surface:
     return _surface(img.convert("RGBA"))
 
 
-def load_portrait() -> tuple[object, list[int], list[int]]:
-    """lord.pic : portrait 320x200 + 16 mots de palette.
+def load_portrait() -> tuple | None:
+    """``_read_lord`` (L16631-16656) : ``lord.pic``, le portrait et sa palette.
 
-    Retourne (pil_image_p, palette_words, palette_rgb) où :
-    - pil_image_p est l'image PIL en mode "P" (indexée) 320x200
-    - palette_words sont les 16 mots Amiga $0RGB (pour _tcmap)
-    - palette_rgb est la palette RGB étendue (768 valeurs) pour l'affichage
+    L'asm ouvre le fichier en lecture (``_Open($3ED)``), lit
+    ``$7D00 = 32000`` octets dans ``_w_screen`` — le portrait 320x200, quatre
+    plans plan-majeur — puis ``$20 = 32`` octets, soit **16 mots**, dans
+    ``_tcmap`` (L16645-16648). Ces seize mots sont la palette de l'ecran de
+    fin : c'est elle qui colore le portrait **et les bouches**
+    (cf. :func:`load_mouths`).
+
+    Renvoie ``(portrait, palette)`` : la surface opaque 320x200 et les seize
+    couleurs RGB. Renvoie ``None`` si le fichier est absent ou tronque —
+    c'est le cas ou l'asm saute tout le discours, L148C52 :
+    ``JSR _read_lord / TST.W D0 / BEQ.W LAB_48F84``.
     """
     for folder in (GAME, DATA):
         p = folder / "lord.pic"
         if p.exists():
             break
     else:
-        raise FileNotFoundError("lord.pic")
+        return None
     b = p.read_bytes()
     total = 320 * 200 // 8 * 4            # 32000 octets image
-    pal_words = list(struct.unpack_from(">16H", b, total))
-    # Construire l'image PIL en mode P
-    img = Image.new("P", (320, 200))
+    if len(b) < total + 32:               # il manque les 16 mots de `_tcmap`
+        return None
+    pal = palette_rgb(list(struct.unpack_from(">16H", b, total)))
+    img = Image.new("RGB", (320, 200))
     px = img.load()
     rb, ps = 40, 8000
     for y in range(200):
@@ -374,16 +370,10 @@ def load_portrait() -> tuple[object, list[int], list[int]]:
             idx = 0
             for q in range(4):
                 off = q * ps + y * rb + bi
-                if off < total and (b[off] >> bit) & 1:
+                if b[off] >> bit & 1:
                     idx |= 1 << q
-            px[x, y] = idx
-    # Palette RGB complete (768 valeurs) pour l'affichage
-    flat = []
-    for w in pal_words:
-        flat += list(rgb4(w))
-    flat += flat[:3] * (768 - len(flat))
-    img.putpalette(flat[:768])
-    return img, pal_words, flat[:768]
+            px[x, y] = pal[idx]
+    return _surface(img), pal
 
 
 # ------------------------------------------------------------------- icones
@@ -479,10 +469,19 @@ class Font:
         self._masks[code] = s
         return s
 
-    def glyph(self, code: int, color: tuple[int, int, int] | None = None
-              ) -> pygame.Surface:
-        """Glyphe colore (par defaut : couleurs d'origine du jeu)."""
-        key = code if color is None else (code, color)
+    def glyph(self, code: int, color: tuple[int, int, int] | None = None,
+              palette: list | None = None) -> pygame.Surface:
+        """Glyphe colore (par defaut : couleurs d'origine du jeu).
+
+        ``palette`` change la table des seize couleurs utilisee pour rendre
+        l'index 4 bits du glyphe. C'est necessaire hors du jeu : `_text`
+        (L19973) ecrit dans l'ecran courant, et l'ecran de victoire est
+        lu dans ``_tcmap`` = la palette de ``lord.pic`` (cf.
+        :func:`load_mouths`), pas dans ``_palette``.
+        """
+        key = code if (color is None and palette is None) else (code, color,
+                                                                tuple(palette
+                                                                      or ()))
         if key in self._cache:
             return self._cache[key]
         if color is None:
@@ -490,7 +489,7 @@ class Font:
             d = self.raw[i:i + 40]
             img = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
             px = img.load()
-            pal = palette_rgb()
+            pal = palette_rgb() if palette is None else list(palette)
             for y in range(8):
                 base = y * 5
                 for x in range(8):

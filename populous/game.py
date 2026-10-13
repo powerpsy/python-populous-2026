@@ -54,7 +54,9 @@ from populous.assets import load_land as load_tiles  # noqa: E402
 from populous.config import DEFAULT_GROUND, DEFAULT_SEED  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
-from populous.conquest_win import nouveau_niveau, texte_fin  # noqa: E402
+from populous.conquest_win import (BLOC_H, BLOC_X, BLOC_Y,  # noqa: E402
+                                   END_WORDS, PALIER_NOMS, WORDS,
+                                   YEUX_X, YEUX_Y, nouveau_niveau, texte_fin)
 from populous.constants import (ACT_ACTION, ACT_LOWER, ACT_MAGNET,  # noqa: E402
                                 ACT_NOP, ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
                                 ACT_TREE, ACT_VOLCANO, BLK_FLAT,
@@ -167,6 +169,25 @@ class Game:
         self.conquest_next = 0       # prochain palier calcule par l'ecran
         self.conquest_fini = False   # le mode a ete boucle entierement
         self.conquest_dialog = None        # boite « TRY NUMBER » ouverte ?
+        # --- l'ecran du Seigneur (`_won_conquest`, L14503-14742) ---
+        # Le discours n'a lieu que sur une victoire en conquete avec un
+        # `lord.pic` present : hors de la, `victory_speech` reste faux et
+        # `draw_end_screen` garde son ancien comportement.
+        self.victory_speech = False
+        self.victory_fond = None    # `_w_screen`, le portrait 320x200
+        self.victory_mouths = []    # les 6 bouches de `_map_steps`
+        self.victory_eyes = False   # les yeux (bouche n. 5) ont ete poses
+        self.victory_flag = False   # (-122,A5) : le mode est termine
+        self.victory_counter = 0    # (-120,A5)
+        self.victory_mouth = 0      # (-108,A5) : la bouche 0..4 courante
+        self.victory_dir = 1        # (-110,A5) : le sens de l'oscillation
+        self.victory_world = 0      # (-114,A5) : `_level_number / 250`
+        self.victory_graine = 0     # le mot de `_code(newrand())`, L148D1C
+        self.victory_pal = []       # `_tcmap[0..15]`, la palette de lord.pic
+        self.victory_texte = ("", "")   # les deux lignes de `_text`
+        self.victory_vblank = 0     # les 4 `_waittof` de L148EF2-148EFE
+        self.victory_music = 1      # (-116,A5) : `_music_off` sauvegarde
+        self.victory_effect = 1     # (-118,A5) : `_effect_off` sauvegarde
         self.mouse = (0, 0)
         # Les deux bascules de la barre. L'asm les nomme `_music_off` et
         # `_effect_off`, mais L19621/L19633 font `TST.W` puis `BEQ` : le bloc
@@ -598,7 +619,6 @@ class Game:
     # les chaines de l'ecran de fin, prises dans le listing
     TEXT_LOST = "LOST"                 # strLost    (L14441)
     TEXT_TRY_AGAIN = "TRY IT AGAIN"    # strTryItAgain (L14449)
-    TEXT_BATTLE = "BATTLE NUMBER IS "  # LAB_52224 (L14538)
 
     def open_conquest_dialog(self) -> None:
         """Ouvre la saisie du numero de niveau (asm L11926-11971).
@@ -677,19 +697,19 @@ class Game:
         """L'ecran de fin — `_end_game` (asm L14019) puis `_won_conquest`.
 
         L'asm ecrit trois lignes avec `_requester` (L14358-14363) puis la
-        ligne d'en-tete en `(8, 0xB2)` et `(8, 0xBA)` (L14523/L14546). Les
-        coordonnees sont celles du listing : colonne en unites de 8 pixels et
-        ligne en lignes de 8 pixels, donc `0xB2` = ligne 22 et `0xBA` = 23.
+        ligne d'en-tete en `(8, 0xB2)` et `(8, 0xBA)` (L14526/L14588). Les
+        deux cas se ressemblent a l'ecran mais pas dans le code : le
+        `_requester` de `_end_game` trace une **boite**, alors que les deux
+        lignes de `_won_conquest` sont des `_text` nus. Voir
+        :meth:`draw_victory_screen` pour ces la.
         """
-        if not self.game_ended:
+        if not self.game_ended or self.victory_speech:
             return
         if self.conquest is not None:
-            # L14522-14583 : le texte d'en-tete, puis la ligne complete.
-            self.requester(0x08, 0xB2, 0xFF, 0x40,
-                           texte_fin(self.conquest_no - 1, self.seed,
-                                     self.conquest_fini), "")
-            self.requester(0x10, 0xBA, 0xFF, 0x40,
-                           "%s%d" % (self.TEXT_BATTLE, self.conquest_no), "")
+            # LAB_48F84 (L148C54) : `lord.pic` absent, le discours est saute
+            # et l'ecran garde ce que `_end_game` avait trace.
+            self.requester(0x08, 0xB2, 0xFF, 0x40, self.victory_texte[0], "")
+            self.requester(0x10, 0xBA, 0xFF, 0x40, self.victory_texte[1], "")
         else:
             # hors conquete, l'asm affiche le tableau des scores
             self.requester(0x10, 0xA6, 0xFF, 0x40,
@@ -783,122 +803,232 @@ class Game:
             # L14497 : `_seed = _level_number` — le relief est regenere, donc
             # on ramene l'index dans les 99 paliers que contient level.dat.
             self.conquest_next = (nouveau % 99) + 1
+            # `(-114,A5) = _level_number / 250` (L148CAE-148CB8) : l'index de
+            # monde, qui selectionne les deux mots de `_words` a dire.
+            self.victory_world = nouveau // PALIER_NOMS
+            # L148D1C : `_code(newrand())` — le nom du monde de la seconde
+            # ligne. Un seul tirage, fait ici, pour que l'ecran reste stable.
+            self.victory_graine = self.sim.rng.raw() & 0xFFFF
+            # Les deux lignes de `_text`, assemblees une seule fois
+            # (L14520-14589) et relues telles quelles a chaque image.
+            self.victory_texte = texte_fin(
+                self.conquest_no - 1, self.conquest_fini,
+                self._message, self.victory_graine)
 
-        # Initialisation de l'ecran de victoire (_won_conquest, L14460+)
-        self._init_victory_screen()
+        # `_won_conquest` n'est appele que sur une **victoire en conquete**
+        # (L14408-14416 : `TST.W (8,A5)` doit valoir 0 — pas de defaite — et
+        # `_in_conquest != -1`). C'est la seule entree du discours.
+        if not perdu and self.conquest is not None:
+            self._init_victory_screen()
 
     def _init_victory_screen(self) -> None:
-        """Initialise l'ecran de victoire (_won_conquest L14460-14603).
+        """``_won_conquest`` : l'ecran du Seigneur (L148C2E-148DC2).
 
-        - Charge `lord.pic` (portrait PIL "P" + palette 16 mots -> _tcmap)
-        - Pre-calcule 16 versions du portrait avec palette decalee (cycle cuivre)
-        - Charge `mouths.pic` (6 bouches x 35 frames)
-        - Prepare le cycle de palette (16 entrees, copper offset +16)
-        - Lance la boucle d'attente de clic avec animation bouche/palette
+        L'ordre exact du listing :
+
+        1. L148C2E-148C3E : ``_music_off`` et ``_effect_off`` sont sauvegardes
+           dans ``(-116)`` / ``(-118)`` puis remis a **zero**, ce qui, chez
+           l'asm, *ouvre* les deux bascules (voir ``music_on``) ;
+        2. L148C42-148C48 : ``_kill_effect(0, 4)`` — les quatre voies d'effet
+           sont coupees ;
+        3. L148C4E : ``_read_lord()``. S'il rend zero, l'asm saute a
+           ``LAB_48F84`` (L148C54) : **tout le discours saute**, le niveau
+           avance est annule (``_level_number = (-106)``) et
+           ``_message[0] = 0`` ;
+        4. L148C58 : ``_read_mouth()`` — les 5040 octets de ``mouths.pic``
+           dans ``_map_steps`` ;
+        5. L148C5C-148C68 : ``_free_all_sounds()`` puis
+           ``_load_sound("gwords")`` : la banque d'effets est remplacee par
+           celle du discours pendant toute la boucle, et restauree en sortie
+           (``"gmusic1"``, L148F74-148F7C) ;
+        6. L148C6A : ``_seed`` est remis a ``(-106)`` = l'ancien niveau ;
+        7. L148C76-148D32 : le texte d'en-tete, ecrit **dans le portrait** ;
+        8. L148D5A-148D8A : ``_tcmap[i+16] = _palette[i]`` pour ``i`` dans
+           ``0..15``, puis ``_make_copper`` et ``_show_screen`` : le cuivre
+           est mis en place **une fois pour toutes**. Il n'y a **aucun**
+           cycle de palette pendant la boucle ;
+        9. L148DB2-148DC2 : ``_left_button = 2`` et zero des trois compteurs.
+
+        Le port n'a qu'un seul paquet d'effets : l'etape 5 se reduit a laisser
+        la musique se taire (``image`` n'appelle pas ``_audio`` pendant le
+        discours) et les effets viennent du paquet synthetise — ECART connu,
+        depose depuis la Phase 10.
         """
-        from populous.assets import load_portrait, load_mouth_frames, _surface
-        pil_img, self.victory_palette_words, palette_rgb = load_portrait()
-        self.victory_palette_rgb = palette_rgb          # 768 valeurs RGB
-        # Pre-rendre 16 versions du portrait avec palette decalee (cycle cuivre)
-        self.victory_portraits = []
-        for shift in range(16):
-            # Creer une nouvelle palette decalee de `shift` positions
-            shifted = palette_rgb[shift * 3:] + palette_rgb[:shift * 3]
-            img_shifted = pil_img.copy()
-            img_shifted.putpalette(shifted)
-            # Convertir en surface pygame RGBA
-            self.victory_portraits.append(_surface(img_shifted.convert("RGBA")))
-        self.victory_portrait = self.victory_portraits[0]  # version par defaut
-        self.victory_mouths = load_mouth_frames()      # 6 x 35 frames 48x4
-        self.victory_pal_idx = 0                        # index dans le cycle 16
-        self.victory_mouth_idx = 0                      # frame courante (0-34)
-        self.victory_mouth_id = 0                       # quelle bouche (0-4, 5=yeux)
-        self.victory_counter = 0                        # compteur general (-120,A5)
-        self.victory_pal_counter = 0                    # compteur palette (-108,A5)
-        self.victory_pal_dir = 1                        # direction palette (-110,A5)
-        self.victory_wait_click = True                  # attente clic gauche
-        # Sons a jouer a certains compteurs (L14624-14703)
-        self.victory_sounds_played = set()
+        from populous.assets import load_mouths, load_portrait
+        self.victory_speech = False
+        self.victory_eyes = False
+        portrait = load_portrait()                    # `_read_lord`, L16631
+        if portrait is None:                          # LAB_48F84, L14760-14762
+            self.conquest_next = 0                    # `_level_number = (-106)`
+            self._message = ""                        # `CLR.B (_message)`
+            return
+        self.victory_speech = True
+        fond, pal = portrait
+        self.victory_fond = fond                      # `_w_screen`, 320x200
+        self.victory_pal = pal                        # `_tcmap[0..15]`
+        self.victory_mouths = load_mouths(pal)        # `_read_mouth`, L16668
+        # (1) les deux bascules sont sauvegarees puis ouvertes ; (2) les
+        # quatre voies sont coupees (`_kill_effect(0, 4)`).
+        self.victory_music, self.music_on = self.music_on, 1
+        self.victory_effect, self.effect_on = self.effect_on, 1
+        self.sound.kill_effect(0, 4)                  # L148C48
+        # (9) L148DB2-148DC2
+        self.left_button = 2
+        self.victory_dir = 1                          # (-110,A5)
+        self.victory_mouth = 0                        # (-108,A5)
+        self.victory_counter = 0                      # (-120,A5)
+        self.victory_flag = self.conquest_fini        # (-122,A5)
+        self.victory_vblank = 0
 
     def _update_victory_screen(self) -> None:
-        """Met a jour l'ecran de victoire (une image) — transcription de L14590-14742.
+        """La boucle d'attente de ``_won_conquest`` (L148DC6-148F46), une image.
 
-        Boucle principale qui attend le clic gauche :
-        - Cycle la palette (16 entrees, offset copper +16)
-        - Anime la bouche (35 frames, changement a chaque tour)
-        - Joue les sons aux bons compteurs
-        - Quitte sur clic gauche -> `_next_conquest`
+        Une iteration de l'asm = quatre vblanks (les quatre ``_waittof`` de
+        L148EF2-148EFE) : le port compte les images et ne fait rien quatre
+        fois sur cinq. Le test de clic est en tete de boucle (L148DC6), donc
+        aussi une fois par iteration — c'est fiable parce que ``_mouse``
+        (L19582-19589) maintient ``_left_button`` a zero tant que le bouton
+        est enfonce.
+
+        Le corps, dans l'ordre du listing :
+
+        * **mode termine** (``(-122) != 0``, L148DCE-148E56) : pour
+          ``10 <= c <= 14``, un mot de ``_end_words[c-10]`` n'est dit que si
+          la voie 2 est libre ; sinon ``c`` est ramene a 0 au dela de 200,
+          les **yeux** (bouche n. 5) sont poses une fois pour toutes quand
+          ``c == 16``, puis ``c`` avance et la bouche revient a 0 ;
+        * **mode courant** (L148E5A-148EE4) : ``c == 10`` dit l'effet 0,
+          ``c`` vaut 11 ou 12 dit ``_words[monde*2 + c - 11]`` si le mot est
+          positif, et ``c`` est ramene a 0 au dela de 250 ;
+        * **commun** (L148EF2-148F42) : la bouche ``(-108)`` est redessinee,
+          puis — et seulement si ``_check_effect(2)`` est **nul**, c'est-a-
+          dire si la voie sonne encore — elle oscille entre 0 et 4 en
+          rebroussant ``(-110)`` aux bornes.
         """
-        if not self.game_ended or not self.victory_wait_click:
-            return
-
-        # Cycle palette : 16 entrees, recopie _palette -> _tcmap avec offset +16
-        # L14590-14603 : recopie 16 mots, puis _make_copper / _show_screen
-        # victory_pal_counter (0-15) choisit la version pre-rendue du portrait
-        self.victory_pal_counter = (self.victory_pal_counter + 1) % 16
-
-        # Compteur principal (-120,A5) : incremente a chaque frame
-        self.victory_counter += 1
-
-        # Direction palette (-110,A5) : alterne +1/-1 tous les 4 cycles
-        if self.victory_counter % 4 == 0:
-            self.victory_pal_dir = -self.victory_pal_dir
-
-        # Animation bouche : change de frame a chaque tour
-        self.victory_mouth_idx = (self.victory_mouth_idx + 1) % 35
-
-        # Changement de bouche (toutes les ~10 frames) - L14646-14658
-        if self.victory_counter % 10 == 0:
-            self.victory_mouth_id = (self.victory_mouth_id + 1) % 5  # 0-4 (pas les yeux)
-
-        # Sons aux compteurs specifiques (L14624-14703)
-        self._play_victory_sounds()
-
-        # Attente clic gauche pour sortir (L14619-14621)
-        if self.left_button == 0:         # clic detecte
-            self.victory_wait_click = False
-            self._return_to_game()
-            self._next_conquest()
-
-    def _play_victory_sounds(self) -> None:
-        """Joue les sons de l'ecran de victoire selon les compteurs (L14624-14703)."""
-        c = self.victory_counter
-        if c in self.victory_sounds_played:
-            return
-
-        # L14624-14629 : compteur 0x0A (10) -> son 2
-        if c == 10:
-            self.sound.play_effect(2, 0)
-            self.victory_sounds_played.add(c)
-        # L14672-14677 : compteur 0x0A (10) + son 2
-        # L14678-14703 : compteur 0x0B-0x0C (11-12) avec verification _words
-        # L14721-14727 : compteur 0xFA (250) -> son 5, 0x23, 0x87, 0x12
-        # Pour l'instant on joue les effets principaux
-        if c == 250:
-            self.sound.play_effect(5, 0)
-            self.sound.play_effect(0x23, 0)
-            self.sound.play_effect(0x87, 0)
-            self.sound.play_effect(0x12, 0)
-            self.victory_sounds_played.add(c)
-
-    def draw_victory_screen(self) -> None:
-        """Dessine l'ecran de victoire complet (portrait + texte + bouche animee)."""
         if not self.game_ended:
             return
+        # `_mouse` tourne dans le VBI meme pendant cette boucle (L19579-19591)
+        # : c'est lui qui met `_left_button` a 0 au clic. Pendant le discours,
+        # la boucle d'image est arretee, donc c'est ici qu'il faut le lire.
+        self._read_buttons()
+        if not self.victory_speech:
+            # LAB_48F84 (L148C54) : pas de `lord.pic`, donc pas de boucle de
+            # discours — mais l'attente de clic de `_end_game` reste
+            # (L14392-14403), et c'est elle qui enchaîne.
+            if self.left_button == 0:
+                self.left_button = 2
+                self._return_to_game()
+                self._next_conquest()
+            return
+        self.victory_vblank += 1
+        if self.victory_vblank < 4:                   # les 4 `_waittof`
+            return
+        self.victory_vblank = 0
+        # LAB_48DC6 : le test de sortie est en tete de boucle.
+        if self.left_button == 0:                     # LAB_48F4A, L148F4A
+            self.left_button = 2                      # L148F4A
+            self.sound.kill_effect(0, 4)              # `_kill_effect(0, 4)`
+            self.music_on, self.effect_on = (
+                self.victory_music, self.victory_effect)   # L148F8E-148F94
+            self.victory_speech = False
+            self._return_to_game()
+            self._next_conquest()
+            return
 
-        # 1. Fond : portrait du Seigneur avec palette cyclique (copper 16 entrees)
-        # victory_pal_counter (0-15) choisit la version pre-rendue
-        self.frame.blit(self.victory_portraits[self.victory_pal_counter], (0, 0))
+        c = self.victory_counter
+        if self.victory_flag:                         # L148DCE : (-122,A5)
+            if 10 <= c <= 14:                         # L148DD6-148DE4
+                if self.sound.check_effect(2):        # `_check_effect(2)`
+                    self.sound.play(END_WORDS[c - 10], 2)
+                    self.victory_counter = c + 1      # L148E12
+            else:                                     # LAB_48E18
+                if c > 200:                           # L148E18-148E20
+                    c = 0
+                if c == 16:                           # L148E24-148E44
+                    self.victory_eyes = True          # bouche n. 5, (16, 75)
+                self.victory_counter = c + 1          # L148E48
+                self.victory_mouth = 0                # L148E4C
+                self.victory_dir = 1                  # L148E50
+        else:                                         # LAB_48E5A
+            if 10 <= c <= 12:                         # L148E5A-148E68
+                if c == 10:                           # L148E6A-148E7E
+                    self.sound.play(0, 2)             # `_PlaySound(0, 2)`
+                    self.victory_counter = c + 1
+                elif self.sound.check_effect(2):      # L148E84-148E90
+                    mot = WORDS[self.victory_world * 2 + c - 11]
+                    if mot >= 0:                      # L148EA8-148EAC
+                        self.sound.play(mot, 2)
+                    self.victory_counter = c + 1      # L148ED2
+            else:                                     # LAB_48ED8
+                if c > 250:                           # L148ED8-148EE0
+                    c = 0
+                self.victory_counter = c + 1          # L148EE4
+                self.victory_mouth = 0                # L148EE8
+                self.victory_dir = 1                  # L148EEC
 
-        # 2. Bouche animee : 6 bouches x 35 frames, position fixe sur le portrait
-        # L14655-14727 : _draw_mouth appele periodiquement
-        mouth_frames = self.victory_mouths[self.victory_mouth_id]
-        frame = mouth_frames[self.victory_mouth_idx]
-        # Position approximative de la bouche sur lord.pic (x=100, y=120)
-        self.frame.blit(frame, (100, 120))
+        # LAB_48EF2 : la bouche est redessinee a chaque iteration, et
+        # n'oscille que si `_check_effect(2)` rend **zero**, c'est-a-dire
+        # tant que la voie 2 sonne encore (L148F2C-148F42).
+        if not self.sound.check_effect(2):
+            self.victory_mouth += self.victory_dir
+            if self.victory_mouth >= 4 or self.victory_mouth <= 0:
+                self.victory_dir = -self.victory_dir
 
-        # 3. Texte de fin (requester) - deja fait par draw_end_screen
-        self.draw_end_screen()
+    def draw_victory_screen(self) -> None:
+        """Le portrait du Seigneur, sa bouche et ses yeux.
+
+        `_draw_mouth(ecran, x, y, compte, bouche)` (L19894) recopie
+        ``compte`` lignes de 48 pixels dans ``_w_screen`` en partant de la
+        ligne ``y`` et de la colonne ``x``. Les deux appels du listing sont :
+
+        * les **yeux** (bouche n. 5) en `x = $10, y = $4B` — L14652-14658, une
+          seule fois, quand le compteur passe a 16 dans la branche « mode
+          termine ». Comme l'asm ecrit dans l'ecran affiche, les yeux
+          **restent** ensuite ;
+        * la **bouche** en `x = $12, y = $87` — L14721-14727, a **chaque**
+          iteration. Les 35 lignes couvrent exactement les 35 lignes de
+          l'image precedente, si bien qu'osciller entre les bouches 0..4
+          donne l'impression d'une bouche qui parle.
+
+        **`x` est un offset d'octets, pas de pixels.** `_draw_mouth` fait
+        `ADDA.L D0,A0` directement (L19900), la ou `_text` fait d'abord
+        `LSR.W #3` (L19978). Comme une ligne fait `$28 = 40` octets, soit
+        320 pixels, `$10` vaut 128 pixels et `$12` vaut 144 — c'est ce qui
+        met la bouche sur la bouche du portrait.
+
+        Les deux lignes d'en-tete sont des `_text` **nus** — contrairement
+        aux boites de `_end_game` — ecrites une fois pour toutes dans
+        ``_w_screen`` avant `_show_screen` (L14526, L14559, L14588). Le port
+        les redessine a chaque image sur le meme fond, ce qui revient au
+        meme puisque rien d'autre ne change. Ici, en revanche, `x` **est**
+        en pixels : c'est le listing qui divise.
+
+        Sans ``lord.pic`` (ou hors conquete), on retombe sur le texte seul :
+        c'est le chemin ``LAB_48F84``, ou l'asm n'affiche que ce qu'avait
+        dessine ``_end_game``.
+        """
+        if not self.game_ended:
+            return
+        if not self.victory_speech:
+            self.draw_end_screen()
+            return
+        self.frame.blit(self.victory_fond, (0, 0))
+        # `_draw_mouth` ajoute `x` **en octets** (`ADDA.L D0,A0`, L19900) :
+        # `$12` -> 18 x 8 = 144 pixels, `$10` -> 16 x 8 = 128 pixels. `y`,
+        # lui, est deja en lignes (`MULU #$0028`).
+        self.frame.blit(self.victory_mouths[self.victory_mouth],
+                        (BLOC_X * 8, BLOC_Y))
+        if self.victory_eyes:
+            self.frame.blit(self.victory_mouths[5], (YEUX_X * 8, YEUX_Y))
+        # `_text(_w_screen, 8, 0xB2, s)` et `_text(_w_screen, 8, 0xBA, s)` :
+        # le listing lit `x` **en pixels** et en derive un offset d'octet par
+        # ``LSR.W #3`` (L19978), alors que `draw_text` compte en unites de
+        # 8 px — d'ou `8 >> 3`. Les glyphes sont rendus dans ``_tcmap`` :
+        # c'est la palette du portrait, pas celle du jeu.
+        self.ren.draw_text(self.frame, 8 >> 3, 0xB2, self.victory_texte[0],
+                           self.victory_pal)
+        self.ren.draw_text(self.frame, 8 >> 3, 0xBA, self.victory_texte[1],
+                           self.victory_pal)
 
     def _next_conquest(self) -> None:
         """Passe au palier suivant — la validation de l'ecran de fin.
@@ -3391,12 +3521,17 @@ class Game:
         if ev.type == pygame.QUIT:
             self.running = False
         elif ev.type == pygame.KEYDOWN:
-            # L'ecran de fin attend une touche pour enchainer (asm L14392 :
-            # `LAB_48B24` boucle sur `_left_button` jusqu'au clic).
+            # L'ecran de fin attend un clic pour enchainer (asm L14392 :
+            # `LAB_48B24` boucle sur `_left_button` jusqu'au front, et la
+            # boucle du discours le teste en tete, L148DC6). Le clavier ne
+            # fait pas partie de l'original : on s'en sert de raccourci, mais
+            # on ne fait que **poser le clic**, pour que le chemin de sortie
+            # (restauration des deux bascules, `_kill_effect`, L148F4A-148F94)
+            # reste celui du listing.
             if self.game_ended:
                 if ev.key in (pygame.K_RETURN, pygame.K_SPACE,
                               pygame.K_ESCAPE):
-                    self._next_conquest()
+                    self.left_button = 0
                 return
             # Un `_get_name` en cours prend le clavier tout entier : c'est
             # `_keyboard` (L10388) qui le lit dans sa boucle, et `_key`

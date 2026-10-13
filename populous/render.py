@@ -102,7 +102,8 @@ class Renderer:
     # Le retour a la ligne est un saut de ``0x140 = 320`` octets, soit
     # exactement 8 lignes : on revient au colonne de depart, ligne + 8.
     @staticmethod
-    def draw_text(dest: pygame.Surface, x: int, y: int, text: str) -> None:
+    def draw_text(dest: pygame.Surface, x: int, y: int, text: str,
+                  palette: list | None = None) -> None:
         """``_text(ecran, x, y, chaine)`` (asm L19973). ``x`` en unitÃ©s de 8 px."""
         px, py = x * 8, y
         if py < 0 or py >= dest.get_height():
@@ -119,7 +120,7 @@ class Renderer:
             code = ord(ch)
             if code < 0x20:               # hors de la police : rien
                 continue
-            glyph = FONT.glyph(code)
+            glyph = FONT.glyph(code, None, palette)
             if cur_x >= 0 and cur_x + 8 <= dest.get_width():
                 dest.blit(glyph, (cur_x, line))
             cur_x += 8

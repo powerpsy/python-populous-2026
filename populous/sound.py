@@ -308,10 +308,18 @@ class SoundEngine:
                 pass
 
     def check_effect(self, voie: int) -> bool:
-        """``_check_effect(voie)`` (L20898) : la voie sonne-t-elle encore ?"""
-        if voie < 0 or voie >= self.VOIES:
-            return False
-        return self.voies[voie].get_busy()
+        """``_check_effect(voie)`` (L20898) : l'effet de la voie est-il **fini** ?
+
+        L'asm fait ``CheckIO(_ioas[voie])`` (L20899-20907), qui rend un
+        pointeur **non nul des que l'E/S est terminee** et nul tant qu'elle
+        est en cours. Le rendu du port est donc ``True`` quand la voie
+        **ne sonne plus** — l'inverse d'un ``get_busy()``, et c'est le sens
+        que lisent tous les appels du listing (``TST.W D0 / BEQ`` saute
+        l'action tant que le mot est nul, i.e. tant que le son tourne).
+        """
+        if voie < 0 or voie >= len(self.voies):
+            return True                        # rien en cours -> deja fini
+        return not self.voies[voie].get_busy()
 
     def sound_in(self) -> int:
         """``_sound_in`` : combien de voies sonnent encore."""

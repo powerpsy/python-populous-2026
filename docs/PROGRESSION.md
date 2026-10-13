@@ -6658,48 +6658,98 @@ les trois branches.
 ### Phase 80 - Ecran de victoire : `_read_lord`, `_read_mouth`, `_draw_mouth`
 
 L'ecran de fin de conquete (`_won_conquest`, L14460-14768) etait affiche
-mais sans l'animation de la bouche du Seigneur ni le cycle de palette.
+mais sans le Seigneur qui parle. Phase 80 a pose le portrait et les bouches
+— mais **en inventant** plusieurs details. La Phase 81 les reprend ligne a
+ligne ; ce qui suit est l'etat reel, apres reecriture.
 
-**Ce qui est implemente (Phase 80)** :
-* **Chargement `lord.pic`** (L14460-14475) : portrait 320x200 4 plans +
-  palette 16 mots (`_tcmap`). Le port pre-calcule 16 versions du portrait
-  avec palette decalee (cycle cuivre, L14590-14603).
-* **Chargement `mouths.pic`** (L14475-14480) : 6 bouches x 35 frames,
-  decodage bitplan par bitplan (4 bitplanes x 6 octets = 48 pixels/frame).
-  Chaque frame = 48x2 pixels (duplication ligne pour hauteur 2).
-* **Cycle de palette (L14590-14603)** : 16 entrees, rotation continue via
-  le cuivre. Le port utilise les 16 versions pre-calculees du portrait.
-* **Animation bouche (L14655-14727)** : 6 bouches (0-4) + yeux (5),
-  35 frames chacune. Changement de bouche toutes les ~10 frames,
-  cycle de frames continu. Position fixee sur le portrait (x=100, y=120).
-* **Sons ponctuels** (L14624-14703) : effets aux compteurs 10, 250, etc.
-* **Boucle d'attente clic** (L14619-14742) : attend `left_button == 0`,
-  puis `_return_to_game` + `_next_conquest`.
+**Ce qui est implemente** :
+* **Chargement `lord.pic`** (`_read_lord`, L16631-16657) : 32000 octets lus
+  dans `_w_screen` (L16640-16643), puis 32 octets — 16 mots — dans
+  `_tcmap[0..15]` (L16645-16648). `load_portrait()` rend
+  `(surface 320x200, palette de 16 couleurs)`, et **rend `None`** si le
+  fichier manque ou est tronque : c'est le chemin `LAB_48F84` (L14513), ou
+  tout le discours est saute.
+* **Chargement `mouths.pic`** (5040 octets) : 6 bouches de 840 octets
+  (`MULU #$0348`, L19906), chacune 35 lignes de 48 pixels — 4 plans x 6
+  octets. `load_mouths(pal)` les teinte avec **la palette du portrait** et
+  non avec `_palette` : les bouches sont recopiees dans `_w_screen`, donc
+  indexees par `_tcmap[0..15]`.
+* **Transparence : il n'y en a pas.** `_draw_mouth` (L19911-19917) fait six
+  `MOVE` inconditionnels ; l'index 0 est **opaque**, il ecrase le fond.
+* **Les deux positions du listing** : les yeux (bouche n. 5) en
+  `(x=$10, y=$4B)` une seule fois, quand le compteur passe a 16 dans la
+  branche « mode termine » (L14650-14658) ; la bouche en `(x=$12, y=$87)` a
+  **chaque** iteration (L14721-14727). 35 lignes couvrent exactement les 35
+  lignes de l'image precedente.
+* **`x` est un offset d'octets, pas de pixels.** `_draw_mouth` fait
+  `ADDA.L D0,A0` directement (L19900), la ou `_text` fait d'abord
+  `LSR.W #3` (L19978). Comme une ligne fait `$28 = 40` octets pour 320
+  pixels, `$10` vaut **128** pixels et `$12` vaut **144**. Phase 80 prenait
+  ces valeurs au pied de la lettre et posait la bouche en (18, 135), c'est-a-dire
+  sur le bandeau de gauche ; la bouche de `lord.pic` est en (144, 135) et
+  les yeux en (128, 75). Le controle regarde les deux cotes.
+* **Cadence** : une iteration = les quatre `_waittof` de L14717-14720.
+* **Oscillation** : `(-108)` avance d'un cran par iteration, **uniquement**
+  quand `_check_effect(2) == 0`, c'est-a-dire tant que la voie 2 sonne encore
+  (L14731-14732), et rebrousse `(-110)` aux extremites 4 et 0 (L14733-14740).
+  Les deux branches « hors fenetre de mots » remettent `(-108)=0` et
+  `(-110)=1` (L14661-14662, L14714-14715) : la bouche ne peut donc osciller
+  que pendant les iterations ou l'on dit un mot, precisement celles ou `c`
+  **n'avance pas** faute de canal libre.
+* **Les mots** : `_end_words` (L24783, 5 sons) dans la branche « mode
+  termine » aux compteurs 10..14 ; `_words` (L24786, 20 sons, 2 par monde) a
+  c == 10 (son 0 inconditionnel), 11 et 12, en sautant les `$FFFF` (L14691).
+* **Boucle d'attente clic** (L14619-14621) : `_mouse` tourne dans le VBI et
+  met `_left_button` a 0 au clic ; la sortie (L14743) restaure les bascules
+  et tue l'effet 2.
+
+**Le texte du discours** (Phase 81) : les deux lignes sont des `_text`
+**nus** en `x = 8` pixels (le listing fait `LSR.W #3`, L19978) et `y = $B2`
+/ `$BA` (L14526, L14559, L14588) — pas des boites `_requester`. Les chaines
+sont `strWellDone` / `strYouConquered` / `strNowBattleAt` /
+`strWellDoneConq` / `strBattleOverTry` (L21393-21416), et
+`_con_text[0x18 + monde]` est la **note** du joueur (`MORTAL` a
+`ETERNAL GOD`, L21353-21392), pas un nom de monde. La seconde ligne passe
+par `_code(newrand())` (L14793-14889) : trois syllabes, `_start[&31]`,
+`_mid[>>5]`, `_end[>>10]` — exactement les tables que `decode()` inverse.
 
 **ECART declares** :
-* Le cuivre original modifie la palette en temps reel ; le port pre-calcule
-  16 surfaces RGBA (acceptable, meme resultat visuel).
-* Position bouche fixe (x=100, y=120) au lieu de la position calculee
-  par l'original (parametres passes a `_draw_mouth`).
-* Sons `_words` non implémentes (tableau non decode).
+* La liaison serie (codes 2 et 8) — hors portee, il faudrait une seconde
+  Amiga.
+* Les echantillons audio sont synthetises (Phase 10) ; la logique
+  (`_PlaySound` / `_check_effect` / `_kill_effect`) est fidele.
+* `victory_world = nouveau // PALIER_NOMS` ne vaudra jamais plus que 9 :
+  `level.dat` ne contient que 99 paliers, alors que l'original en compte
+  2470. La table `_words` n'est donc lue que sur ses dix premiers mots.
+* `_end_game` et `_won_conquest` sont fusionnes en une seule etape : le
+  listing trace d'abord un `_requester` sur `_d_screen` et attend un clic,
+  **puis** pose le portrait sur `_w_screen`. Le port garde la boite
+  (`draw_end_screen`) pour le chemin sans portrait.
 
 #### Verification
 
 | controle | resultats |
 |---|---|
 | `tools/autopilot.py` | **84/84** |
-| `tools/check_*.py` | **31/31** |
+| `tools/check_*.py` | **33/33** |
 | `check_render` | **OK** (9 ecarts reels inchanges) |
 | `check_funny` | **OK** |
 | `smoke_sim` | 3000 tours OK |
 | `stress 2000 8` | **8/8** |
 
-**Reste a ce jour** : la liaison serie (codes 2 et 8).
+`tools/check_victory_speech.py` (Phase 81) confronte 51 faits du listing au
+port **en execution** : la palette de chaque pixel des six bouches, la
+transparence, les deux positions, la cadence de 4 vblanks, le triangle
+1-2-3-4-3-2-1-0, l'ordre des sons, et les deux lignes de texte.
+
+**Reste a ce jour** : la liaison serie (codes 2 et 8), et le sous-systeme
+`_do_message` (L11098) — la seule `NotImplementedError` qui reste au port.
 
 ## Note honnête sur l'équilibrage
 
 Les deux tribus ne prospèrent pas sur **toutes** les graines : sur les cartes
 très montagneuses (peu de `$0F`), la seconde tribu peut s'éteindre. Avec l'IA
 désactivée elles sont **parfaitement symétriques**. Dans le vrai jeu ce
-phénomène existe aussi (mais le joueur peut y remédier en « relevant »). Il
-manque l'interface qui permettrait au joueur de le faire — c'est l'étape A.
+phénomène existe aussi, et le joueur y remédie en « relevant » le terrain :
+`ACT_RAISE` / `ACT_LOWER` sont transcrits depuis la Phase 63, donc cette
+interface est bien là.

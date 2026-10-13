@@ -1529,8 +1529,17 @@ niveau quand il n'est pas déjà aligné (commentaire : « Presumably skips 1 le
 ## 6.4 Les deux écrans animés
 
 ### `_read_lord` — ligne 16631
-Charge `lord.pic` (0x7D00 octets = 32 000 B) dans `_w_screen`, + 32 octets dans `_tcmap`
-(palette). Retourne 0 si l'ouverture échoue (test en 14512).
+Charge `lord.pic` : 32 000 octets dans `_w_screen` (L16640‑16643), puis 32
+octets — 16 mots — dans `_tcmap[0..15]` (L16645‑16648). Retourne 0 si
+l'ouverture échoue (test en 14512) ; c'est ce que teste L14513, et dans ce
+cas `LAB_48F84` saute tout le discours.
+
+**Le point clé** : `_tcmap[0..15]` devient la palette du portrait. Toute
+image dessinée dans `_w_screen` pendant le discours — donc les bouches
+**et** les glyphes de `_text` — se teinte avec elle, pas avec `_palette`.
+La boucle L14590‑14603 recopie ensuite `_palette[i]` dans `_tcmap[i+16]`
+(couleurs des sprites) et appelle `_make_copper` **une seule fois** : il n'y
+a aucun cycle de palette par image.
 
 ### `_read_mouth` — ligne 16668
 Charge `mouths.pic` (0x13B0 = 5 040 B) dans **`_map_steps`** (le tampon est réutilisé,
@@ -1539,34 +1548,85 @@ Charge `mouths.pic` (0x13B0 = 5 040 B) dans **`_map_steps`** (le tampon est réu
 ### `_draw_mouth` — ligne 19894
 
 ```python
-def draw_mouth(index):                               # L19894
-    # 1 « bouche » = 6 octets × 4 lignes = 24 B ; pas de ligne = 840 B (MULU #$348)
-    src = _map_steps + index * 840
-    # 35 frames de haut, 4 bitplanes x 6 octets = 48 pixels par frame
-    # Le port decode les 4 bitplanes (48 pixels) et combine en 16 couleurs
+def draw_mouth(ecran, x, y, compte, index):            # L19894
+    dst = ecran + x + y * 40
+    src = _map_steps + index * 840                     # MULU #$348, L19906
+    for _ in range(compte):                            # DBF, L19920
+        for plan in range(4):                          # +0, $1F40, $3E80, $5DC0
+            ecran[dst + plan * $1F40 : +6] = src[0:6]
+            src += 6
+        dst += 40                                      # ADDA.L #$28, L19919
 ```
 
 `0x13B0 = 5040 = 6 × 840` → **6 bouches** au total (indices 0-4 + yeux).
 
-**Format des donnees (Phase 80)** :
-* Fichier `mouths.pic` : 5040 octets = 6 bouches × 35 frames × 24 octets.
-* Une frame = 24 octets = 4 bitplanes × 6 octets = 48 pixels (1 ligne).
+**Format des donnees** :
+* Fichier `mouths.pic` : 5040 octets = 6 bouches × 35 lignes × 24 octets.
+* Une ligne = 24 octets = 4 bitplanes × 6 octets = 48 pixels.
 * Les 4 bitplanes se combinent bit a bit pour former un index 4 bits (0-15)
   par pixel : `idx = bp0 | (bp1<<1) | (bp2<<2) | (bp3<<3)`.
-* Le sprite fait 48 pixels de large, 2 lignes de haut (duplication de la ligne
-  pour correspondre au dessin original qui ecrit chaque bitplane sur 2 lignes
-  d'ecran via `MOVE.L` + `MOVE.W`).
+* Les appels du listing passent `compte = 0x23 = 35` : **toute** la bouche,
+  d'un bloc. Aucun masque n'est teste (L19911‑19917 sont six `MOVE`
+  inconditionnels) : l'index 0 est **opaque** et écrase le fond.
 
-**Port (Phase 80)** : `load_mouth_frames()` lit `mouths.pic` brut, decode
-les 4 bitplanes en indices 4 bits (0-15), utilise la palette du jeu pour
-creer des surfaces 48x2 (duplication ligne pour hauteur 2). 6 bouches x
-35 frames = 210 surfaces pre-calculees.
+### Les deux appels
 
-**Animation dans `_won_conquest`** (L14655-14727) :
-* 6 bouches (0-4 = paroles, 5 = yeux) alternees toutes les ~10 frames.
-* 35 frames par bouche, cycle continu.
-* Position fixe sur le portrait (x=100, y=120 approx).
-* Palette cyclique 16 entrees (cuivre) synchronisee.
+| ce que l'on pose | arguments | ligne | colonne en pixels |
+|---|---|---|---|
+| les yeux (bouche n. 5) | `_draw_mouth(_w_screen, $10, $4B, $23, 5)` | L14652‑14658 | 128 |
+| la bouche | `_draw_mouth(_w_screen, $12, $87, $23, (-108))` | L14721‑14727 | 144 |
+
+**`x` est un offset d'octets, pas de pixels.** `_draw_mouth` fait
+`ADDA.L D0,A0` (L19900) sans le `LSR.W #3` que `_text` applique (L19978) :
+la colonne se compte donc en octets, et une ligne fait `$28 = 40` octets
+pour 320 pixels. `$10` vaut ainsi **128 px** et `$12` **144 px** — prendre
+les valeurs au pied de la lettre met la bouche sur le bandeau de gauche du
+portrait.
+
+Les yeux sont posés **une seule fois**, quand le compteur `(-120)` vaut 16
+dans la branche « mode termine » (L14650) ; comme l'asm écrit dans l'écran
+déjà affiché, ils restent. La bouche est redessinée à **chaque** itération :
+comme 35 lignes couvrent exactement les 35 lignes de l'image précédente,
+osciller entre les bouches 0..4 donne l'impression d'une bouche qui parle.
+
+### La boucle du discours (L14619‑14742)
+
+Une itération = les **quatre** `_waittof` de L14717‑14720, puis le dessin,
+puis :
+
+```python
+if _check_effect(2) == 0:              # L14731‑14732 : la voie sonne encore
+    (-108) += (-110)                   # L14733‑14734
+    if (-108) >= 4 or (-108) <= 0:     # L14735‑14738
+        (-110) = -(-110)               # L14740
+```
+
+Les deux branches « hors fenêtre de mots » remettent `(-108) = 0` et
+`(-110) = 1` (L14661‑14662 et L14714‑14715), de sorte que la bouche ne peut
+osciller que pendant les itérations où l'on dit un mot — précisément celles
+où `c` **n'avance pas** faute de canal libre (`_check_effect(2) == 0`).
+
+* mode termine (`(-122) != 0`) : `_end_words[c-10]` aux compteurs 10..14 ;
+* sinon : `_words[monde*2]` et `_words[monde*2+1]` aux compteurs 11 et 12,
+  les `$FFFF` étant sautés (L14691) ; le compteur 10 joue le son 0 sans
+  condition.
+
+### Le texte
+
+Deux `_text` **nus** — pas de `_requester` — en `x = 8` **pixels** (le
+listing fait `LSR.W #3`, L19978) et `y = $B2` / `$BA` (L14526, L14559,
+L14588) :
+
+* première ligne : `strWellDoneConq` si le mode est bouclé, sinon
+  `strWellDone` + `_con_text[level/250 + 0x18]` + `strYouConquered` —
+  où `_con_text[0x18 + monde]` est la **note** (`MORTAL` … `ETERNAL GOD`,
+  L21353‑21392) ;
+* seconde ligne : `strBattleOverTry`, ou `GENESIS` si `_seed == 0` sinon
+  `_code(newrand())`, puis `strNowBattleAt`, puis `_message`.
+
+`_code` (L14793‑14889) assemble trois syllabes : `_start[graine & 0x1F]`,
+ `_mid[(graine >> 5) & 0x1F]`, `_end[(graine >> 10) & 0x1F]` — exactement
+ les tables que `decode()` inverse.
 
 ## 6.5 `_show_world` et le choix du monde
 
