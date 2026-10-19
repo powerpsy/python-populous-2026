@@ -6850,11 +6850,119 @@ le bug, pas le listing.
 | `smoke_sim` (3000 tours) | OK |
 | `stress 2000 8` | **8/8** |
 
-**Reste a ce jour** : la liaison serie (codes 2 et 8), et l'etape A de
-l'ecran de fin — le boite `_requester(d_screen, $10, $10, $120, $A6, (-60),
-NULL)` de `_end_game` (L14356-14363) et ses sept lignes tirees de
-`_end_text` / `LAB_5226E` (L24790-24793). `draw_end_screen` garde pour
-l'instant quatre boites approximatives en lieu et place.
+**Reste a ce jour** : la liaison serie (codes 2 et 8), et l'introduction
+(`populous_main.asm`, Phase 84).
+
+### Phase 83 - `_end_game` : une boite et sept lignes
+
+Le port dessinait l'ecran de fin avec **quatre** boites inventees, en
+`y = $A6`, `$B2`, `$BA` et `$C8`, de tailles `$FF` x `$40` : apres la
+correction du `D5` de la Phase 82, elles tombaient entre les lignes 166 et
+263, c'est-a-dire hors de l'ecran. Le listing, lui, n'en fait qu'une, et le
+reste est du texte nu.
+
+#### Ce que fait `_end_game` (L14019-14440), dans l'ordre
+
+1. **La construction** (L14021-14340). La boucle `i = 0..6` saute par
+   `LAB_489DA` (L14291-14297) dans le tableau `LAB_489CC` (L14283-14290),
+   qui porte sept adresses : `LAB_486AA` (i = 0, `LOST`/`WON`),
+   `LAB_489CA` (i = 1, no-op), `LAB_486EC` (i = 2, batailles gagnees),
+   `LAB_48724` (i = 3, chevaliers), `LAB_487A6` (i = 4, villes),
+   `LAB_4883E` (i = 5, chateaux), `LAB_488DC` (i = 6, score). Chaque
+   branche **ecrit** sa valeur dans le gabarit `strGAME_ + i*46`.
+2. **Le titre** (L14341-14354) : `strTryItAgain` si `perdu != 0` **et**
+   `_in_conquest != -1`, `strNew_Game` sinon.
+3. **La boite** (L14356-14364) : `_requester(_d_screen, $10, $10, $120,
+   $A6, (-60,A5), NULL)` - la meme geometrie que `_options` (L13636).
+4. **Les sept lignes** (L14365-14389) : `_text(_d_screen, x + $10, y + $10,
+   chaine)`, x en pixels et y en lignes, sur les sept enregistrements de
+   46 octets de `_end_text` (L24790-24805).
+5. **L'attente** (L14390-14403) : `_left_button = 2` puis `_check_cancel`,
+   qui boucle tant que le clic n'a pas touche la structure titre `(-60,A5)`.
+
+#### Les trois tables
+
+`_end_text` (L24790) donne les abscisses, `LAB_5226E` (L24792) les
+ordonnees, `strGAME_` (L24794-24805) les sept chaines. `strLOST` =
+`strGAME_ + 5` : c'est le **suffixe** de la premiere ligne qui change, pas
+la ligne. `strScoreboard` = `strGAME_ + 19` (L24803) : c'est l'octet 19 ou
+les chiffres ecrivent, et le zero final de `___strcpy` tronque tout ce qui
+suivait dans le gabarit.
+
+#### `word_asc` : les espaces sont a droite
+
+`___word_asc` (L21054-21101) ne pose aucun espace. C'est L14303-14320 qui
+complete le premier nombre **a cinq caracteres, avec des espaces derriere
+lui**, puis `___strcpy` + `___strcat` (L14321-14336) posent le second.
+La ligne `BATTLES WON` affiche donc `3    7` et non `0003 0007`.
+
+#### Le binaire d'origine le confirme
+
+`reference/original/extracted/DAD` contient les sept gabarits tels que
+l'assembleur les a ecrits, et meme legerement salis par une execution
+anterieure interrompue. Le salissage tombe juste : sur la ligne 2, les
+octets laisses valent exactement `_deux(gabarit, word_asc(0), word_asc(0))`
+= `BATTLES WON        0    0` ; sur la ligne 6, `long_asc(6115)` suivi des
+deux `0` de queue du gabarit `000000000`. Et le chiffre gele, 6115,
+s'obtient bien en execution : 10 (le villageois de depart, `+ n*10`) + 6000
+(les six pouvoirs de l'adversaire) + 105 (`15 * (10 - 3)`), sans `x10`
+puisqu'il s'agit d'une defaite.
+
+#### Le score (L14204-14271)
+
+Transcrit dans `populous/endtext.py:score_final` : `+5000` si le joueur a
+remporte plus de batailles que l'adversaire ; `+1000` par pouvoir que le
+joueur **n'a** pas, `+1000` de plus par pouvoir que l'adversaire **a** (les
+six bits 3..8 de `LAB_516B2` = `_stats + $0E`, boucle L14219-14241) ;
+`15 * (10 - period)` en solo (`_serial_off != 0`, L14242-14252) ; `x10`
+sur une **victoire** seulement (L14254-14260) ; bornage a
+`[500, 515090]` (L14263-14270).
+
+#### Un ecriture morte, relevee
+
+L14202, dans la branche CHATEAUX, recopie `(-14,A5)` dans `(-10,A5)`
+**apres** les deux `___word_asc`. Les chaines sont deja ecrites : l'ecriture
+n'a aucun effet a l'ecran. Relevee dans `endtext.py`, non reproduite.
+
+#### Ce qui a bouge
+
+* **`populous/endtext.py`** (nouveau) : `END_BOITE`, `END_X`, `END_Y`,
+  `END_TEXTE`, `word_asc`, `long_asc`, les trois predicates de comptage,
+  `score_final`, `titre`, `construire` ;
+* `Game._end_game` construit le tableau **une fois**, au moment ou l'asm le
+  construit, avant d'attendre le clic - et non pas a chaque image ;
+* `Game.draw_end_screen` : une `requester(0x10, 0x10, 0x120, 0xA6, titre)`
+  puis sept `draw_text` en `((END_X + $10) // 8, END_Y + $10)` ; les deux
+  lignes de `_won_conquest` passent par-dessus, en `_text` nus, comme
+  L14526 et L14588.
+
+**ECART de presentation** : dans l'original, la structure titre `(-60,A5)`
+n'est qu'une **zone de clic**, et ce que `_requester` affiche a sa place est
+l'etiquette `OK` de `_end_ok+6` (L24354). Le port, qui ne pose pas les
+boutons (ECART Phase 67), y ecrit le **libelle du bouton** lui-meme :
+`NEW GAME` ou `TRY IT AGAIN`.
+
+#### Verification (Phase 83)
+
+| controle | resultat |
+|---|---|
+| `tools/check_end_screen.py` (nouveau, **70 controles**) | **70/70** |
+| les 33 `check_*.py` | **0 echec** |
+| `check_render` | OK |
+| `check_assets` | OK |
+| `check_funny` | OK |
+| `autopilot 59 0 3` | **84/84** |
+| `smoke_sim` (3000 tours) | OK |
+| `stress 2000 8` | **8/8** |
+
+Le controle nouveau confronte le port au **listing** ligne a ligne
+(L14356-14389, L14284-14290, L24790-24811, L21057, L14202), puis au
+**binaire DAD** octet a octet (les sept x/y, les sept gabarits, le
+salissage de reserve), puis en execution : `word_asc` sur 18 valeurs
+signees, `score_final` face a une reecriture independante sur 500
+configurations, `_compter` face a un balayage independant, et enfin le
+rendu lui-meme - une seule icone de coin, sept appels `_text` aux
+coordonnees exactes, chaque ligne presente en pixels, rien sous la ligne 192.
 
 ## Note honnête sur l'équilibrage
 

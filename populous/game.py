@@ -53,6 +53,7 @@ from populous.assets import load_pic, load_sprites  # noqa: E402
 from populous.assets import load_land as load_tiles  # noqa: E402
 from populous.config import DEFAULT_GROUND, DEFAULT_SEED  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
+from populous import endtext  # noqa: E402
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import (BLOC_H, BLOC_X, BLOC_Y,  # noqa: E402
                                    END_WORDS, PALIER_NOMS, WORDS,
@@ -185,6 +186,10 @@ class Game:
         self.victory_graine = 0     # le mot de `_code(newrand())`, L148D1C
         self.victory_pal = []       # `_tcmap[0..15]`, la palette de lord.pic
         self.victory_texte = ("", "")   # les deux lignes de `_text`
+        # `_end_text` + `strGAME_` (L14021-14389) : le tableau des scores,
+        # construit **une fois** dans `_end_game` et relu a chaque image.
+        self.end_titre = endtext.TEXT_NEW_GAME
+        self.end_lignes = list(endtext.END_TEXTE)
         self.victory_vblank = 0     # les 4 `_waittof` de L148EF2-148EFE
         self.victory_music = 1      # (-116,A5) : `_music_off` sauvegarde
         self.victory_effect = 1     # (-118,A5) : `_effect_off` sauvegarde
@@ -616,9 +621,10 @@ class Game:
     # avec les touches, comme le joueur ferait.
 
     TEXT_TRY_NUMBER = "TRY NUMBER "
-    # les chaines de l'ecran de fin, prises dans le listing
-    TEXT_LOST = "LOST"                 # strLost    (L14441)
-    TEXT_TRY_AGAIN = "TRY IT AGAIN"    # strTryItAgain (L14449)
+    # les chaines de l'ecran de fin, prises dans le listing : la source
+    # unique est `populous.endtext` depuis la Phase 83.
+    TEXT_LOST = endtext.TEXT_LOST                # strLost       (L14441)
+    TEXT_TRY_AGAIN = endtext.TEXT_TRY_IT_AGAIN   # strTryItAgain (L14449)
 
     def open_conquest_dialog(self) -> None:
         """Ouvre la saisie du numero de niveau (asm L11926-11971).
@@ -694,28 +700,41 @@ class Game:
                        d["tampon"])
 
     def draw_end_screen(self) -> None:
-        """L'ecran de fin — `_end_game` (asm L14019) puis `_won_conquest`.
+        """L'ecran de fin : `_end_game` (asm L14356-14389).
 
-        L'asm ecrit trois lignes avec `_requester` (L14358-14363) puis la
-        ligne d'en-tete en `(8, 0xB2)` et `(8, 0xBA)` (L14526/L14588). Les
-        deux cas se ressemblent a l'ecran mais pas dans le code : le
-        `_requester` de `_end_game` trace une **boite**, alors que les deux
-        lignes de `_won_conquest` sont des `_text` nus. Voir
-        :meth:`draw_victory_screen` pour ces la.
+        **Une** boite et **sept** lignes — et non quatre boites : le
+        listing appelle une seule fois
+        ``_requester(_d_screen, $10, $10, $120, $A6, titre, NULL)``
+        (L14356-14363) puis boucle sept ``_text`` (L14366-14389) sur les
+        sept enregistrements de ``_end_text`` (L24790-24805), avec
+        ``x + $10`` et ``y + $10``. Le tableau lui-meme est construit par
+        :mod:`populous.endtext`, une fois pour toutes, dans
+        :meth:`_end_game`.
+
+        Les deux lignes d'en-tete de ``_won_conquest`` sont, elles, des
+        ``_text`` nus en ``(8, $B2)`` et ``(8, $BA)`` (L14526/L14588) —
+        elles passent **par-dessus** le tableau, puisque le listing les
+        trace **apres** lui. Voir :meth:`draw_victory_screen`.
+
+        **ECART de presentation** : dans l'original, la structure titre
+        ``(-60,A5)`` n'est qu'une **zone de clic**, et ce que
+        ``_requester`` affiche a sa place est l'etiquette ``OK`` de
+        ``_end_ok+6`` (L24354). Le port, qui ne pose pas les boutons
+        (ECART Phase 67), ecrit a la meme adresse le **libelle du bouton**,
+        c'est-a-dire ``NEW GAME`` ou ``TRY IT AGAIN`` : plus lisible, et
+        aucune donnee de jeu n'en depend.
         """
         if not self.game_ended or self.victory_speech:
             return
+        self.requester(*endtext.END_BOITE, self.end_titre)
+        for i, ligne in enumerate(self.end_lignes):
+            self.ren.draw_text(self.frame, (endtext.END_X[i] + 0x10) // 8,
+                               endtext.END_Y[i] + 0x10, ligne)
         if self.conquest is not None:
             # LAB_48F84 (L148C54) : `lord.pic` absent, le discours est saute
             # et l'ecran garde ce que `_end_game` avait trace.
-            self.requester(0x08, 0xB2, 0xFF, 0x40, self.victory_texte[0], "")
-            self.requester(0x10, 0xBA, 0xFF, 0x40, self.victory_texte[1], "")
-        else:
-            # hors conquete, l'asm affiche le tableau des scores
-            self.requester(0x10, 0xA6, 0xFF, 0x40,
-                           "YOU WIN" if self.victory else self.TEXT_LOST, "")
-        # « TRY IT AGAIN » invite a continuer (strTryItAgain, L14452).
-        self.requester(0x10, 0xC8, 0xFF, 0x40, self.TEXT_TRY_AGAIN, "")
+            self.ren.draw_text(self.frame, 1, 0xB2, self.victory_texte[0])
+            self.ren.draw_text(self.frame, 1, 0xBA, self.victory_texte[1])
 
     def tick(self) -> None:
         """Un pas de temps : un seul appel a ``move_peeps``.
@@ -795,6 +814,13 @@ class Game:
         self.game_ended = True
         # l'argument de l'asm est 1 = le joueur a perdu (« LOST », L14029).
         self.victory = not perdu
+        # L14021-14340 : la boucle `i = 0..6` construit les sept chaines du
+        # tableau des scores **avant** de poser la boite, et le calcul du
+        # score (L14204-14271) y est inclus : `_score` est donc deja le
+        # bon quand `_won_conquest(score)` est appele a L14416.
+        self.end_titre, self.end_lignes, self.score = endtext.construire(
+            perdu, self.sim, self.score,
+            -1 if self.conquest is None else self.conquest_no)
         if self.conquest is not None:
             # L14412 : `_won_conquest(score)`.
             self.score += self.sim.population(self.sim.player)
@@ -996,16 +1022,16 @@ class Game:
         320 pixels, `$10` vaut 128 pixels et `$12` vaut 144 — c'est ce qui
         met la bouche sur la bouche du portrait.
 
-        Les deux lignes d'en-tete sont des `_text` **nus** — contrairement
-        aux boites de `_end_game` — ecrites une fois pour toutes dans
+        Les deux lignes d'en-tete sont des `_text` **nus** — contrairement a
+        la **seule** boite de `_end_game` — ecrites une fois pour toutes dans
         ``_w_screen`` avant `_show_screen` (L14526, L14559, L14588). Le port
         les redessine a chaque image sur le meme fond, ce qui revient au
         meme puisque rien d'autre ne change. Ici, en revanche, `x` **est**
         en pixels : c'est le listing qui divise.
 
-        Sans ``lord.pic`` (ou hors conquete), on retombe sur le texte seul :
-        c'est le chemin ``LAB_48F84``, ou l'asm n'affiche que ce qu'avait
-        dessine ``_end_game``.
+        Sans ``lord.pic`` (ou hors conquete), on retombe sur le tableau des
+        scores seul : c'est le chemin ``LAB_48F84``, ou l'asm n'affiche que
+        ce qu'avait dessine ``_end_game``.
         """
         if not self.game_ended:
             return

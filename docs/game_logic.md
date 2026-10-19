@@ -21,7 +21,7 @@
 | `reference/tetracorp/populous_prg.asm` | désassemblage principal (25 698 lignes) — **toutes** les citations renvoient ici |
 | `reference/tetracorp/populous_prg.cnf` | table symbole → adresse |
 | `reference/tetracorp/symbols_prg.txt` | liste plate des symboles (701 entrées) |
-| `reference/tetracorp/populous_main.asm` / `.cnf` | désassemblage secondaire (non consulté) |
+| `reference/tetracorp/populous_main.asm` / `.cnf` | desassemblage de l'hunk `populous` : c'est **l'introduction** (Phase 84), pas une seconde version du jeu |
 | `readme.md` | notes du désassembleur |
 
 ### 0.2 Pièges de lecture du désassemblage
@@ -1482,22 +1482,50 @@ Table de 7 entrées (lignes 14284‑14290, dispatch borné à 7 en 14291‑14297
 | 2 | `LAB_486EC` | 14049‑14066 | `_battle_won[player]` et `_battle_won[not_player]` convertis en chaînes |
 | 3 | `LAB_48724` | 14067‑14108 | compte les peeps avec `target != 0` **et** `life != 0`, séparés par tribu |
 | 4 | `LAB_487A6` | 14109+ | compte les peeps avec `state == 1` (villageois), `life != 0`, `frame != 0x2A` |
-| 5 | `LAB_4883E` | — | **[?] non relu** |
-| 6 | `LAB_488DC` | 14230‑14252 | bonus de pouvoirs : `+0x3E8 (1000)` par bit de `LAB_516B2[not_player]` (lignes 14234‑14237) ; `+15 × (10 − stats[not_player].p10)` (lignes 14244‑14252) |
+| 5 | `LAB_4883E` | 14155-14203 | compte les peeps avec `state == 1` (villageois), `life != 0` et `frame == 0x2A` (grande ville), separes par tribu |
+| 6 | `LAB_488DC` | 14204-14280 | **le score** (voir ci-dessous) |
 
-**Calcul du score** (lignes 14254‑14278) :
+**Calcul du score** (lignes 14204-14271), transcrit dans
+`populous/endtext.py:score_final` :
 
 ```python
-    if arg1 == 0:                     # victoire
-        score *= 10                   # L14256‑14260  « x10 points for winning »
-    if score < 500:     score = 500          # L14263‑14265  minimum
-    if score > 555_555: score = 515_090      # L14268‑14270  plafond
-    long_asc(score, &strScoreboard[idx*46])  # L14272‑14278
+    if _battle_won[player] > _battle_won[not_player]:
+        score += 5000                    # L14205-14217
+    masque = 8                           # L14219
+    while True:                          # L14220-14241  six bits, 3..8
+        if not (_stats[player].power_mask & masque):       score += 1000
+        if     (_stats[not_player].power_mask & masque):   score += 1000
+        masque <<= 1
+        if masque > 0x100: break
+    if _serial_off:                      # L14242-14243   solo
+        score += 15 * (10 - _stats[not_player].p10)   # L14244-14252
+    if arg1 == 0:                        # victoire
+        score *= 10                      # L14254-14260
+    if score < 500:      score = 500          # L14263-14265
+    if score > 555_555:  score = 515_090      # L14268-14270
+    long_asc(score, &strScoreboard[idx*46])   # L14272-14278
 ```
 
-Chaînes visibles : **`LOST`**, **`WON`**, **`TRY IT AGAIN`**, **`NEW GAME`**
-(relevé antérieur ; non re‑vérifié dans cette session **[?]**).
-Cases 2‑5 : les chaînes sont complétées par des espaces (lignes 14299‑14314).
+**Remplissage des lignes 2 a 5** (lignes 14299-14336) : `word_asc`
+(L21054-21101) ne pose **aucun espace** ; c'est L14303-14320 qui complete le
+premier nombre **a cinq caracteres, avec des espaces derriere lui**, puis
+`___strcpy` + `___strcat` posent le second. `strScoreboard` =
+`strGAME_ + 19` (L24803) : le chiffre s'ecrit donc a l'octet 19 du gabarit,
+et le zero final tronque tout ce qui suivait.
+
+**Ligne 5, ecriture morte** : L14202 recopie `(-14,A5)` dans `(-10,A5)`
+**apres** les deux `___word_asc` ; les chaines sont deja ecrites, l'ecriture
+n'a aucun effet a l'ecran.
+
+**Titre de la boite** (lignes 14341-14354) : `strTryItAgain` si `perdu != 0`
+**et** `_in_conquest != -1`, `strNew_Game` sinon. Chaines visibles :
+`GAME LOST` / `GAME WON` (le `GAME ` de `strGAME_` reste en tete),
+`LOST`, `WON`, `TRY IT AGAIN`, `NEW GAME`.
+
+**La boite elle-meme** (lignes 14356-14364) : **une seule**
+`_requester(_d_screen, $10, $10, $120, $A6, (-60,A5), NULL)`, puis **sept**
+`_text(_d_screen, x + $10, y + $10, chaine)` (lignes 14365-14389) sur les
+sept enregistrements de `_end_text` / `LAB_5226E` (46 octets chacun).
 
 ## 6.3 `_won_conquest(score)` — ligne 14460 ($48BAC)
 
