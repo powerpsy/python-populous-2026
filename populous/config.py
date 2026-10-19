@@ -74,6 +74,14 @@ TURNS_PER_FRAME = 1.0
 #: directement en partie, comme dans notre port. **Parametre.**
 START_IN_CONQUEST = False
 
+#: Jouer l'intro (``populous.intro``, Phase 84) avant la partie. L'original
+#: demarre dessus : sur la disquette de 1989, ``populous`` (29116 o) **est**
+#: le programme d'intro, et il lance ``populous.prg`` ( ``SUB_16E``). Ici
+#: l'intro se termine par un retour vers ce lanceur. **Parametre**, ferme par
+#: defaut : la phase de script de ``SUB_714`` (Phase 85) n'est pas encore
+#: jouee, et la glue OS/cuivre non plus (voir ``populous.intro.demarrer``).
+SHOW_INTRO = False
+
 # ------------------------------------------------------------------- depart
 #: Graine et terrain par defaut, quand on lance sans argument. **Parametre.**
 DEFAULT_SEED = 1

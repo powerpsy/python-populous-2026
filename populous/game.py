@@ -4039,6 +4039,16 @@ class Game:
            compteur entier, afin que `TURNS_PER_FRAME` accepte n'importe
            quelle valeur (1.0, 3.0, 7.5...) sans derivation cumulative.
         """
+        # Phase 84 : l'intro d'attirance (populous.intro), voir
+        # config.SHOW_INTRO. L'original demarre dessus et sort par SUB_16E ;
+        # ici ``demarrer`` renvoie le choix de l'ecran titre, 0 quand le
+        # demo a ete quitte, et -1 si la fenetre a ete fermee.
+        if config.SHOW_INTRO:
+            from . import intro
+            if intro.demarrer(self.frame, self.clock,
+                              im_par_seconde=50.0) < 0:
+                self.running = False
+
         # _start_of_game == 2 : choix de monde direct (L3E7B0-3E7E3)
         # L'original : clear _start_of_game, ___clr_wsc, ___swap_screens,
         # boucle ___show_world jusqu'a retour != -1, puis ___return_to_game,

@@ -6964,6 +6964,127 @@ configurations, `_compter` face a un balayage independant, et enfin le
 rendu lui-meme - une seule icone de coin, sept appels `_text` aux
 coordonnees exactes, chaque ligne presente en pixels, rien sous la ligne 192.
 
+### Phase 84 — l’introduction : l’écran titre, la chute, les crédits
+
+Dernier sous-système majeur non transcrit. Sur la disquette de 1989, le
+fichier `populous` (29 116 octets) **est** le programme d’intro : il charge les
+ressources, joue l’attract, puis lance `populous.prg` par `SUB_16E`. Le
+listing est `reference/tetracorp/populous_main.asm`, hunk S_0
+`0x0000..0x6D27`, base A4 = `SECSTRT_1+$7FFE` = `0xED26` (`SUB_65F0` ;65f0).
+
+#### Ce qui a été transcrit (Phase 84)
+
+* **`populous/intro.py`** (nouveau, 745 lignes) :
+
+| bloc | routine du listing | statut |
+|---|---|---|
+| LCG de l’intro | `SUB_6538` ;6538 (`$41C64E6D`, `$3039`, masque `$7FFF`) | transcrit |
+| les trois zones du titre | `SUB_456` ;04b6-0512, `ZONES`, `DELAI_TITRE = $55730` | transcrit |
+| souris 0..319 sur les deux axes | `LAB_529A` ;52a6-52ac (`$27F`, `LSR`) | transcrit, **ECART** sur la hauteur d’écran |
+| blitter de fond | `Ecran.vider` / `SUB_358` ;0358 | recopié, **ECART** sur la chaine `SUB_308` |
+| rendre un bitmap | `Ecran.surface` / `SUB_19EE` ;2049-2066 | transcrit |
+| pose d’une sprite | `SUB_19EE` ;19ee-1b14 (AND masque + OR plans, `ROR.L`) | transcrit |
+| fondu de ligne | `SUB_5026` ;5026-50ae + `FADE` (`LAB_1F62`) | transcrit |
+| rouleau a deux slots | `SUB_536` ;0540-0556, corps `LAB_76A` ;076a-0824 | transcrit |
+| trace d’une ligne | `SUB_1D1A` ;1d1a, curseur `SUB_1D0E` | transcrit |
+| 23 chaines de credits | `LAB_1DCE` L2372-2394 (+ dump L2346-2371, `DC.W $FF00` ;1f60) | transcrit |
+| grille de 100 cases | `SUB_10A2`/`SUB_110A`/`SUB_1186`/`SUB_1BE8` | transcrit, bug de `SUB_110A` reproduit |
+| pose de la grille | `SUB_1C12` ;1c12-1cba | transcrit (y compris le `MULU`/`LSR.W` non signé) |
+| tables `TYPE`/`DRAPEAU`/`HAUTEUR_CASE` | `LAB_640C` ;640c-6537 (300 octets, `DS.L` comprises) | transcrit |
+| decodage `land0` | `SUB_16E4` ;16f8-1720, `SUB_1B8A` | transcrit (**ECART** : on lit le fichier tel quel) |
+
+* **`tools/check_intro.py`** (nouveau) : **97 contrôles**, tous en lecture du
+  listing et en exécution (voir plus bas) ;
+* **`populous/config.py`** : `SHOW_INTRO = False` (paramètre). L’intro est
+  pilotable par `populous.intro.demarrer`, mais le lanceur ne la joue pas par
+  défaut : la phase 85 n’est pas là ;
+* **`populous/game.py`** : un appel conditionné `intro.demarrer(self.frame,
+  self.clock)` au début de `Game.run`, qui rend la main sur fermeture de
+  fenêtre.
+
+#### Analyse seulement (pas encore transcrite)
+
+* **`SUB_714`** ;0714-... : l’interpréteur de script à 16 lignes —
+  `SUB_50B2`, `SUB_50E6`, `SUB_1910`, lignes `LAB_15B6`→`LAB_15F6`, données
+  `0x1272..0x15B4`. C’est la **Phase 85** ;
+* **`SUB_16E`** : exécution de `populous.prg`, remplacé par le retour au
+  lanceur ;
+* **la glue OS/cuivre** : `SUB_358`/`SUB_308`, `SUB_58CA`, `SUB_549A`,
+  `SUB_5792` (lecture `CIAA_SDR`). Le port efface le tampon avant chaque
+  image, qui est le rendu visible que cette chaine produit ;
+* **`demo.pic`** et **`sprites0.dat`** : chargés par `SUB_1696`/`SUB_16E4`,
+  pas encore rejoués ;
+* **le son de l’intro** (`popsam`, `SUB_2DD8`).
+
+#### Cinq ECARTs assumés
+
+1. l’écran titre du port fait 320×200 et la souris est ramenée à `0..319`
+   sur les deux axes : la hauteur réelle de l’écran titre (200 ou 256) n’est
+   pas établie par le listing ;
+2. `LAB_6F82` (base des sprites de l’intro) n’est jamais écrit : le port
+   pointe sur `land0` tel quel, comme le prouve la boucle de `SUB_1B8A`
+   (1680 × 20 = `0x8340` octets) ;
+3. `LAB_7226` (facteur d’échelle isométrique) non plus : 1.0, soit `$80`
+   dans le `LSR.W #7` ;
+4. le rythme de `demarrer` vient d’une horloge pygame ; l’attente du titre
+   (30 s) remplace le compte d’iterations de ;04a0-04ae, non datable sans
+   émulateur (`attente_titre < 0` retombe sur le compte brut `$55730`) ;
+5. le son de l’intro n’est pas porté.
+
+#### Trois fauts du listing, reproduits et non corrigés
+
+* **le retour de `SUB_110A`** : le premier `D5` **non nul** et non la case 0,
+  parce que la garde est `TST.W (-2,A5)` ( ;114c-1152). `SUB_1186` n’en fait
+  qu’un booléen ;
+* **`DIVS #2`** tronque vers zéro : Python `-(abs(v)//2)`, vérifié contre une
+  sémantique 68000 indépendante ;
+* **l’écriture au bout de la ligne** : `A0` avance sans reboucler, donc une
+  sprite à `x >= 288` écrit les deux octets suivants dans la ligne d’après
+  (et, sur une limite de plan, dans le plan voisin). Reproduit.
+
+#### Vérification (Phase 84)
+
+| contrôle | résultat |
+|---|---|
+| `tools/check_intro.py` (nouveau, **97 contrôles**) | **97/97** |
+| les 34 `check_*.py` | **0 echec** |
+| `check_render` | OK |
+| `check_assets` | OK |
+| `check_funny` | OK |
+| `check_victory_speech` | **55/55** |
+| `autopilot 59 0 3` | **84/84** |
+| `smoke_sim` (5000 tours) | OK |
+| `stress 2000 8` | **8/8** |
+
+Le contrôle nouveau confronte le port au **listing** et en exécution :
+
+* il reconstruit `LAB_640C` (300 octets, `TYPE` + `DRAPEAU` +
+  `HAUTEUR_CASE` avec ses quatre `DS.L`), les 18 mots de `LAB_1F62` et les
+  23 chaînes de `LAB_1DCE` **en relisant le fichier .asm**, et les compare au
+  port — y compris le dump d’octets que le désassembleur a laissé en
+  commentaires (402 octets identiques) ;
+* `Alea` face à la récurrence de ;653c/;654a sur 50 tirages ;
+* `Grille.avancer` face à une **réécriture 68000 indépendante** sur
+  40×30 tours, plus le bug de `SUB_110A` ;
+* `Ecran.sprite` bit à bit : six placements (décalages 0, 7, 10, 12, 15 ;
+  `x = 300` pour le débordement de ligne ; `y = 195` pour la coupe à
+  `0xC7 - y`), chaque pixel comparé à `dest = (dest & masque) | donnees`, et
+  le fond des pixels hors sprite doit rester **inchangé** ;
+* `Ecran.blitter` face à la formule `SUB_5026` sur un motif quelconque, puis
+  la conservation du fond là où le plan 0 source vaut `$FF` ;
+* `Credits.dessiner_ligne` face à un décodage indépendant de `font.dat` ;
+* `zone_titre` face à une retranscription directe de ;04b6-0512 sur 40 000
+  positions, puis les huit bornes `CMPI` relues dans l’asm ;
+* enfin la simulation : 58 tours de chute avec grille non vide à 52 images,
+  curseur de crédits laissà à 0 pendant tout `SUB_1186` (`SUB_5792` n’est que
+  la lecture clavier), les 100 cases à l’arrêt dans `x 0..288 / y 8..176`,
+  2 000 tours de rouleau passant les 23 chaînes, 77 appels de `SUB_1D1A`,
+  un cycle de 51 tours, et l’intégrité d’un écran non touché.
+
+Le rendu a été regardé : la grille au repos forme bien le losange
+isométrique de Populous avec ses drapeaux, les tuiles tombent du haut, et une
+ligne de crédits monte en se tramat.
+
 ## Note honnête sur l'équilibrage
 
 Les deux tribus ne prospèrent pas sur **toutes** les graines : sur les cartes

@@ -1773,6 +1773,106 @@ La routine rend alors ce monde.
 
 ---
 
+## 6.6 L’introduction — écran titre, chute des cases, crédits (Phase 84)
+
+Sur la disquette de 1989 le fichier `populous` (29 116 octets) **est** le
+programme d’intro : il charge les ressources, joue l’attract, puis lance
+`populous.prg` par `SUB_16E`. Le port est `populous/intro.py` ; le listing est
+`tetracorp/populous_main.asm`, hunk S_0 `0x0000..0x6D27`, base A4 =
+`SECSTRT_1+$7FFE` = `0xED26` (`SUB_65F0` ;65f0), d’où les offsets négatifs du
+type `(-32074,A4)` = `0x6F52`.
+
+### L’écran titre — `SUB_456` ( ;0456-052a)
+
+* `SUB_17B2("load.pic")` ( ;045e-0466) charge les 40 064 octets (320×200×5
+  plans + 64 octets de palette) et `SUB_549A(..., 5)` ( ;046c-0480) les
+  affiche sur **cinq** plans, soit 32 couleurs, alors que `SUB_15FA` ;15fa
+  n’alloue que des bitmaps à quatre plans.
+* La boucle `LAB_4A0` ( ;04a0-051c) compte dans `(-6,A5)` et sort sur
+  `CMP.L #$00055730,D0 ; BGT` ( ;04a8) avec le choix encore à 0.
+* `TST.W (-32004,A4) ; BNE` ( ;04b0-04b4) ne sonde les zones **que si ce mot
+  vaut 0**. Il vaut 2 à l’entrée ( ;0492) et repasse à 2 à la sortie
+  ( ;051e) : le test n’a donc lieu qu’avec le bouton enfoncé.
+* Les trois zones ( ;04b6-0512) comparent dans l’ordre : `[$9C,$AA[` ×
+  `y ≥ $E7` → 3, `[$AA,$B8[` × `y ≥ $E7` → 2, `x ≥ $B8` × `y ≥ $F1` → 1 ;
+  sinon la boucle reboucle sans rien rendre. C’est `intro.zone_titre`.
+* `(-32002)` (x) et `(-32000)` (y) viennent du pilote souris, plafonnés à
+  `$27F` puis divisés par deux (`LAB_529A` ;52a6-52ac) : les deux axes vivent
+  dans `0..319`. C’est `intro.souris_amiga`.
+
+### La chute des 100 cases — `SUB_1186` ( ;1186-1236)
+
+1. `SUB_10A2(100)` ( ;11c4-11cc) range les colonnes dans `[232,244]` et les
+   vitesses dans `[0,9[`, puis `SUB_1D0E` ( ;11d4) remet le curseur de
+   crédits à zéro.
+2. La boucle `LAB_11D8` ( ;11d8-120c) : `SUB_110A(100)` avance les cases
+   (l’arrêt est détecté par `TST.W (-2,A5)` en ;114c, **pas** par un indice :
+   le retour est le premier `D5` non nul, bug reproduit), `SUB_58CA` recopie
+   `$1F40` mots entre deux tampons ( ;58ca), `SUB_1C12` dessine, `SUB_358`
+   échange `(-32078)` et `(-32074)` puis appelle `SUB_308(..., $FFFF)`
+   ( ;0358-0380), et `SUB_5792` lit `CIAA_SDR` — le clavier, **pas** les
+   crédits.
+3. La case `i` va en `x = (col-rang)*16 + $90` et
+   `y = (col+rang)*8 + $20 - colonne[i] - hauteur[i]` ( ;1c32-1c4c), puis
+   `MULU LAB_7226` + `LSR.W #7` ( ;1c5c-1c6a). `MULU` est non signé et `LSR.W`
+   ne décale que le mot de poids faible : le résultat tient sur neuf bits, un
+   `y` négatif revient en `y+512`. Sur les portées réelles (`x` dans
+   `0..288`, `y` dans `-236..176`) ce repli vaut toujours `276..511`, donc
+   `>= 200`, et `SUB_19EE` refuse d’y dessiner — mais la formule appliquée est
+   celle du listing (`intro.echelle_pos`).
+4. Si `DRAPEAU[i] != 0`, un second sprite recouvre la case huit lignes plus
+   haut ; le `SUBQ.W #8` ( ;1c7c) porte sur l’ordonnée **brute**, avant mise
+   à l’échelle, puisque ;1c70 recharge `D0/D1` sauvés en ;1c52.
+
+La chute dure 58 tours ; au repos les colonnes valent 0 et les 100 cases
+tiennent dans le losange `x` dans `0..288`, `y` dans `8..176`.
+
+### Le dépassement de ligne dans `SUB_19EE`
+
+Un paquet de 16 pixels tient sur **un** mot par couche : cinq mots
+(masque + quatre plans) pour 10 octets, deux paquets pour les 32 pixels
+( ;1a3a-1a42 puis ;1aaa-1ab2). Le débordement de `dec` pixels part dans le mot
+suivant (`SWAP` puis `ADDA.W #2`, ;1a6e-1a78), et le paquet suivant repart à
+cet endroit même : le pas entre paquets est de **2 octets**. Comme `A0` avance
+sans reboucler de ligne, une sprite placée à `x >= 288` (`colonne + 4 >= 40`)
+écrit les deux octets suivants au début de la ligne suivante — comportement
+reproduit, pas corrigé. Le masque, lui, est chargé dans un registre pré-réglé
+`$FFFFFFFF` ( ;1a2c) : c’est son mot haut qui fournit les bits de conservation
+des `dec` premiers pixels.
+
+### Le rouleau de crédits — `SUB_536` et `SUB_714`
+
+* `SUB_536` ( ;0540-0556) désigne les deux tampons `LAB_1FA2`/`LAB_25E2` et
+  arme les deux compteurs à `$4B` et `$32`.
+* Le corps `LAB_76A` ( ;076a-0824), pour chaque slot :
+  1. si `compteur == $32`, `SUB_1D1A(tampon)` trace la ligne suivante ;
+  2. `p = compteur` ; `p > $19` → `p = $32 - p` ; `p < 0` → `p = 0`
+     ( ;0790-07b8) : le fondu monte puis redescend ;
+  3. `SUB_5026(tampon, ecran + compteur*$28, p)` ( ;07bc-07e8) ;
+  4. `compteur - 1`, et `-1` → `$32` ( ;07f0-0824). Un cycle complet vaut
+     `$32 + 1` = 51 tours, sauf le départ : `$4B - $32` = 25.
+
+`SUB_5026` ( ;5026-50ae) applique `dest = (dest & conserv) |
+(source & ~conserv)` plan par plan, avec `conserv = plan0_source |
+FADE[fade]`. Comme `SUB_1D1A` met le plan 0 à `$FF` partout sauf dans les
+glyphes, le fond est conservé et seuls les glyphes reçoivent le tramage.
+`FADE` (`LAB_1F62`, neuf longs suivis d’une `DS.L 6`, soit 18 mots) va de
+`$FFFF` (invisible) à `$0010` : ce n’est pas une rampe monotone, c’est un
+tramage dont la densité de bits baisse.
+
+Les 23 chaînes sont en `LAB_1DCE` (L2372-2394) ; le dump d’octets que le
+désassembleur a mis en commentaires (L2346-2371) redonne les mêmes 402
+octets, et le marqueur de fin est `DC.W $FF00` en ;1f60 : le `$FF` reboucle
+sur la première chaîne.
+
+### Ce qui reste ouvert (Phase 85)
+
+`SUB_714` ( ;0714-...) : l’interpréteur de script à 16 lignes (`SUB_50B2`,
+`SUB_50E6`, `SUB_1910`, lignes `LAB_15B6`→`LAB_15F6`, données `0x1272..0x15B4`),
+`SUB_16E` (exécute `populous.prg`) et la glue OS/cuivre (`SUB_358`/`SUB_308`,
+`SUB_58CA`). Les écrans d’attract `demo.pic` et `sprites0.dat` sont chargés par
+l’original mais pas encore rejoués ici.
+
 # 7. Chapitre 6 — Gestion du temps
 
 ## 7.1 Architecture : `_main` → `_animate`
