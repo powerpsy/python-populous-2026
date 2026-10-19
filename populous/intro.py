@@ -29,17 +29,24 @@ Le ``SUB_714`` du demo (l'interpreteur de script a 16 lignes, ``SUB_50B2`` /
 voir ``docs/PROGRESSION.md`` (Phase 85). Le defilement des credits, lui,
 est transcrit a l'identique.
 
-Cinq arbitrages assumes, tous marques ECART plus bas :
+Trois arbitrages assumes, tous marques ECART plus bas :
 * l'ecran titre du port fait 320x200 ; la souris est ramenee a l'espace
   0..319 du listing sur les deux axes (voir ``souris_amiga``) ;
-* ``LAB_6F82`` (base des sprites de l'intro) n'est jamais ecrite par le
-  listing : le port pointe directement sur ``land0``, comme le prouve la
-  boucle de ``SUB_1B8A`` (1680 x 20 = 0x8340 octets) ;
-* ``LAB_7226`` (facteur d'echelle isometrique) n'est pas non plus ecrite :
-  le port retient 0x80, soit une echelle de 1.0 dans ``LSR.W #7`` ;
 * le son de l'intro (``popsam``, ``SUB_2DD8``) n'est pas porte ;
 * la sortie de l'intro (``SUB_16E`` execute ``populous.prg``) devient, dans
   le port, le retour de ``demarrer`` vers le lanceur.
+
+Deux points qui etaient marques ECART en Phase 84 et qui sont desormais
+**transcrits**, corrige en cours de route :
+
+* ``LAB_6F82`` est un pointeur bien ecrit : ``SUB_4`` ;0046-0056 y range
+  l'adresse du tampon de ``$8340`` octets fourni par ``SUB_6C4A``, et
+  ``SUB_16E4`` y lit ``land0`` puis appelle ``SUB_1B8A`` ( ;172e). Le port
+  n'alloue rien, mais recolle les memes octets **et** applique la meme
+  permutation des 1680 blocs de 20 octets ;
+* ``LAB_7226`` (facteur d'echelle isometrique) est ecrit ``$0080`` par
+  ``SUB_1186`` ;11ce : ``ECHELLE_ISO`` est donc lu dans le listing, pas
+  choisi.
 """
 
 from __future__ import annotations
@@ -94,9 +101,13 @@ OFF_SOURIS_Y = -32000           # 0x7026 = ``LAB_7026`` : Y de la souris
 OFF_COLONNES = -31894           # 0x7090 = ``LAB_7090`` : 100 mots de colonne
 OFF_VITESSES = -31692           # 0x715A : 100 mots de vitesse
 
-#: Facteur d'echelle isometrique. ``SUB_1C12`` ;1c5c fait
-#: ``MULU LAB_7226,D0 / LSR.W #7`` : 0x80 = echelle 1. **ECART** : la variable
-#: n'est initialisee nulle part dans le listing.
+#: Facteur d'echelle isometrique, **transcrit**. ``SUB_1C12`` ;1c5c fait
+#: ``MULU LAB_7226,D0 / LSR.W #7`` et ``LAB_7226`` est un ``DS.W 1`` ( ;7226),
+#: c'est-a-dire un mot de BSS a zero : rien n'aurait ete dessine. Il est
+#: ecrit par ``SUB_1186`` ;11ce, ``MOVE.W #$0080,(-31488,A4)``. Comme
+#: ``A4 = $ED26`` ( ``SUB_65F0`` ;65f0), ``(-31488)`` = ``$ED26-$7B00`` =
+#: ``$7226`` = exactement ``LAB_7226``, celui que lit ``MULU``. 0x80 / 2^7
+#: = 1 : echelle 1.
 ECHELLE_ISO = 0x80
 
 #: Le compteur d'une ligne de credits repasse a 0x32 une fois fini
@@ -551,16 +562,57 @@ class Grille:
 
 
 # ------------------------------------------------------------------- assets
+def _rebatre(brut: bytes) -> bytes:
+    """``SUB_1B8A`` ;1b8a-1be6 : rebat les 1680 blocs de 20 octets.
+
+    D6 = ``$068F`` = 1679, donc 1680 iterations de 20 octets : ``0x8340``,
+    exactement la taille lue par ``SUB_16E4``. Pour chaque bloc, ``w0..w9``
+    sont ses dix mots. Les lectures ( ;1b9c-1bac) se font **toutes** avant les
+    ecritures ( ;1bb0-1bd2), la boucle n'est donc qu'une permutation :
+
+    * ``D4`` = w1  -> w5,  ``D0`` bas = w3 -> w6,  ``D1`` bas = w5 -> w7,
+      ``D2`` bas = w7 -> w8 ;
+    * ``D0`` haut = w2 -> w1, ``D1`` haut = w4 -> w2, ``D2`` haut = w6 -> w3,
+      ``D3`` = w8 -> w4 ;
+    * ``w0`` et ``w9`` ne sont ni lus ni ecrits.
+
+    Destination de chaque mot source : ``w0 -> w0, w2 -> w1, w4 -> w2,
+    w6 -> w3, w8 -> w4, w1 -> w5, w3 -> w6, w5 -> w7, w7 -> w8, w9 -> w9`` ;
+    ecrite dans l'ordre des destinations, c'est la permutation
+    ``(0, 2, 4, 6, 8, 1, 3, 5, 7, 9)``.
+
+    **Ce que cela veut dire** : le fichier range une ligne **par couche de
+    32 bits** -- masque, plan0, plan1, plan2, plan3, quatre octets chacun
+    (c'est aussi l'ordre que lit ``_decode_strip``/``load_land``, qui avance
+    de ``pb`` = 4 octets). L'intro, elle, consomme la meme ligne **par paquet
+    de 16 pixels** : les cinq mots de poids fort (pixels 0..15) puis les cinq
+    mots de poids faible (pixels 16..31) -- exactement ce que ``SUB_19EE``
+    lit dans ``sprite()``. Sans cette permutation, le masque est pris pour un
+    plan : les formes partent et les couleurs avec.
+    """
+    ordre = (0, 2, 4, 6, 8, 1, 3, 5, 7, 9)
+    out = bytearray(len(brut))
+    for b in range(0, len(brut) - 19, 20):
+        mots = [int.from_bytes(brut[b + 2 * q: b + 2 * q + 2], "big")
+                for q in range(10)]
+        for q, s in enumerate(ordre):
+            out[b + 2 * q:b + 2 * q + 2] = (mots[s] & 0xFFFF).to_bytes(2, "big")
+    return bytes(out)
+
+
 def charger_tuiles() -> bytes:
-    """Renvoie ``land0`` sans son en-tete de 0x72 octets.
+    """``land0`` sans son en-tete, **apres** ``SUB_1B8A`` : 70 sprites 32x24.
 
     ``SUB_16E4`` ;16f8-1720 lit d'abord ``$72`` octets puis ``$8340`` octets
-    dans ``(-32164)`` : le second recouvre le premier, le tampon final est
-    donc les 33600 octets de tuiles, decoupes en 70 sprites de 480 octets.
-    **ECART** : ``SUB_1B8A`` ;1b8a rebat les 1680 blocs de 20 octets en place ;
-    le port lit les memes donnees telles quelles, comme le fait ``load_land``.
+    dans le **meme** tampon ``(-32164)`` = ``LAB_6F82`` : le second recouvre
+    l'en-tete de 114 octets, le tampon final pese donc ``0x8340`` = 1680 blocs
+    de 20 octets = 70 sprites de 24 lignes. ``SUB_1B8A`` tourne juste apres
+    ( ;172e), puis viennent ``sprites0.dat`` ( ;1732) et ``font.dat``
+    ( ;1762). C'est donc bien ``land0`` -- les memes tuiles que le jeu -- qui
+    fournit les sprites de l'introduction, avec en plus cette permutation.
     """
-    return (assets.GAME / "land0").read_bytes()[0x72:0x72 + 0x8340]
+    brut = (assets.GAME / "land0").read_bytes()[0x72:0x72 + 0x8340]
+    return _rebatre(brut)
 
 
 def charger_fonte() -> bytes:
@@ -666,7 +718,8 @@ def renoncer() -> int:
 
 def demarrer(cadre: pygame.Surface, horloge: object = None,
              fenetre: pygame.Surface | None = None,
-             im_par_seconde: float = 50.0, attente_titre: float = 30.0) -> int:
+             im_par_seconde: float = 50.0, attente_titre: float = 30.0,
+             duree_credits: float = 12.0) -> int:
     """Joue l'intro, du titre au rouleau de credits, et renvoie le choix.
 
     Trois bouts transcrits y sont assembles :
@@ -695,8 +748,14 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
       duree en secondes, mesuree au chrono : la boucle serree de six
       instructions n'est pas datable sans emulateur. ``attente_titre < 0``
       retombe sur le compte brut du listing, ``DELAI_TITRE`` ;
-    * la phase de script de ``SUB_714`` (Phase 85) n'est pas jouee : le
-      rouleau se deroule seul jusqu'a une touche.
+    * la phase de script de ``SUB_714`` (Phase 85) n'est pas jouee : c'est
+      elle qui, dans l'original, decide de la fin. ``LAB_11D8`` n'a en effet
+      **aucune** sortie propre : le rouleau des credits reboucle indefiniment
+      sur ``0xFF`` ( ``SUB_1D1A`` ;1d44-1dbc) et c'est ``SUB_16E``, appele par
+      ``SUB_714`` quand son script est epuise, qui lance ``populous.prg``.
+      Sans le script, le port laisserait donc la boucle tourner a jamais.
+      ``duree_credits`` la borne : secondes, ``0`` pour l'eviter tout de
+      suite, ``< 0`` pour la laisser ouverte jusqu'a une touche.
 
     ``cadre`` est le bitmap de travail, celui que le jeu appelle
     ``self.frame`` (320x256, 32 bits) ; ``fenetre`` est la surface de
@@ -785,10 +844,16 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     credits = Credits(fonte)
     credits.reinitialiser()
     ecran = Ecran()
+    # ``LAB_11D8`` n'a pas de sortie : dans l'original c'est ``SUB_714`` qui
+    # tranche (Phase 85). En attendant, ``duree_credits`` le remplace.
+    bord = pygame.time.get_ticks() + int(max(0.0, duree_credits) * 1000) \
+        if duree_credits >= 0.0 else None
     while True:
         passe = renoncer()
         if passe != 0:
             return 0 if passe > 0 else -1
+        if bord is not None and pygame.time.get_ticks() - bord >= 0:
+            return 0                    # fin de l'intro, la partie demarre
         ecran.vider()
         credits.pas(ecran)
         _poser(cadre, ecran.surface(), fenetre)

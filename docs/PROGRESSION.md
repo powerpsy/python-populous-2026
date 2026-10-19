@@ -6992,10 +6992,14 @@ listing est `reference/tetracorp/populous_main.asm`, hunk S_0
 | grille de 100 cases | `SUB_10A2`/`SUB_110A`/`SUB_1186`/`SUB_1BE8` | transcrit, bug de `SUB_110A` reproduit |
 | pose de la grille | `SUB_1C12` ;1c12-1cba | transcrit (y compris le `MULU`/`LSR.W` non signé) |
 | tables `TYPE`/`DRAPEAU`/`HAUTEUR_CASE` | `LAB_640C` ;640c-6537 (300 octets, `DS.L` comprises) | transcrit |
-| decodage `land0` | `SUB_16E4` ;16f8-1720, `SUB_1B8A` | transcrit (**ECART** : on lit le fichier tel quel) |
+| decodage `land0` | `SUB_16E4` ;16f8-1720, `SUB_1B8A` ;1b8a-1be6 | transcrit (permutation des 1680 blocs) |
+| échelle isométrique | `SUB_1186` ;11ce `MOVE.W #$0080,(-31488,A4)` = `LAB_7226` | transcrit (`ECHELLE_ISO`) |
+| palette de la chute | `;6ef0` + `;6f10` (16 mots), via `SUB_55F8` ;11b0-11bc | transcrit (identique à `assets.PALETTE`) |
 
-* **`tools/check_intro.py`** (nouveau) : **97 contrôles**, tous en lecture du
-  listing et en exécution (voir plus bas) ;
+* **`tools/check_intro.py`** (nouveau) : **110 contrôles**, tous en lecture
+  du listing et en exécution (voir plus bas). Sept d’entre eux ont été ajoutés
+  après le premier essai à la main du portage — les cinq derniers à cause du
+  bug de la boucle de crédits décrit plus bas ;
 * **`populous/config.py`** : `SHOW_INTRO = False` (paramètre). L’intro est
   pilotable par `populous.intro.demarrer`, mais le lanceur ne la joue pas par
   défaut : la phase 85 n’est pas là ;
@@ -7020,20 +7024,45 @@ listing est `reference/tetracorp/populous_main.asm`, hunk S_0
   pas encore rejoués ;
 * **le son de l’intro** (`popsam`, `SUB_2DD8`).
 
-#### Cinq ECARTs assumés
+#### Quatre ECARTs assumés
 
 1. l’écran titre du port fait 320×200 et la souris est ramenée à `0..319`
    sur les deux axes : la hauteur réelle de l’écran titre (200 ou 256) n’est
    pas établie par le listing ;
-2. `LAB_6F82` (base des sprites de l’intro) n’est jamais écrit : le port
-   pointe sur `land0` tel quel, comme le prouve la boucle de `SUB_1B8A`
-   (1680 × 20 = `0x8340` octets) ;
-3. `LAB_7226` (facteur d’échelle isométrique) non plus : 1.0, soit `$80`
-   dans le `LSR.W #7` ;
-4. le rythme de `demarrer` vient d’une horloge pygame ; l’attente du titre
+2. le rythme de `demarrer` vient d’une horloge pygame ; l’attente du titre
    (30 s) remplace le compte d’iterations de ;04a0-04ae, non datable sans
    émulateur (`attente_titre < 0` retombe sur le compte brut `$55730`) ;
-5. le son de l’intro n’est pas porté.
+3. le rouleau de crédits est borné par `demarrer(duree_credits=12.0)` —
+   `LAB_11D8` n’a **aucune** sortie propre : le rouleau boucle sur `0xFF`
+   ( `SUB_1D1A` ;1d44-1dbc) et dans l’original c’est `SUB_714`, épuisant son
+   script, qui appelle `SUB_16E`. Sans script ni borne, `--intro` se fige.
+   `duree_credits` disparaîtra au profit de `SUB_714` en Phase 85 ;
+4. le son de l’intro n’est pas porté.
+
+Deux ECARTs de la première version de cette phase ont été **levés par
+transcription**, à l’occasion d’un essai à la main du portage :
+
+* `LAB_6F82` (base des sprites) est un pointeur bien écrit — `SUB_4`
+  ;0046-0056 y range l’adresse du tampon de `0x8340` octets alloué par
+  `SUB_6C4A` ; le port n’alloue pas, mais recolle les mêmes octets **et**
+  maintenant la même permutation (`SUB_1B8A`, qui n’était pas portée) ;
+* `LAB_7226` (échelle isométrique) est écrit `$0080` par `SUB_1186` ;11ce :
+  la valeur lue dans le listing, non choisie.
+
+Le bug corrigé au passage vaut le détour : sans `SUB_1B8A`, `intro.sprite()`
+prenait le masque pour un plan, si bien que les 70 tuiles de `land0`
+s’affichaient brouillées et coloriées de travers — invisible à la relecture,
+vu immédiatement à l’écran. Deux contrôles l’empêchent de revenir : la
+permutation confrontée octet à octet à `land0` brut (1680 blocs), et les 70
+sprites comparés **pixels à pixels** à `load_land(0)` — 53 760 pixels, zéro
+écart.
+
+Un second défaut est apparu dans le même essai : `demarrer` se **figeait**
+dans la phase de crédits. C’était un défaut de conception du pilote et non
+du listing — `LAB_11D8` n’a effectivement aucune boucle de sortie, puisque
+dans l’original `SUB_714` tranche. `duree_credits` a été ajouté, et le
+vérificateur exécute désormais le pilote de bout en bout (titre → chute →
+crédits) pour s’assurer qu’il rend bien 0 au lieu de tourner à jamais.
 
 #### Trois fauts du listing, reproduits et non corrigés
 

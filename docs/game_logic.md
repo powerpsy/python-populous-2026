@@ -1827,6 +1827,55 @@ type `(-32074,A4)` = `0x6F52`.
 La chute dure 58 tours ; au repos les colonnes valent 0 et les 100 cases
 tiennent dans le losange `x` dans `0..288`, `y` dans `8..176`.
 
+`LAB_7226`, le facteur d’échelle que multiplie `MULU LAB_7226,D0` ( ;1c5c),
+est un `DS.W 1` : un mot de BSS, donc nul, et aucun `LEA LAB_7226` n’existe
+— à lire seul, le listing dessinerait tout en `(0,0)`. Il est écrit par
+`SUB_1186` ;11ce : `MOVE.W #$0080,(-31488,A4)`. Comme `A4` = `0xED26`,
+`(-31488)` = `0xED26-0x7B00` = `0x7226`, soit exactement `LAB_7226`. `$80`
+dans le `LSR.W #7` donne 1 : l’échelle est celle du fichier, pas un réglage
+du portage (`intro.ECHELLE_ISO`).
+
+### Les sprites — `SUB_16E4` ( ;16e4-1794) et `SUB_1B8A` ( ;1b8a-1be6)
+
+`SUB_16E4` ouvre trois fichiers : `land0`, `sprites0.dat`, `font.dat`. Pour
+`land0` il lit `0x72` octets ( ;16fa-170a) puis `0x8340` octets ( ;170e-
+1720) **dans le même tampon**, `(-32164,A4)` = `0x6F82` = `LAB_6F82`, un
+pointeur posé par `SUB_4` ;0046-0056 sur un bloc de `0x8340` octets. La
+seconde lecture recouvre la première : le tampon final contient les 1680
+blocs de 20 octets qui suivent l’en-tête du fichier, soit 70 sprites de
+32×24 lignes. Puis ;172e appelle `SUB_1B8A`.
+
+`SUB_1B8A` fait `D6 = $068F`, soit 1680 itérations de 20 octets — la
+taille exacte du tampon. Pour chaque bloc, ses dix mots `w0..w9` :
+
+* lecture intégrale ( ;1b9c-1bac) : `D4` = w1, `D0` = w2:w3, `D1` = w4:w5,
+  `D2` = w6:w7, `D3` = w8 ;
+* écriture ( ;1bb0-1bd2) : w5 = D4, w6 = D0 bas, w7 = D1 bas, w8 = D2 bas,
+  puis `SWAP` de `D0/D1/D2` : w1 = D0 haut, w2 = D1 haut, w3 = D2 haut,
+  w4 = D3. `w0` et `w9` ne sont ni lus ni écrits.
+
+Toutes les lectures ayant lieu avant les écritures, la boucle n’est qu’une
+permutation : chaque mot source va en `w0→w0, w2→w1, w4→w2, w6→w3, w8→w4,
+w1→w5, w3→w6, w5→w7, w7→w8, w9→w9`.
+
+**Ce que cela veut dire.** Le fichier range une ligne **par couche de
+32 bits** : masque (4 octets), puis plan0, plan1, plan2, plan3 (4 octets
+chacun). C’est aussi l’ordre de `_decode_strip`/`load_land`, qui avance de
+`pb` = 4 octets. L’intro, elle, consomme la même ligne **par paquet de
+16 pixels** : les cinq mots de poids fort (pixels 0..15) puis les cinq mots
+de poids faible (pixels 16..31) — exactement ce que `SUB_19EE` lit dans
+`intro.sprite()`. Sans cette permutation, le masque est pris pour un plan :
+formes et couleurs partent. C’est un bug que seule une exécution a vu, et
+le contrôle décrit plus bas le verrouille.
+
+Les 16 couleurs de cette chute sont **dans le fichier**, en `;6ef0` :
+`$0000 $0444 $0666 $0888 $0AAA $0CCC $0620 $0840 $0A00 $0A60 $0AA0 $04A0
+$0280 $0262 $0248 $026C` (une copie identique en `;6f10`). `SUB_1186`
+;11b0-11bc les recopie dans le cuivre par `SUB_55F8((−31492), (−32310),
+$10)` — 16 mots, autant que de couleurs indexables par un tampon à quatre
+plans. Ce sont mot pour mot celles de `assets.palette_rgb()`, ce que le
+contrôle `check_intro.py` vérifie désormais.
+
 ### Le dépassement de ligne dans `SUB_19EE`
 
 Un paquet de 16 pixels tient sur **un** mot par couche : cinq mots
@@ -1864,6 +1913,13 @@ Les 23 chaînes sont en `LAB_1DCE` (L2372-2394) ; le dump d’octets que le
 désassembleur a mis en commentaires (L2346-2371) redonne les mêmes 402
 octets, et le marqueur de fin est `DC.W $FF00` en ;1f60 : le `$FF` reboucle
 sur la première chaîne.
+
+Conséquence pratique, et c’est important : `LAB_11D8` **n’a aucune sortie**.
+Le rouleau boucle indéfiniment et dans l’original c’est `SUB_714`, lorsqu’il
+a épuisé ses 16 lignes de script, qui appelle `SUB_16E` et lance
+`populous.prg`. Tant que `SUB_714` n’est pas transcrit (Phase 85), le pilote
+borne le rouleau par un argument `duree_credits` (12 s par défaut,
+`< 0` = illimité).
 
 ### Ce qui reste ouvert (Phase 85)
 

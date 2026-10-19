@@ -517,6 +517,61 @@ chk(all(intro.TYPE[i] not in nuls for i in range(100)),
 chk(all(sum(_masque(i)) for i in range(69)),
     "les 69 autres tuiles conservent au moins un pixel de fond")
 
+# ---------------------------------------------------- SUB_1B8A : la permutation
+# ``SUB_16E4`` ;172e appelle ``SUB_1B8A`` juste apres avoir lu ``$8340``
+# octets : le tampon passe de ``[masque 4o][p0 4o][p1 4o][p2 4o][p3 4o]``
+# par ligne a ``[5 mots de poids fort][5 mots de poids faible]``, c'est-a-dire
+# paquet 0 (pixels 0..15) puis paquet 1 (pixels 16..31).
+_brut = (intro.assets.GAME / "land0").read_bytes()[0x72:0x72 + 0x8340]
+_mauvais = 0
+_premier = None
+for _b in range(0, len(_brut), 20):
+    _couches = [_brut[_b + 4 * k: _b + 4 * k + 4] for k in range(5)]
+    _voulus = [c[0:2] for c in _couches] + [c[2:4] for c in _couches]
+    _got = [tuiles[_b + 2 * q: _b + 2 * q + 2] for q in range(10)]
+    if _got != _voulus:
+        _mauvais += 1
+        if _premier is None:
+            _premier = (_b // 20, _voulus, _got)
+chk(_mauvais == 0,
+    "SUB_1B8A rebat les 1680 blocs de 20 octets : 5 couches de 32 bits -> "
+    "paquet de mots hauts puis paquet de mots bas, %d bloc faux" % _mauvais)
+if _premier:
+    chk(False, "  premier bloc faux (ligne %s) attendu=%s obtenu=%s"
+        % _premier)
+
+# ---------------------------------------------------- meme rendu que le jeu
+# Ce controle est celui qui aurait vu le bug : sans ``SUB_1B8A`` le masque
+# est pris pour un plan, et les formes et les couleurs partent.
+try:
+    _pal = intro.assets.palette_rgb()
+    _indice = {}
+    for _i, _rgb in enumerate(_pal):
+        _indice.setdefault(_rgb, _i)
+    _jeu = intro.assets.load_land(0)[1]
+    _ecart = 0
+    for _n in range(70):
+        _ref = _jeu[_n]
+        _base = _n * intro.SPRITE_OCTETS
+        for _y in range(24):
+            _r = _base + _y * 20
+            for _x in range(32):
+                _bloc, _bit = divmod(_x, 16)
+                _v = 0
+                for _p in range(1, 5):
+                    _w = int.from_bytes(
+                        tuiles[_r + _bloc * 10 + _p * 2:
+                               _r + _bloc * 10 + _p * 2 + 2], "big")
+                    if _w & (0x8000 >> _bit):
+                        _v |= 1 << (_p - 1)
+                if _v != _indice.get(_ref.get_at((_x, _y))[:3], -1):
+                    _ecart += 1
+    chk(_ecart == 0,
+        "les 70 sprites de l'intro sont pixels a pixels ceux de load_land : "
+        "%d ecart(s) sur %d" % (_ecart, 70 * 24 * 32))
+except Exception as _exc:                              # pragma: no cover
+    chk(False, "comparaison a load_land impossible : %r" % (_exc,))
+
 for (x, y, no) in [(0, 0, 46), (7, 3, 12), (31, 17, 2), (300, 150, 3),
                    (10, 195, 46), (16, 0, 5)]:
     fond = intro.Ecran()
@@ -751,6 +806,104 @@ except Exception as exc:                             # pragma: no cover
 surface = ecran.surface()
 chk(surface.get_size() == (320, 200),
     "le rendu d'un bitmap d'attirance fait bien 320x200")
+
+# ------------------------------------- ECHELLE_ISO et la palette de la chute
+# ``(-31488,A4)`` avec ``A4 = $ED26`` donne $7226, c'est-a-dire ``LAB_7226``,
+# le mot que multiplie ``MULU LAB_7226,D0`` en ;1c5c. ``SUB_1186`` ;11ce y
+# ecrit $0080 : l'echelle n'est pas un choix du portage.
+_m = [s for s in LIGNES if ';11ce:' in s]
+chk(bool(_m) and '#$0080' in _m[0] and '(-31488,A4)' in _m[0],
+    "SUB_1186 ;11ce ecrit $0080 en (-31488,A4)")
+chk((0xED26 - 31488) & 0xFFFF == 0x7226,
+    "(-31488) avec A4 = $ED26 vaut bien $7226 = LAB_7226, lu par ;1c5c")
+chk(intro.ECHELLE_ISO == 0x80,
+    "ECHELLE_ISO = $80, donc echelle 1 dans le LSR.W #7 : valeur lue, "
+    "pas inventee")
+
+# La palette de la chute est dans le fichier, en ;6ef0 : c'est elle que
+# ``SUB_1186`` ;11b0-11bc recopie dans le cuivre par ``SUB_55F8(..., $10)``
+# (16 couleurs).
+def _pal_listing():
+    """Les mots de ``;6ef0`` : la palette recopiee dans le cuivre en ;11b0."""
+    debut = None
+    for i, s in enumerate(LIGNES):
+        if s.rstrip().endswith(";6ef0") and "DC.L" in s:
+            debut = i
+            break
+    if debut is None:
+        return None
+    mots = []
+    for s in LIGNES[debut:debut + 8]:
+        if "DC.L" not in s:
+            break
+        hexes = s.split("DC.L", 1)[1].split(";")[0]
+        for v in hexes.replace("$", " ").replace(",", " ").split():
+            n = int(v, 16)
+            mots.extend([(n >> 16) & 0xFFFF, n & 0xFFFF])
+        if ";6f10" in s:
+            break
+    return mots
+
+_p = _pal_listing()
+chk(_p is not None and len(_p) >= 16,
+    "la palette de la chute existe bien en ;6ef0 du listing")
+if _p:
+    _jeu = intro.assets.palette_rgb()
+    _voulu = [(((v >> 8) & 0xF) * 17, ((v >> 4) & 0xF) * 17, (v & 0xF) * 17)
+              for v in _p[:16]]
+    chk(_voulu == list(_jeu[:16]),
+        "les 16 couleurs de ;6ef0 sont celles que charge assets.palette_rgb() "
+        "-- le port n'invente pas de palette")
+    chk(len(intro.assets.PALETTE) == 16,
+        "PALETTE pese 16 mots : une plane a 4 bits, comme le tampon de "
+        "l'intro")
+
+# ------------------------- le rouleau de credits ne doit jamais etre sans fin
+# ``LAB_11D8`` n'a aucune sortie propre : le rouleau boucle sur ``0xFF`` et
+# c'est ``SUB_714`` (Phase 85) qui, dans l'original, appelle ``SUB_16E``.
+# Sans le script ni une borne, ``demarrer`` se fige -- vu a l'execution.
+import inspect as _inspect
+_sig = _inspect.signature(intro.demarrer)
+chk("duree_credits" in _sig.parameters,
+    "demarrer sait borner le rouleau : parametre duree_credits")
+chk(_sig.parameters["duree_credits"].default > 0,
+    "duree_credits est borne par defaut (%s s), l'intro finit seule"
+    % (_sig.parameters["duree_credits"].default,))
+
+import os as _os, time as _time
+import importlib as _importlib
+_ancien = _os.environ.get("SDL_VIDEODRIVER")
+_os.environ["SDL_VIDEODRIVER"] = "dummy"
+try:
+    pygame.display.quit()
+    pygame.display.init()
+    _scr = pygame.display.set_mode((960, 768))
+    _cadre = pygame.Surface((320, 256)).convert()
+    _cadre.fill((0, 0, 0))
+    _clk = pygame.time.Clock()
+    pygame.event.clear()
+    _t0 = _time.time()
+    _r = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
+                        attente_titre=0.02, duree_credits=0.02)
+    _dt = _time.time() - _t0
+    chk(_r == 0,
+        "le pilote traverse titre -> chute -> credits et rend 0 : %s "
+        "(%.2f s)" % (_r, _dt))
+    chk(_dt < 60.0,
+        "il y arrive sans se figer (%.2f s)" % _dt)
+    pygame.event.clear()
+    pygame.event.post(pygame.event.Event(pygame.QUIT))
+    _r2 = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
+                         attente_titre=0.02, duree_credits=-1)
+    chk(_r2 == -1, "fermeture de fenetre pendant les credits : -1 ( %s )" % (_r2,))
+    pygame.display.quit()
+finally:
+    pygame.display.init()
+    pygame.display.set_mode((1, 1))
+    if _ancien is None:
+        _os.environ.pop("SDL_VIDEODRIVER", None)
+    else:
+        _os.environ["SDL_VIDEODRIVER"] = _ancien
 
 # ------------------------------------------------- SUB_456 : la boucle d'attente
 m = [s for s in LIGNES if ';04a8:' in s]
