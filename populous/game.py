@@ -4046,6 +4046,7 @@ class Game:
         if config.SHOW_INTRO:
             from . import intro
             if intro.demarrer(self.frame, self.clock,
+                              fenetre=self.screen,
                               im_par_seconde=50.0) < 0:
                 self.running = False
 
@@ -4107,7 +4108,13 @@ def main(argv: list[str]) -> None:
 
     ``start_of_game`` (entier 0/2/3, defaut 0) : 0 = normal, 2 = choix de
     monde direct (L3E7B0), 3 = tutoriel/demo (L4860A).
+    ``--intro`` (n'importe ou dans la ligne) joue l'intro de la Phase 84
+    avant la partie ; voir :data:`populous.config.SHOW_INTRO`.
     """
+    if "--intro" in argv:
+        config.SHOW_INTRO = True
+        argv = [a for a in argv if a != "--intro"]
+
     seed = int(argv[0]) if len(argv) > 0 else DEFAULT_SEED
     ground = int(argv[1]) if len(argv) > 1 else DEFAULT_GROUND
     zoom = int(argv[2]) if len(argv) > 2 else ZOOM

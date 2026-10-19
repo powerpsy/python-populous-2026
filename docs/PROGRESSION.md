@@ -25,6 +25,7 @@ reste à faire. `python -m populous.game` lance le jeu.
 
 ```
 python -m populous.game [graine] [sol] [zoom]
+python -m populous.game --intro        # avec l'introduction (Phase 84)
 ```
 
 * Les deux tribus se fondent, croissent, se divisent, bâtissent.
@@ -6998,9 +6999,12 @@ listing est `reference/tetracorp/populous_main.asm`, hunk S_0
 * **`populous/config.py`** : `SHOW_INTRO = False` (paramètre). L’intro est
   pilotable par `populous.intro.demarrer`, mais le lanceur ne la joue pas par
   défaut : la phase 85 n’est pas là ;
-* **`populous/game.py`** : un appel conditionné `intro.demarrer(self.frame,
-  self.clock)` au début de `Game.run`, qui rend la main sur fermeture de
-  fenêtre.
+* **`populous/game.py`** : `intro.demarrer(self.frame, self.clock,
+  fenetre=self.screen)` au début de `Game.run` — le cadre 320×256 est
+  recopié dans la fenêtre agrandie par `ZOOM`, comme `image()` le fait, et la
+  position souris est ramenée du repère fenêtre au repère cadre avant
+  `souris_amiga`. Rend la main sur fermeture de fenêtre. L'option `--intro`
+  de `main()` allume `config.SHOW_INTRO`, qui reste `False` par défaut.
 
 #### Analyse seulement (pas encore transcrite)
 

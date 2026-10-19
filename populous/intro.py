@@ -593,6 +593,46 @@ def zone_titre(x: int, y: int) -> int:
 
 
 # ------------------------------------------------------------- le pilote
+def _fenetre(surface: pygame.Surface, fenetre: pygame.Surface | None
+             ) -> tuple[int, int]:
+    """Taille de la fenetre reelle, ou celle du cadre pour les tests."""
+    if fenetre is not None:
+        return fenetre.get_size()
+    return surface.get_size()
+
+
+def _poser(surface: pygame.Surface, image: pygame.Surface,
+           fenetre: pygame.Surface | None = None) -> None:
+    """Pose ``image`` (320x200) dans le cadre puis l'affiche.
+
+    Le jeu fait de meme a ``game.py`` : ``self.screen.blit(transform.scale(
+    self.frame, ...))`` puis ``display.flip()``. Le cadre est en 32 bits, la
+    fenetre est agrandie par ``config.ZOOM``.
+    """
+    surface.blit(image, (0, 0))
+    if fenetre is not None and fenetre is not surface:
+        fenetre.blit(pygame.transform.scale(surface, fenetre.get_size()),
+                     (0, 0))
+    pygame.display.flip()
+
+
+def _repere(surface: pygame.Surface, fenetre: pygame.Surface | None
+            ) -> tuple[int, int]:
+    """Position de la souris, en lignes de la figure 320x200.
+
+    ``pygame.mouse.get_pos()`` rend les coordonnees de la **fenetre**, qui est
+    agrandie par ``ZOOM`` ; on les ramene au cadre (320x256) puis on plafonne
+    a ``HAUTEUR-1``, la figure ne faisant que 200 lignes. ``souris_amiga``
+    fait le reste ( ``LAB_529A`` ;52a6-52ac).
+    """
+    mx, my = pygame.mouse.get_pos()
+    lx, ly = _fenetre(surface, fenetre)
+    bx = mx * surface.get_size()[0] // max(1, lx)
+    by = my * surface.get_size()[1] // max(1, ly)
+    return bx, min(by, HAUTEUR - 1)
+
+
+
 def charger_titre() -> pygame.Surface:
     """``load.pic`` : 40064 octets = 320x200 x 5 plans + 64 o de palette.
 
@@ -622,7 +662,8 @@ def renoncer() -> bool:
     return False
 
 
-def demarrer(surface: pygame.Surface, horloge: object = None,
+def demarrer(cadre: pygame.Surface, horloge: object = None,
+             fenetre: pygame.Surface | None = None,
              im_par_seconde: float = 50.0, attente_titre: float = 30.0) -> int:
     """Joue l'intro, du titre au rouleau de credits, et renvoie le choix.
 
@@ -655,6 +696,11 @@ def demarrer(surface: pygame.Surface, horloge: object = None,
     * la phase de script de ``SUB_714`` (Phase 85) n'est pas jouee : le
       rouleau se deroule seul jusqu'a une touche.
 
+    ``cadre`` est le bitmap de travail, celui que le jeu appelle
+    ``self.frame`` (320x256, 32 bits) ; ``fenetre`` est la surface de
+    ``display.set_mode``, agrandie par ``config.ZOOM``. ``fenetre=None``
+    affiche directement le cadre, ce qui sert aux tests sans fenetre.
+
     Renvoie 1, 2 ou 3 selon la zone touchee, 0 si le delai de l'ecran titre
     s'est ecoule puis que le demo a ete quitte, -1 si la fenetre a ete
     fermee.
@@ -665,8 +711,7 @@ def demarrer(surface: pygame.Surface, horloge: object = None,
 
     # -- 1. SUB_456 ;0456-052a : l'ecran titre -----------------------------
     titre = charger_titre()
-    surface.blit(titre, (0, 0))
-    pygame.display.flip()
+    _poser(cadre, titre, fenetre)
 
     # ``CLR.L (-6,A5)`` ( ;0498) puis ``CMP.L #$00055730,D0 ; BGT LAB_51E``
     # ( ;04a8) : la boucle ne **rend** rien a l'ecran, elle compte et elle
@@ -700,16 +745,12 @@ def demarrer(surface: pygame.Surface, horloge: object = None,
         if fermer:
             return -1
         if enfonce:
-            lx, ly = surface.get_size()
-            mx, my = pygame.mouse.get_pos()
-            zone = zone_titre(*souris_amiga(mx * 320 // max(1, lx),
-                                            my * HAUTEUR // max(1, ly)))
+            zone = zone_titre(*souris_amiga(*_repere(cadre, fenetre)))
             if zone:
                 choix = zone
                 break
         if duree_ms >= 0:
-            surface.blit(titre, (0, 0))
-            pygame.display.flip()
+            _poser(cadre, titre, fenetre)
             horloge.tick(fps)
     if choix:
         return choix
@@ -725,8 +766,7 @@ def demarrer(surface: pygame.Surface, horloge: object = None,
             return -1
         ecran.vider()
         grille.dessiner(ecran)
-        surface.blit(ecran.surface(), (0, 0))
-        pygame.display.flip()
+        _poser(cadre, ecran.surface(), fenetre)
         horloge.tick(fps)
 
     # -- 3. SUB_536 / SUB_714 : le rouleau de credits -----------------------
@@ -739,6 +779,5 @@ def demarrer(surface: pygame.Surface, horloge: object = None,
             return 0
         ecran.vider()
         credits.pas(ecran)
-        surface.blit(ecran.surface(), (0, 0))
-        pygame.display.flip()
+        _poser(cadre, ecran.surface(), fenetre)
         horloge.tick(fps)
