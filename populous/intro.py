@@ -644,22 +644,24 @@ def charger_titre() -> pygame.Surface:
     return assets.load_pic("load.pic", planes=5)
 
 
-def renoncer() -> bool:
-    """Un ``pygame.event.get()`` : True si l'on doit quitter l'intro.
+def renoncer() -> int:
+    """Un ``pygame.event.get()`` : -1 pour fermer, 1 pour passer, 0 sinon.
 
     **[APPROX]** : le listing n'a pas d'abandon en cours de demo. ``SUB_5792``
-    ;5792 ne fait que lire ``CIAA_SDR`` (voir le test), et la sortie reelle
-    est ``SUB_16E``, qui execute ``populous.prg``. Le port ajoute donc cette
-    touche, faute de pouvoir relancer le jeu original.
+    ;5792 ne fait que lire ``CIAA_SDR``, et la sortie reelle est ``SUB_16E``,
+    qui execute ``populous.prg``. Le port ajoute donc ces touches, faute de
+    pouvoir relancer le jeu original. Fermer la fenetre seules arrete le jeu
+    ( -1) ; toute autre touche ou le bouton droit fait passer l'intro
+    ( 1) et la partie demarre.
     """
-    for ev in pygame.event.get():
-        if ev.type == pygame.QUIT:
-            return True
-        if ev.type == pygame.KEYDOWN:
-            return True
-        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
-            return True
-    return False
+    evenements = pygame.event.get()
+    if any(e.type == pygame.QUIT for e in evenements):
+        return -1
+    if any(e.type == pygame.KEYDOWN
+           or (e.type == pygame.MOUSEBUTTONDOWN and e.button == 3)
+           for e in evenements):
+        return 1
+    return 0
 
 
 def demarrer(cadre: pygame.Surface, horloge: object = None,
@@ -701,9 +703,10 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     ``display.set_mode``, agrandie par ``config.ZOOM``. ``fenetre=None``
     affiche directement le cadre, ce qui sert aux tests sans fenetre.
 
-    Renvoie 1, 2 ou 3 selon la zone touchee, 0 si le delai de l'ecran titre
-    s'est ecoule puis que le demo a ete quitte, -1 si la fenetre a ete
-    fermee.
+    Renvoie 1, 2 ou 3 selon la zone touchee sur l'ecran titre ; 0 quand
+    l'intro est finie (delai depasse puis chute et credits passes, ou touche
+    en cours de route) : la partie demarre alors ; -1 si la fenetre a ete
+    fermee, ce qui arrete le jeu.
     """
     fps = max(0.0, float(im_par_seconde))
     if horloge is None:
@@ -733,17 +736,22 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
         elif pygame.time.get_ticks() - depart >= duree_ms:
             break                           # retour 0, meme chemin
         fermer = False
+        passer = False
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
                 fermer = True
-            elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
-                fermer = True
+            elif ev.type == pygame.KEYDOWN:
+                passer = True
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
+                passer = True
             elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
                 enfonce = True
             elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
                 enfonce = False
         if fermer:
             return -1
+        if passer:
+            return 0            # ``SUB_16E`` : on rend la main au jeu
         if enfonce:
             zone = zone_titre(*souris_amiga(*_repere(cadre, fenetre)))
             if zone:
@@ -762,8 +770,11 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     grille.initialiser(GRILLE * GRILLE)
     ecran = Ecran()
     while grille.avancer(GRILLE * GRILLE) != 0:
-        if renoncer():
+        passe = renoncer()
+        if passe < 0:
             return -1
+        if passe > 0:
+            return 0            # on passe la chute, la partie demarre
         ecran.vider()
         grille.dessiner(ecran)
         _poser(cadre, ecran.surface(), fenetre)
@@ -775,8 +786,9 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     credits.reinitialiser()
     ecran = Ecran()
     while True:
-        if renoncer():
-            return 0
+        passe = renoncer()
+        if passe != 0:
+            return 0 if passe > 0 else -1
         ecran.vider()
         credits.pas(ecran)
         _poser(cadre, ecran.surface(), fenetre)
