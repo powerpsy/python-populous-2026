@@ -67,11 +67,22 @@ python -m populous.game --intro        # avec l'introduction (Phase 84)
 
 | # | étape | difficulté | état |
 |---|---|---|---|
-| A | **Pouvoirs jouables** (barre d'icônes → `_stats`) | moyenne | phase 4, à faire |
+| A | **Pouvoirs jouables** (barre d'icônes → `_stats`) | moyenne | **fait** : 13 des 16 codes de `_do_action` transcrits (Phases 51-53) ; les codes 2, 7, 8 lèvent `NotImplementedError` par règle |
 | B | **Son** (`popsam`, module Amiga) | **haute** | partiel : effets (`populous.sound`) et format `popsam` OK en phase 86 ; lecteur non transcrit |
-| C | **Musique** (`gmusic1`) | **haute** | MP3 fournis et joués (phase 86 : intro `Main Theme`, partie `BGM`) ; `gmusic1` toujours inutilisé |
-| D | **Conquest** | - | donnees, textes et boite de dialogue |
+| C | **Musique** (`gmusic1`) | **haute** | MP3 fournis et joués (phase 86 : intro `Main Theme`, partie `BGM`) ; `gmusic1` **toujours inutilisé** — c'est une banque de mesures Amiga (`check_mod.py`), dont les tables de séquences résident dans l'exécutable (`$3532..$3F91`) et non dans le fichier : aucun lecteur externe ne pourrait la jouer telle quelle |
+| D | **Conquest** | - | **partiel** : `_end_game` et `_requester` transcrits (Phase 55) ; la boîte de dialogue de victoire est jouable |
 | E | Interface complete | moyenne | OK : blason, jauges, `_text`, `_requester` |
+| F | **Liaison série** (codes 2/8 de `powers.py`, `_two_players`) | **haute** | **à trancher** — hors périmètre assumé tant que l'arbitrage n'est pas rendu (voir note en fin de document) |
+
+Les **226 routines non couvertes** (sur 393 avec code) se répartissent ainsi :
+185 hors périmètre assumé — OS Amiga (71), trampolines `___xxx` (55),
+matériel d'affichage (18), libc (15), E/S disque + IFF (14), liaison série
+(11), son (1) — et **38 à revoir**, dont 314 lignes de logique de jeu en
+attente d'arbitrage (`_do_magnet` L6769, `_do_lower_point` L7091,
+`_do_raise_point` L7180, `_do_swamp` L8295). Le port en a les **primitives**
+(`Terrain.raise_point` / `Terrain.lower_point`, L1274 / L2571) mais pas les
+**gabarits de pouvoir** (garde de mana, `_xmin`/`_xmax`/`_ymin`/`_ymax`,
+`CLR _build_count`). Mesure : `python tools\coverage.py --top 40`.
 
 ---
 
@@ -7326,3 +7337,120 @@ désactivée elles sont **parfaitement symétriques**. Dans le vrai jeu ce
 phénomène existe aussi, et le joueur y remédie en « relevant » le terrain :
 `ACT_RAISE` / `ACT_LOWER` sont transcrits depuis la Phase 63, donc cette
 interface est bien là.
+
+---
+
+## Phase 87 — l'intro, et les trois écarts qu'elle imposait
+
+`populous/intro.py` (217 contrôles, `tools/check_intro.py`).
+
+La scène d'attract a été transcrite depuis `SUB_456` (titre) et `SUB_1186`
+(scène), y compris le jeu d'opcodes (`$FA`, `$FB`, `$64`..) et la table de
+marqueurs à `$6E28`. Trois écarts tenus pour acquis ont été levés par le
+listing plutôt que par accord :
+
+* **20 emplacements, non 8.** Le tableau `cles` occupe `0x7038..0x7085` ;
+  `bm3`, le premier mot modifié après lui, n'est atteint qu'à `k = 20`.
+  Le bloc intermédiaire est du BSS que rien n'écrit. S'arrêter à 8 — ce que
+  le port faisait — figeait les maisons à un stade de construction déjà
+  passé, y compris sur mise à jour d'une clé existante.
+* **`TERRAIN_LIGNES` porte le `D3`.** `MOVE.W #$0017,D3` ( ;19f4) suivi de
+  `DBF D3` ( ;1b12) tourne **24** fois, pas 23 : c'est un registre, non un
+  compteur. `PERSONNAGE_LIGNES` et `OBJET_LIGNES`, eux, sont des compteurs.
+* **Le calque de la musique.** `SUB_2C36` est appelé en ;1194, **en tête** de
+  `SUB_1186` (la scène), et `SUB_2DD8` en ;1260. `SUB_456` (le titre)
+  n'appelle aucune routine de son : les seuls `JSR` de ;041c à ;0714 vont à
+  `SUB_17B2`, `SUB_549A`, `SUB_55BA`, `SUB_29E`, `SUB_58CA`, `SUB_10A2`,
+  `SUB_110A`, `SUB_50B2` et `SUB_358`. La musique est donc **pendant la
+  scène**, et le titre est silencieux — l'inverse de ce que le port tenait
+  en Phase 86.
+
+Les dix marqueurs `**[APPROV]**` d'`intro.py` sont tous des écarts
+documentés, non des trous. Les voici rassemblés, pour qu'ils soient
+auditables en un endroit :
+
+| où | écart assumé |
+|---|---|
+| `NB_EMPLACEMENTS` (L1009) | le débordement au-delà de 20, où `D6` tomberait sur `bm3`, n'est pas reproduit |
+| graine `Random()` (L1049) | la suite d'`exec/Random()` n'est pas celle du port ; seule la qualité aléatoire est retenue |
+| `_DEC2_ETENDU` (L1102) | le compteur de ligne peut sortir de `0..99` ( ;08d6 recharge l'octet sans re-tester `CMP #$64`) ; le port lit le même bloc qu'en aveugle plutôt qu'une valeur imposée |
+| `charger_son()` (L1283) | le lecteur `SUB_2F9C`/`SUB_3046`/`LAB_3060` n'est pas transcrit ; les tables de séquences résident dans l'exécutable (`$3532..$3F91`), donc aucun lecteur externe ne pourrait les lire |
+| table `cles` (L1525) | le 68000 continuerait jusqu'à `0x7086` et au-delà en écrasant les variables suivantes ; le port s'arrête avant |
+| opcode `$FB` (L1622) | l'appel ne pousse que six arguments ( `LEA ($E,A7),A7`) ; `hauteur` lirait le haut mot de `A3`, soit zéro pour tout pointeur de hunk 1 |
+| boucle du titre (L1699) | le rythme vient d'une horloge pygame, non du copper (`SUB_358`, `SUB_55E0`) ; le test des zones lui-même est transcrit |
+| `charger_son()` (L1763) | le démarrage est `SUB_2DD8` ;2dd8, appelé en ;1260 **après** `SUB_2E2(0)` |
+| attract infini (L1809) | `renoncer()` remplace `SUB_5792` (lecture de `CIAA_SDR`) et les touches `-1`/`1` qu'il faudrait inventer faute de pouvoir relancer `populous.prg` |
+| `jouer_intro` (L1838) | les cinq paramètres du pilote (`attente_titre`, `duree_script`, `son`, `horloge`, `renoncer`) tiennent lieu d'interruptions matérielles ; chacun retombe sur le compte brut du listing quand il vaut `< 0` |
+
+Rien de tout cela n'affecte la **logique** de l'intro : les opcodes, les
+tables, les bornes et les zones sont transcrits. Ce qui manque, c'est le
+support matériel (copper, `CIAA_SDR`) et le lecteur de musique.
+
+## Phase 88 — `_do_funny`, le pas des deux peeps drôles
+
+`_do_funny` (L8630-8858) existait dans le port sous forme de docstring :
+elle n'était pas transcrite, et surtout **pas appelée**. `Game.tick()`
+l'appelle désormais juste avant `_move_peeps` ( ;3e94e), sous la même paire
+de tests `TST.W (_pause)` / `TST.W (_paint_map)` que l'asm ( ;3e942- ;3e94c).
+
+La routine ne parcourt que **deux fiches**, les 209 et 210 de `_peeps` :
+la boucle part de `LAB_5420A` avec `D0 = $D1` et s'arrête à `$D3` au pas de
+`$16`. Ce sont celles que `_do_place_funny` (L8862) remplit.
+
+### Un bug de transcription, trouvé par le contrôle
+
+`LAB_51686` porte des **mots bruts**. Le 68000 le pousse tel quel ( ;44632)
+et `_valid_move` rebat son second argument **en signe** dans sa propre
+prologue : `MOVE.W ($A,A5),D3` ( ;4dcf6), puis `ADD.W`/`BLT` ( ;4dcfe- ;4dd00)
+sur 16 bits. Sans `m68k.s16(deltas[i])`, `0xFFFF` valait **+65535** en Python :
+`block + offset` sortait des 4096 cases et la case était jugée hors carte —
+la créature mourait au premier pas vers la gauche ou vers le haut. Corrigé,
+avec un commentaire citant la ligne du listing. `prev_block`, lui, est déjà
+stocké signé partout dans le port (`s16`, delta signé, ou 0).
+
+### Sens et bornes du rebond : `docs/game_logic.md` avait tort
+
+`NEG` si `w6 >= offspring(+2)` **ou** `w6 <= weapons(+3)`, et les deux
+comparaisons sont **non signées** (`BCC` ;44540 puis `BHI` ;44554). Donc
+`+2` est la borne **haute** et `+3` la borne **basse** — l'inverse de ce que
+la documentation décrivait (`pos < min(+2) or pos > max (+3)`), qui laissait
+entendre un rebond **à l'extérieur** des bornes.
+
+La créature part de la borne basse (`_do_place_funny` pose `w6 = weapons`
+L8999 et `face = 1` L8994), monte jusqu'à `offspring`, rebondit, redescend
+jusqu'à `weapons`, et ainsi de suite. Elle ne quitte jamais l'intervalle.
+Contrôlé sur les 200 premiers pas des trois fiches.
+
+### Ce que le contrôle mesure (`tools/check_do_funny.py`, 47 contrôles)
+
+* `FUNNY_DELTAS` rebâti **depuis les seuls** `DC.L`/`DC.W` de L24161-24170,
+  puis comparé aux neuf mots que la routine relit ;
+* `map_couleur` confrontée à `render.map_colours` : deux implementations
+  indépendantes de la même règle (boucle L4A348-4A36C plus
+  `DC.L $19191919` de L5177E), 232 cases, 0 écart ;
+* le rebond confronté à une réécriture indépendante sur 72 cas, puis
+  l'oscillation réelle aux deux bornes ;
+* la cadence, **un pas toutes les huit images** ( `frame > 7`), mesurée ;
+* les **trois branches** de `make_level_res` — `bk2 = i+$32`, `blk = $35`
+  sur `$0F`/`$1F`/`$20`/`$42` seulement, `blk = i+$2F` + `a_putpixel` —
+  chacune avec ses écritures **et** ses cas d'eau/`$10` ;
+* l'ordre interne : `map_who` effacé à ;445a2 **avant** que `valid_move` ne
+  puisse tuer à ;445e0 ;
+* `prev_block` repeint depuis `_funny` quand il vaut nul, l'occupant de
+  `map_who[nb]` tué, et `map_who[e.block]` valant 210 ou 211 ;
+* l'appel réel par `Game.tick()`, avec la garde pause/paint_map et l'ordre
+  `_do_funny` puis `_move_peeps` de L680-681 ; `_run_commands` reste hors
+  garde, comme `_get_message` de l'autre côté de `LAB_3EC88`.
+
+### Couverture
+
+`tools/coverage.py` passe à **250/564**, soit **250/393 = 63,6 %** sur les
+seules routines. Le tri des 226 non couvertes est au tableau « Reste à
+faire » : 185 hors périmètre assumé, 38 à revoir.
+
+### Écarts restants
+
+* les deux gardes `0 <= x < borne` ajoutées par le port, le 68000 lisant et
+  écrivant sans borne — même régime que `_do_place_funny` ;
+* `gmusic1` reste inutilisé : c'est une banque de **mesures**, dont les
+  tables de séquences résident dans l'exécutable et non dans le fichier.

@@ -2324,22 +2324,56 @@ de population, `tempo = 0` et le cœur s'arrête.
 | `_funny_done` | `$54270` | les créatures « funny » n'apparaissent qu'une fois | 4001‑4006 |
 
 ### `_do_funny` — ligne 8630 ($444EC)
-Parcourt une table de **209 entrés** (`CMP.W #$00d1`, ligne 8634) commençant en
-`LAB_5420A` :
+Le pas des **deux** « peeps drôles ». La boucle part de `LAB_5420A` avec
+`D0 = $D1` et s'arrête à `$D3` au pas de `$16` (`MOVE.W #$0016,D3`,
+ligne 8648) : elle ne parcourt donc que **deux fiches**, les 209 et 210 de
+`_peeps` — celles que `_do_place_funny` (L8862) remplit. `$D1` = 209 est le
+**premier** indice, non le compte.
 
 ```python
-    e.active = 0 : next                              # L8637‑8638
-    e.counter += 1                                   # L8640
-    step = e.speed        (+0x15, octet signé)       # L8642‑8644
-    e.pos += step         (+6, mot)                  # L8646‑8647
-    if e.pos < e.min (+2) or e.pos > e.max (+3):     # L8648‑8661
-        step = -step ; e.speed = step                # L8663‑8665  rebond
-    if e.counter > 7:                                # L8668‑8669
-        e.counter = 0                                # L8671
-        if map_who[e.block] - 1 == courant: map_who[e.block] = 0   # L8673‑8683
-        if e.field_A == 0:                           # L8686
-            e.field_A = funny[e.field_14 * 12]       # L8689‑8696
+    e.life == 0 : next                                   # L8636‑8638
+    e.frame += 1                                         # L8640
+    pas = e.face         (+0x15, octet signé)            # L8642‑8644
+    e.w6 += pas         (+6, mot non signé)              # L8646‑8647
+    # BCC ;44540 puis BHI ;44554 : les deux comparaisons sont NON SIGNÉES.
+    # `e.offspring` (+2) est la borne HAUTE, `e.weapons` (+3) la borne BASSE.
+    if e.w6 >= e.offspring or e.w6 <= e.weapons:
+        pas = -pas ; e.face = pas                        # L8663‑8665  rebond
+    if e.frame <= 7: next                                # L8668‑8669
+    e.frame = 0                                          # L8671
+    if map_who[e.block] - 1 == courant: map_who[e.block] = 0   # L8673‑8683
+    if e.prev_block == 0:                                # L8686
+        e.prev_block = funny[e.make_level_res * 12]      # L8689‑8696
+    if valid_move(e.block, e.prev_block) == 1: e.life = 0; next   # L8690‑8704
+    e.block += e.prev_block                              # L8690‑8704
+    for i in 0..2:                                       # L8706‑8820
+        # LAB_51686 porte des MOTS BRUTS : `_valid_move` les rebat en signé
+        # dans sa prologue (`MOVE.W ($A,A5),D3` ;4dcf6).
+        if valid_move(e.block, s16(deltas[i])) == 1: continue
+        nb = (e.block + s16(deltas[i])) & 0xFFFF
+        match make_level_res:
+            0: bk2[nb] = i + 0x32        # si blk[nb] != 0 et != $10
+            1: blk[nb] = 0x35            # si blk[nb] in (0x0F,0x1F,0x20,0x42)
+            2: blk[nb] = i + 0x2F        # si blk[nb] != 0 et != $10
+                 a_putpixel(nb, map_colour[blk[nb]])
+        if map_who[nb] != 0: zero_population(map_who[nb] - 1)   # L8804‑8820
+    map_who[e.block] = courant + 1                        # L8826‑8832
 ```
+
+**Le rebond part de la borne basse et l'atteint.** `_do_place_funny` pose
+`w6 = weapons` (L8999) et `face = 1` (L8994), et `weapons < offspring` pour
+les trois fiches de `_funny` (0/4, 5/8, 9/12). La créature monte donc de
+`weapons` à `offspring`, rebondit, redescend, et ainsi de suite — elle ne
+quitte jamais `[weapons, offspring]`. `docs/game_logic.md` décrivait
+jusqu'à la Phase 88 l'inverse (`pos < min(+2) or pos > max(+3)`), c'est-à-dire
+un rebond **à l'extérieur** des bornes et des bornes inversées : c'est faux.
+
+Les trois branches diffèrent bien par `make_level_res` (0 → `bk2`, 1 → `blk`
+sur quatre valeurs seulement, 2 → `blk` + un `putpixel`), et `map_who` est
+effacé à ;445a2 **avant** que `valid_move` ne puisse tuer la créature à
+;445e0.
+
+Vérifié par exécution : `tools/check_do_funny.py` (47 contrôles).
 
 ---
 
