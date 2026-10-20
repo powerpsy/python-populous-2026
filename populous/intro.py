@@ -371,7 +371,7 @@ class Ecran:
         =============== ======== ========= =========== ==========
         routine         lignes   limite    dernier     paquets
         =============== ======== ========= =========== ==========
-        ``SUB_19EE``      23      ``$B0``   ``$C7``       2
+        ``SUB_19EE``      24      ``$B0``   ``$C7``       2
         ``SUB_1910``      16      ``$B8``   ``$C8``       1
         ``SUB_1802``      32      ``$A8``   ``$C8``       1
         =============== ======== ========= =========== ==========
@@ -987,7 +987,28 @@ OBJETS_PAS = 0x140
 #: ``CMP.W #$0010,D4`` ;0e2c : seize lignes de script. ``ASL.L #2,D0`` ;0a56 :
 #: quatre octets par emplacement de marqueur.
 NB_LIGNES = 16
-NB_MARQUEURS = 8
+
+#: Emplacements **reels** du tableau ``cles``/``ids``.
+#:
+#: Le compteur ``D6`` de ``SUB_714`` cherche le premier emplacement vide par
+#: ``TST.W (0,A0,D0.L) ; BNE`` avec ``D0 = D6*4`` ( ;09ea-09fa ) -- **sans
+#: aucune borne**. ``SUB_536`` vide le tableau par la meme boucle sans borne
+#: ( ;0566-058a ), et le dessin s'arrete au premier emplacement nul ( ;
+#: 0880-088e ) : le tableau est termine par un zero, pas par une longueur.
+#:
+#: Les emplacements sont a ``A4+(-31984)`` (``ids``) et ``A4+(-31982)``
+#: (``cles``), A4 valant ``SECSTRT_1+$7FFE`` = 0xED26, donc 0x7036 et 0x7038.
+#: L'emplacement ``k`` occupe ``0x7038+4k`` ; ``(-31904)`` = 0x7086, le pointeur
+#: ``bm3`` -- le premier mot modifie apres le tableau -- n'est atteint qu'a
+#: ``k = 20``. Le bloc ``0x7058..0x7085`` est du BSS que rien n'ecrit (aucune
+#: reference ``(-319xx,A4)`` entre 0x7038 et 0x7086) : douze emplacements
+#: **supplementaires**, soit 20 au total.
+#:
+#: S'arreter a 8 -- le port le faisait -- faisait perdre tout placement passe
+#: table pleine, mises a jour comprises : les maisons se figaient a un stade
+#: de construction deja passe. **[APPROV]** sur ``20`` seul : le debordement
+#: au-dela (où ``D6`` tomberait sur ``bm3``) n'est pas reproduit.
+NB_EMPLACEMENTS = 20
 
 #: ``SUB_50E6`` ;5130-51f8 : le ``pas`` est un vecteur a deux chiffres signes
 #: -- dizaines et unites -- et chaque cas fournit ``(D4', D7, sprite)``, les
@@ -1004,6 +1025,13 @@ DIRECTIONS = {
 #: ``land0`` **rebattu** -- 24 lignes de 20 octets. ``SUB_1CBC`` rend a la fin
 #: par ``BSR.W SUB_19EE`` ( ;1d02) et non par ``SUB_1910`` : les marqueurs de
 #: la scene sont donc faits de tuiles de terrain, pas de ``sprites0.dat``.
+#:
+#: ``TERRAIN_LIGNES`` porte le **``D3`` du listing** ( ``MOVE.W #$0017,D3``
+#: ;19f4 ), non un compteur : ``DBF D3`` ( ;1b12) tourne donc ``D3+1 = 24``
+#: fois. ``Ecran.sprite`` compte pareil ( ``range(lignes+1)`` ), d'ou
+#: ``lignes=TERRAIN_LIGNES`` sans le ``-1`` que portent
+#: ``PERSONNAGE_LIGNES``/``OBJET_LIGNES`` -- eux des **compteurs** (16 et 32,
+#: soit ``#$000F`` ;1916 et ``#$001F`` ;1820).
 TERRAIN_PAS = 0x1E0
 TERRAIN_LIGNES = 0x17
 TERRAIN_LIMITE = 0xB0
@@ -1173,7 +1201,7 @@ def marqueur_dessiner(ecran: Ecran, tuiles: bytes, cle: int,
     tens, units = divmod(cle, 10)           # ``DIVU #$000A`` ;1ce2
     ecran.sprite((units - tens) * 16 + 0x90,
                  (units + tens) * 8 + 0x18 - _octet(_dec2(cle)),
-                 ident, tuiles, lignes=TERRAIN_LIGNES - 1,
+                 ident, tuiles, lignes=TERRAIN_LIGNES,
                  limite=TERRAIN_LIMITE, dernier=0xC7, octets=TERRAIN_PAS,
                  paquets=2)
 
@@ -1424,8 +1452,8 @@ class Scene:
         self.revelation_donnees = revelation
         self.credits = credits
         self.lignes = [list(e) for e in LIGNES_ETAT]
-        self.cles = [0] * NB_MARQUEURS      # ``(-31982)`` ;09ec
-        self.ids = [0] * NB_MARQUEURS       # ``(-31984)`` ;0a30
+        self.cles = [0] * NB_EMPLACEMENTS     # ``(-31982)`` ;09ec
+        self.ids = [0] * NB_EMPLACEMENTS      # ``(-31984)`` ;0a30
         self.a_marquer = False              # ``(-12,A5)``
         self.revelation = 0                 # ``(-16,A5)``
         self.revelation2 = 0                # ``(-14,A5)``
@@ -1457,7 +1485,7 @@ class Scene:
         self.fond.donnees[:] = self.fond_repli.donnees
         if self.revelation >= 0x14:          # ``CMPI.W #$0014`` ;083c
             reveler(self.fond, 0, 0, self.revelation, self.revelation_donnees)
-        for i in range(NB_MARQUEURS):
+        for i in range(NB_EMPLACEMENTS):
             if self.cles[i] == 0:            # ``LAB_880`` ;0880-088e
                 break
             marqueur_dessiner(self.fond, self.tuiles, self.cles[i],
@@ -1466,26 +1494,35 @@ class Scene:
 
     # -- ``SUB_714`` ;09e6-0b36 ----------------------------------------------
     def _marqueur_poser(self, ligne: int, octet: int) -> None:
-        """Opcode ``$64``-``$81`` : insertion **triee** dans les huit emplacements.
+        """Opcode ``$64``-``$81`` : insertion **triee** dans les emplacements.
 
-        ``D6`` est le premier emplacement vide ( ;09e6-09fa), sans borne : le
-        port s'arrete a ``8``. ``D7`` parcourt ensuite ``0..D6`` ; a chaque
-        pas, la cle egale met a jour l'emplacement ( ;0a14-0a34), une cle
-        inferieure provoque l'insertion -- la queue est remontee d'un cran, ce
-        qui fait disparaitre le vide ( ;0a38-0a8a) -- et une cle superieure
-        fait avancer ``D7`` ( ;0a4a-0ac2). Sinon l'emplacement ``D6`` est
-        rempli en bout ( ;0aca-0af8).
+        ``D6`` est le premier emplacement vide ( ;09e6-09fa) : le 68000
+        balaie ``cles``, stride 4, **jusqu'au premier zero** et sans borne.
+        Le port balaie donc les ``NB_EMPLACEMENTS`` emplacements du BSS et
+        non plus huit -- ``SUB_536`` vide le tableau par la meme boucle sans
+        borne ( ;0566-058a ), le dessin s'arrete au premier zero ( ;
+        0880-088e ), et rien n'introduit de longueur : ``8`` etait une
+        supposition, et elle perdait tout placement passe table pleine --
+        mises a jour comprises -- figeant les maisons a un stade de
+        construction deja passe.
+
+        ``D7`` parcourt ensuite ``0..D6`` ; a chaque pas, la cle egale met a
+        jour l'emplacement ( ;0a14-0a34), une cle inferieure provoque
+        l'insertion -- la queue est remontee d'un cran, ce qui fait
+        disparaitre le vide ( ;0a38-0a8a) -- et une cle superieure fait
+        avancer ``D7`` ( ;0a4a-0ac2). Sinon l'emplacement ``D6`` est rempli
+        en bout ( ;0aca-0af8).
         """
         valeur = MARQUEURS_TABLE[octet - 0x64]   # ;0a1c
         cle = self.lignes[ligne][4]
         d6 = 0
-        while d6 < NB_MARQUEURS and self.cles[d6] != 0:
+        while d6 < NB_EMPLACEMENTS and self.cles[d6] != 0:
             d6 += 1
-        if d6 >= NB_MARQUEURS:
-            # Le 68000 n'a pas de borne : il lit les emplacements suivants
-            # jusqu'a trouver un zero, puis remonte la queue **au-dela** du
-            # tableau et ecrase les variables voisines. Le port s'arrete la.
-            # **[APPROV]**
+        if d6 >= NB_EMPLACEMENTS:
+            # Le 68000 continuerait jusqu'a ``0x7086`` (``bm3``), le premier
+            # mot voisin non nul, puis au-dela en ecrasant les variables
+            # suivantes. ``NB_EMPLACEMENTS`` s'arrete **avant** : la scene
+            # ne remplit jamais les vingt emplacements. **[APPROV]**
             return
         d7 = 0
         fait = False
@@ -1701,7 +1738,8 @@ def _titre(cadre: pygame.Surface, fenetre: pygame.Surface | None,
 
 
 def _scene(cadre: pygame.Surface, fenetre: pygame.Surface | None,
-           horloge: object, fps: float, duree_script: float) -> int:
+           horloge: object, fps: float, duree_script: float,
+           son: bool = True) -> int:
     """``SUB_1186`` ;1186-1266 : le fond, la chute, le temple, le script.
 
     L'ordre du listing est exact : ``SUB_1696`` charge ``demo.pic`` dans
@@ -1721,8 +1759,17 @@ def _scene(cadre: pygame.Surface, fenetre: pygame.Surface | None,
     tuiles = charger_tuiles()
     sprites = charger_sprites()
     revelation = charger_revelation()
-    charger_son()                           # ``SUB_2C36`` ;1194  **[APPROV]**
     fond = charger_fond()                   # ``SUB_1696`` ;118a-1192
+    charger_son()                           # ``SUB_2C36`` ;1194  **[APPROV]**
+    if son:
+        # C'est **ici**, en tete de ``SUB_1186``, que le listing arme le
+        # lecteur ( ``JSR (SUB_2C36,PC)`` ;1194 ) : ``SUB_456`` (le titre)
+        # n'appelle aucune routine de son -- verifie : les seuls ``JSR`` de
+        # ;041c a ;0714 vont a ``SUB_17B2``, ``SUB_549A``, ``SUB_55BA``,
+        # ``SUB_29E``, ``SUB_58CA``, ``SUB_10A2``, ``SUB_110A``,
+        # ``SUB_50B2`` et ``SUB_358``. La musique n'existe donc que pendant
+        # la scene, jamais sur l'ecran titre.
+        musique.demarrer(musique.MUSIQUE_INTRO)   # **ECART** : ``popsam``
     repli = Ecran(bytearray(fond.donnees))  # ``bm3 <- bm2``
     grille = Grille(alea, tuiles)
     grille.echeller()
@@ -1788,7 +1835,7 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     Graine : ``SUB_384`` ;03a0-03a6 n'appelle ``SUB_2E2`` qu'avec 0, et
     ``SUB_1186`` regraine a ``$7F`` avant la chute : la scene est determinee.
 
-    **[APPROV]** -- quatre ecarts assumes :
+    **[APPROV]** -- cinq ecarts assumes :
 
     * le rythme vient d'une horloge pygame ; le listing est pilote par le
       copper (``SUB_358`` ;0358 echange ``(-32078)`` et ``(-32074)`` puis
@@ -1804,17 +1851,18 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
       reboucle sur le titre, comme dans le listing ;
     * ``duree_script`` borne la phase ``SUB_714``, qui n'a aucune fin propre.
       ``< 0`` la laisse ouverte jusqu'a une touche, ``0`` l'evite ;
-    * ``son`` arme la musique de fond -- **ECART Phase 86**. Le listing
-      installe le lecteur ``popsam`` en tete de ``SUB_1186`` ( ;1194) et le
-      remonte en fin de scene ( ``SUB_2DD8`` ;1260) : chez lui la musique
-      n'existe que **pendant la scene**, et ``SUB_456`` (le titre) n'appelle
+    * ``son`` arme la musique de fond. Le **calque** est celui du listing,
+      et non plus le calque oppose en Phase 86 : ``SUB_2C36`` est appele en
+      ;1194, en tete de ``SUB_1186``, et ``SUB_2DD8`` en ;1260, derniere
+      instruction de la scene avant ``RTS``. ``SUB_456`` (le titre) n'appelle
       aucune routine de son -- verifie : les seuls ``JSR`` de ;041c a ;0714
       vont a ``SUB_17B2``, ``SUB_549A``, ``SUB_55BA``, ``SUB_29E``,
       ``SUB_58CA``, ``SUB_10A2``, ``SUB_110A``, ``SUB_50B2`` et ``SUB_358``.
-      Le port joue ``reference/Main Theme.mp3`` sur **tout** ``demarrer`` :
-      reboucler le lecteur a chaque scene hacherait la piste, et le titre
-      sans musique est ce que l'utilisateur a demande corriger. Les effets
-      (codes de son) restent portes par ``populous.sound``.
+      La musique est donc **pendant la scene** et le titre est silencieux.
+      Seul le support reste un **ECART** : le port joue
+      ``reference/Main Theme.mp3`` au lieu de ``popsam``, dont le lecteur
+      (``SUB_2F9C``/``SUB_3046``/``LAB_3060``) n'est pas transcrit. Les
+      effets (codes de son) restent portes par ``populous.sound``.
       ``son=False`` coupe tout -- c'est ce que font les outils qui n'ont
       pas de carte son.
 
@@ -1834,21 +1882,24 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     fps = max(0.0, float(im_par_seconde))
     if horloge is None:
         horloge = pygame.time.Clock()
-    if son:
-        musique.demarrer(musique.MUSIQUE_INTRO)
     try:
         while True:
             choix = _titre(cadre, fenetre, horloge, fps, attente_titre)
             if choix != 0:
                 return choix                    # 1, 2, 3 -- ou -1
-            fini = _scene(cadre, fenetre, horloge, fps, duree_script)
+            fini = _scene(cadre, fenetre, horloge, fps, duree_script, son)
+            # ``SUB_2DD8`` ;1260 est la **derniere** instruction de
+            # ``SUB_1186`` avant ``UNLK/RTS`` : couper ici, a l'heure ou la
+            # scene rend la main, est le calque exact du listing. La scene
+            # est donc musique et le titre est silencieux.
+            if son:
+                musique.arreter()
             if fini < 0:
                 return -1
             if not boucle:
                 return 0
     finally:
-        # ``SUB_2DD8`` ;1260 remonte le lecteur en fin de scene ; ici la
-        # piste couvre tout ``demarrer`` et doit rendre la main meme si la
-        # fenetre est fermee (-1).
+        # Filet de securite : la fenetre fermee (-1) ou une exception sort
+        # du ``while`` sans repasser par ;1260.
         if son:
             musique.arreter()

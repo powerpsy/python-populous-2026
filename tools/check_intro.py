@@ -1270,12 +1270,122 @@ chk(refus == 0,
 
 cap = _Capture()
 intro.marqueur_dessiner(cap, b"\0" * 23520, 44, 33)
-chk(bool(cap.mots) and cap.mots.get("lignes") == 0x16
+chk(bool(cap.mots) and cap.mots.get("lignes") == 0x17
     and cap.mots.get("octets") == 0x1E0
     and cap.mots.get("limite") == 0xB0
     and cap.mots.get("paquets") == 2,
-    "SUB_1CBC finit sur SUB_19EE : 23 lignes, limite $B0, $1E0 octets, "
+    "SUB_1CBC finit sur SUB_19EE : 24 lignes (D3=$17, DBF -> D3+1), "
+    "limite $B0, $1E0 octets, "
     "2 paquets -- donc land0 et non sprites0.dat ( %s )" % (cap.mots,))
+
+# Phase 87 : les trois hauteurs du listing, et le compte reel de ``DBF``.
+# ``TERRAIN_LIGNES`` porte le **D3** de ;19f4 et non un compteur, donc il
+# vaut $17 pour 24 tours -- ``Ecran.sprite`` compte ``range(hauteur + 1)``,
+# soit ``D3 + 1``, exactement comme ``DBF D3`` ( ;1b12). Les deux autres
+# bornes sont des compteurs deja decreases (``#$000F`` ;1916 = 16 lignes,
+# ``#$001F`` ;1820 = 32).
+chk(intro.TERRAIN_LIGNES == 0x17 == intro.HAUTEUR_SPRITE
+    and intro.TERRAIN_LIGNES + 1 == 24,
+    "TERRAIN_LIGNES == $17 == HAUTEUR_SPRITE : SUB_19EE dessine D3+1 = 24 "
+    "lignes ( %d )" % intro.TERRAIN_LIGNES)
+chk(intro.PERSONNAGE_LIGNES == 16 and intro.OBJET_LIGNES == 32,
+    "les deux autres dessinateurs restent des compteurs : SUB_1910 = 16 "
+    "lignes ( $F), SUB_1802 = 32 ( $1F) ( %d / %d )"
+    % (intro.PERSONNAGE_LIGNES, intro.OBJET_LIGNES))
+
+# -------------------------- Phase 87 : le tableau ``cles``/``ids`` ---------
+# Le port plafonnait a **huit** emplacements. Or le listing balaie ``cles``
+# stride 4 **sans borne** ( ;09ea-09fa), ``SUB_536`` vide le tableau par la
+# meme boucle sans borne ( ;0566-058a), et le dessin s'arrete au premier
+# zero ( ;0880-088e) : rien n'introduit une longueur de 8. La seule borne
+# reelle est la zone BSS encore libre, ``0x7058..0x7085`` = 20 mots -- le
+# voisin non nul est ``(-31904)`` = ``0x7086`` = ``bm3``.
+chk(intro.NB_EMPLACEMENTS == 20,
+    "NB_EMPLACEMENTS == 20 : zone BSS 0x7058..0x7085, bornee par bm3 a "
+    "0x7086 ( %d )" % intro.NB_EMPLACEMENTS)
+
+_m_alea = intro.Alea(0)
+_m_fond = intro.Ecran()
+_m_scene = intro.Scene(_m_alea, intro.Grille(_m_alea, tuiles), _m_fond,
+                       intro.Ecran(), intro.charger_sprites(), tuiles,
+                       intro.charger_revelation(), credits)
+chk(len(_m_scene.cles) == 20 and len(_m_scene.ids) == 20,
+    "cles et ids font chacun 20 mots, comme le BSS ( %d / %d )"
+    % (len(_m_scene.cles), len(_m_scene.ids)))
+
+# 14 emplacements distincts : le maximum mesure en execution sur la scene
+# reelle (image 0757). Le plafond de 8 en perdait la moitie, mises a jour
+# comprises : 29 placements perdus des l'image 663 sur 1320.
+for _i in range(14):
+    _m_scene.lignes[_i][4] = 0x400 + _i
+    _m_scene._marqueur_poser(_i, 0x64)
+_remplis = [c for c in _m_scene.cles if c != 0]
+chk(len(_remplis) == 14 and _remplis == sorted(_remplis)
+    and _m_scene.cles[14:] == [0] * 6,
+    "14 cles distinctes sont toutes conservees, triees, et les six "
+    "restantes restent a zero : %d ( %s )" % (len(_remplis), _m_scene.cles))
+
+# la meme cle met a jour l'emplacement sans en creer un nouveau
+# ( ``CMP.W egal -> MOVE valeur`` ;0a14-0a34 )
+_m_scene.lignes[3][4] = 0x403
+_m_scene._marqueur_poser(3, 0x7B)
+_remplis = [c for c in _m_scene.cles if c != 0]
+chk(len(_remplis) == 14
+    and _m_scene.ids[3] == intro.MARQUEURS_TABLE[0x7B - 0x64],
+    "reposer la meme cle met a jour l'emplacement : %d emplacements, "
+    "ids[3]=$%02X" % (len(_remplis), _m_scene.ids[3]))
+
+# une cle inferieure s'insere en tete et remonte la queue d'un cran
+# ( ``MOVE.W (i-1) -> i`` ;0a38-0a8a )
+_m_scene.lignes[7][4] = 1
+_m_scene._marqueur_poser(7, 0x64)
+_remplis = [c for c in _m_scene.cles if c != 0]
+chk(len(_remplis) == 15 and _m_scene.cles[0] == 1
+    and _m_scene.cles[1] == 0x400 and _m_scene.cles[15:] == [0] * 5,
+    "une cle inferieure s'insere en tete sans rien perdre : %d "
+    "emplacements, cles[0:3]=%s" % (len(_remplis), _m_scene.cles[:3]))
+
+# la table se remplit jusqu'a 20, et le 21e est refuse -- le 68000, lui,
+# continuerait jusqu'au ``bm3`` voisin. **[APPROV]** : la scene reelle ne
+# depasse jamais 14. ``if d6 >= NB_EMPLACEMENTS: return`` ;09fa-0af8.
+_n = 15
+while _n < 20:
+    _m_scene.lignes[_n % 16][4] = 0x600 + _n
+    _m_scene._marqueur_poser(_n % 16, 0x64)
+    _n += 1
+_remplis = [c for c in _m_scene.cles if c != 0]
+chk(len(_remplis) == 20 and _remplis == sorted(_remplis),
+    "les 20 emplacements se remplissent tous, tries : %d ( %s )"
+    % (len(_remplis), _m_scene.cles))
+_m_scene.lignes[9][4] = 0x7FF
+_m_scene._marqueur_poser(9, 0x64)
+_remplis = [c for c in _m_scene.cles if c != 0]
+chk(len(_remplis) == 20 and 0x7FF not in _m_scene.cles,
+    "le 21e emplacement est refuse : le tableau reste a 20 ( %d )"
+    % len(_remplis))
+
+# ``_marques`` dessine jusqu'au premier zero ( ;0880-088e), c'est-a-dire
+# les 20, puis remet ``(-12,A5)`` a zero ( ;0890).
+_dessines = []
+_orig_marqueur = intro.marqueur_dessiner
+
+
+def _compte_marqueur(ecran, tuiles_, cle, ident):
+    _dessines.append((cle, ident))
+    _orig_marqueur(ecran, tuiles_, cle, ident)
+
+
+intro.marqueur_dessiner = _compte_marqueur
+try:
+    _m_scene._marques(_m_fond)
+finally:
+    intro.marqueur_dessiner = _orig_marqueur
+chk(len(_dessines) == 20
+    and [c for c, _ in _dessines] == sorted(c for c, _ in _dessines)
+    and not _m_scene.a_marquer,
+    "_marques dessine les 20 emplacements jusqu'au premier zero puis "
+    "balaie (-12,A5) : %d dessines ( a_marquer=%s )"
+    % (len(_dessines), _m_scene.a_marquer))
 
 # --------------------------------------------------- SUB_E40 : le temple
 # ``SUB_10A2($12)`` ;0e44 remplit dix-huit colonnes. La premiere cascade est
@@ -1610,6 +1720,26 @@ try:
                       channels=_mus.CANAUX)
     chk(pygame.mixer.get_init() is not None,
         "mixer dummy ouvert en %s" % (pygame.mixer.get_init(),))
+
+    # (a') l'ecran titre est **silencieux** : ``SUB_456`` ;0456-052a
+    # n'appelle aucune routine de son. Les seuls ``JSR`` de ;041c a ;0714
+    # vont a ``SUB_17B2``, ``SUB_549A``, ``SUB_55BA``, ``SUB_29E``,
+    # ``SUB_58CA``, ``SUB_10A2``, ``SUB_110A``, ``SUB_50B2`` et ``SUB_358`` :
+    # l'armement est en tete de ``SUB_1186`` ( ;1194 ), jamais ici.
+    pygame.display.init()
+    _scr_t = pygame.display.set_mode((960, 768))
+    _cadre_t = pygame.Surface((320, 256)).convert()
+    _cadre_t.fill((0, 0, 0))
+    _clk_t = pygame.time.Clock()
+    pygame.event.clear()
+    _rc_t = intro._titre(_cadre_t, _scr_t, _clk_t, 5000.0, 0.02)
+    chk(_rc_t == 0,
+        "_titre rend 0 sur le delai de ;04a0-04ae ( %s )" % (_rc_t,))
+    chk(_mus.dernier() is None and not _mus.actif()
+        and _mus.courant() is None,
+        "l'ecran titre est silencieux : aucune piste armee ni coupee "
+        "( dernier=%s )" % (_mus.dernier(),))
+    pygame.event.clear()
 
     # (a) demarrer -> actif -> arreter
     chk(_mus.demarrer(_mus.MUSIQUE_INTRO),
