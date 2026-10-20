@@ -29,10 +29,12 @@ Le ``SUB_714`` du demo (l'interpreteur de script a 16 lignes, ``SUB_50B2`` /
 voir ``docs/PROGRESSION.md`` (Phase 85). Le defilement des credits, lui,
 est transcrit a l'identique.
 
-Trois arbitrages assumes, tous marques ECART plus bas :
+Quatre arbitrages assumes, tous marques ECART plus bas :
 * l'ecran titre du port fait 320x200 ; la souris est ramenee a l'espace
   0..319 du listing sur les deux axes (voir ``souris_amiga``) ;
-* le son de l'intro (``popsam``, ``SUB_2DD8``) n'est pas porte ;
+* la musique de l'intro vient d'un **fichier** fourni par l'utilisateur
+  (``reference/Main Theme.mp3``), pas du lecteur ``popsam`` -- Phase 86,
+  voir ``populous.musique`` ;
 * la sortie de l'intro (``SUB_16E`` execute ``populous.prg``) devient, dans
   le port, le retour de ``demarrer`` vers le lanceur.
 
@@ -54,6 +56,7 @@ from __future__ import annotations
 import pygame
 
 from . import assets
+from . import musique                       # ECART Phase 86 : ``reference/*.mp3``
 
 # ------------------------------------------------------------------- ecran
 #: Octets par ligne d'un plan : 320 pixels / 8. ``SUB_19EE`` ;1a0c (``$28``).
@@ -1224,11 +1227,37 @@ def charger_son() -> bytes:
     """``popsam`` : ``SUB_2C36`` ;2c36-2dbe alloue ``$1C020`` octets puis en
     lit ``$1C01E`` -- la taille exacte du fichier.
 
-    **[APPROV]** : le format n'est pas Protracker (l'en-tete ouvre sur
-    ``$0000 $520C $2710...`` et l'entropie est celle d'une donnee compactee)
-    et le lecteur -- ``SUB_2F9C``, ``SUB_3046``, ``LAB_2E9E`` -- n'est pas
-    transcrit. Le port lit la banque, verifie donc sa taille, mais laisse le
-    son a ``populous.sound``. Le demarrage lui-meme est ``SUB_2DD8`` ;
+    **Format connu (Phase 86), verifie a l'execution** : le fichier n'a
+    **pas** d'en-tete plat. C'est un flux de huit blocs, chacun
+    ``LONG longueur + WORD periode`` suivi immediatement de ``longueur``
+    octets d'echantillon 8 bits signes. Offsets, longueurs et periodes :
+
+    =========  ==========  =========
+    offset     longueur    periode
+    =========  ==========  =========
+    0          21004       10000
+    21010      6032        10000
+    27048      8244        8000
+    35298      35662       8000
+    70966      15340       4000
+    86312      8008        8000
+    94326      1754        5300
+    96086      18626       8000
+    =========  ==========  =========
+
+    Les longueurs totalisent 114670, plus 8x6 = 48 octets de descripteurs,
+    soit **114718 = $1C01E** -- la longueur lue en ;2cc0 -- et le parcours
+    retombe exactement sur la fin du fichier. La periode du bloc 0 vaut
+    ``$2710`` = 10000 : c'est bien ``$0000 $520C $2710...`` qui ouvre le
+    fichier, et ``tools/check_mod.py`` confirme qu'aucune signature
+    Protracker (``M.K.``, ``4CHN``) n'y figure.
+
+    **[APPROV]** : le lecteur -- ``SUB_2F9C``, ``SUB_3046``, ``LAB_3060`` --
+    n'est pas transcrit ; les tables de sequences resident dans l'executable
+    (``$3532..$3F91``) et non dans le fichier, donc aucun lecteur externe ne
+    pourrait les lire. Le port lit la banque, verifie sa taille, et laisse la
+    musique a ``populous.musique`` (ECART Phase 86) ; ``populous.sound``
+    porte les codes de son. Le demarrage lui-meme est ``SUB_2DD8`` ;
     2dd8, appele en ;1260 **apres** ``SUB_2E2(0)``.
     """
     return (assets.GAME / SON_NOM).read_bytes()[:SON_TAILLE]
@@ -1746,7 +1775,8 @@ def _scene(cadre: pygame.Surface, fenetre: pygame.Surface | None,
 def demarrer(cadre: pygame.Surface, horloge: object = None,
              fenetre: pygame.Surface | None = None,
              im_par_seconde: float = 50.0, attente_titre: float = 30.0,
-             duree_script: float = 45.0, boucle: bool = True) -> int:
+             duree_script: float = 45.0, boucle: bool = True,
+             son: bool = True) -> int:
     """Joue l'intro -- titre, scene, et rebouclage -- et renvoie le choix.
 
     ``SUB_41C`` ;041c-0454 assemble deux bouts seulement : ``SUB_456`` et,
@@ -1773,7 +1803,20 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
       ``populous.prg``. Une touche ou le bouton droit rend la scene finie et
       reboucle sur le titre, comme dans le listing ;
     * ``duree_script`` borne la phase ``SUB_714``, qui n'a aucune fin propre.
-      ``< 0`` la laisse ouverte jusqu'a une touche, ``0`` l'evite.
+      ``< 0`` la laisse ouverte jusqu'a une touche, ``0`` l'evite ;
+    * ``son`` arme la musique de fond -- **ECART Phase 86**. Le listing
+      installe le lecteur ``popsam`` en tete de ``SUB_1186`` ( ;1194) et le
+      remonte en fin de scene ( ``SUB_2DD8`` ;1260) : chez lui la musique
+      n'existe que **pendant la scene**, et ``SUB_456`` (le titre) n'appelle
+      aucune routine de son -- verifie : les seuls ``JSR`` de ;041c a ;0714
+      vont a ``SUB_17B2``, ``SUB_549A``, ``SUB_55BA``, ``SUB_29E``,
+      ``SUB_58CA``, ``SUB_10A2``, ``SUB_110A``, ``SUB_50B2`` et ``SUB_358``.
+      Le port joue ``reference/Main Theme.mp3`` sur **tout** ``demarrer`` :
+      reboucler le lecteur a chaque scene hacherait la piste, et le titre
+      sans musique est ce que l'utilisateur a demande corriger. Les effets
+      (codes de son) restent portes par ``populous.sound``.
+      ``son=False`` coupe tout -- c'est ce que font les outils qui n'ont
+      pas de carte son.
 
     ``cadre`` est le bitmap de travail, celui que le jeu appelle
     ``self.frame`` (320x200, quatre plans) ; ``fenetre`` est la surface de
@@ -1791,12 +1834,21 @@ def demarrer(cadre: pygame.Surface, horloge: object = None,
     fps = max(0.0, float(im_par_seconde))
     if horloge is None:
         horloge = pygame.time.Clock()
-    while True:
-        choix = _titre(cadre, fenetre, horloge, fps, attente_titre)
-        if choix != 0:
-            return choix                    # 1, 2, 3 -- ou -1
-        fini = _scene(cadre, fenetre, horloge, fps, duree_script)
-        if fini < 0:
-            return -1
-        if not boucle:
-            return 0
+    if son:
+        musique.demarrer(musique.MUSIQUE_INTRO)
+    try:
+        while True:
+            choix = _titre(cadre, fenetre, horloge, fps, attente_titre)
+            if choix != 0:
+                return choix                    # 1, 2, 3 -- ou -1
+            fini = _scene(cadre, fenetre, horloge, fps, duree_script)
+            if fini < 0:
+                return -1
+            if not boucle:
+                return 0
+    finally:
+        # ``SUB_2DD8`` ;1260 remonte le lecteur en fin de scene ; ici la
+        # piste couvre tout ``demarrer`` et doit rendre la main meme si la
+        # fenetre est fermee (-1).
+        if son:
+            musique.arreter()

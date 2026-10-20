@@ -50,7 +50,7 @@ python tools/smoke_sim.py           # 5000 tours de simulation
 | pouvoirs | les 4 pouvoirs de terrain, vérifiés au coût exact de mana |
 | interface | `_zoom_map`, `_sculpt`, `_interogate`, `_draw_icon`, `_draw_bar`, `_toggle_icon`, `_text`, `_requester` |
 | conquete | `level.dat` (99 paliers), boîte « TRY NUMBER », écran de fin |
-| son | horloge audio L19620-19673, tempo dérivé de la population |
+| son | horloge audio L19620-19673, tempo dérivé de la population, musique de fond par fichier |
 
 Le détail, phase par phase, avec les numéros de ligne du listing, est dans
 [`docs/PROGRESSION.md`](docs/PROGRESSION.md).
@@ -64,6 +64,7 @@ populous/        le jeu
   render.py      rendu du terrain, des sprites, de l'interface
   powers.py      les pouvoirs
   sound.py       le lecteur audio et son horloge
+  musique.py     la musique de fond (reference/*.mp3)
   conquest*.py   la conquete
   assets.py      décodage des assets (PIL)
   terrain.py     génération du relief

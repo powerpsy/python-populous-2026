@@ -2073,13 +2073,121 @@ l’utilisateur ferme la fenêtre.
 | `MASQUES_REVELATION` | `$1F62` | 60 o |
 | `TABLE_COLONNE2` | `HAUTEUR_CASE` | 100 o |
 
-### Ce qui reste ouvert (Phase 85)
+### Ce qui reste ouvert (Phase 85, mis à jour en Phase 86)
 
-* **la musique** : `popsam` est chargé, mais le lecteur (`SUB_2F9C`,
-  `SUB_3046`, `LAB_2E9E`) n’est pas décodé ;
+* **la musique** : traitée en Phase 86 (§ 6.8) — `popsam` est décodé, le
+  lecteur reste non transcrit, et la musique vient d’un fichier ;
 * **`SUB_16E`** (exécute `populous.prg`) : hors de la portée du portage ;
 * le script du rouleau a une durée finie — dans l’original,
   `SUB_1186` appelle `SUB_714` qui, lui-même, appelle `SUB_16E`.
+
+## 6.8 Le son : `popsam` décodé, la musique par fichier (Phase 86)
+
+### `popsam` : un flux de huit blocs, pas un en-tête plat
+
+`SUB_2C36` ;2c36 alloue `$1C020` octets puis lit `$1C01E` = **114718**, la
+taille exacte du fichier. Le format, vérifié à l’exécution
+(`tools/check_intro.py`, Phase 86), n’a **pas** d’en-tête contigu : c’est un
+flux de huit blocs, chacun `LONG longueur` + `WORD periode` suivi
+immédiatement de `longueur` octets d’échantillon 8 bits signés.
+
+| #  | offset | longueur | periode |
+|----|--------|----------|---------|
+| 0  | 0      | 21004    | 10000   |
+| 1  | 21010  | 6032     | 10000   |
+| 2  | 27048  | 8244     | 8000    |
+| 3  | 35298  | 35662    | 8000    |
+| 4  | 70966  | 15340    | 4000    |
+| 5  | 86312  | 8008     | 8000    |
+| 6  | 94326  | 1754     | 5300    |
+| 7  | 96086  | 18626    | 8000    |
+
+Somme des longueurs `114670` + `8 × 6 = 48` octets de descripteurs →
+**114718 = `$1C01E`**, et le parcours retombe pile sur la fin du fichier.
+Le premier bloc s’ouvre sur `00 00 52 0C 27 10`, d’où la lecture
+`$0000 $520C $2710...`. Aucune signature Protracker (`M.K.`, `4CHN`) n’y
+figure — `tools/check_mod.py` le confirme — donc **aucun lecteur tiers ne
+peut lire `popsam`**.
+
+### La musique n’est pas dans le fichier
+
+`popsam` ne porte que les huit échantillons. Le séquenceur vit **dans
+l’exécutable**, de `$3532` à `$3F91` ( `$A60` = 2656 octets), adressé
+relativement à `A3 = $2F98` :
+
+| adresse   | contenu                                                     |
+|-----------|-------------------------------------------------------------|
+| `$3532`   | `LAB_3532` : table de périodes, 49 mots, `$1000` → `$0100`   |
+| `$35A0`   | `LAB_35A0` : 13 instruments × 32 octets (jusqu’à `$3740`)    |
+| `$37A0`   | `LAB_37A0` : table d’effets                                  |
+| `$3806`   | en-tête de la tune 0 : octet inutilisé, **tempo = 9** en ;3807, puis quatre longs |
+| `$3818`   | liste 0 de motifs (27 entrées + long nul)                    |
+| `$3888`   | liste 1 (28 + nul), `$38FC` liste 2 (26 + nul), `$3968` liste 3 (25 + nul) |
+| `$3F92`   | `SUB_3F92`, fin du bloc                                      |
+
+Les quatre longs de la tune 0 (`$880 $8F0 $964 $9D0`) sont **relatifs à
+A3** : `A3 + $880 = $3818`, `A3 + $8F0 = $3888`, `A3 + $964 = $38FC`,
+`A3 + $9D0 = $3968` — exactement les quatre listes. Les longs de *ces*
+listes sont relatifs à A3 eux aussi : le premier vaut `$E06`, donc
+`A3 + $E06 = $3D9E`, où commence le premier motif.
+
+Un motif s’ouvre sur `$80 $00` et se ferme sur `$84` (le premier pèse 39
+octets). Entre les deux : des paires `<attente> <index LAB_3532>`. Dans la
+tune 0, seul `$80 n` avec `n ∈ 0..7` sert d’opcode.
+
+Le lecteur lui-même — `SUB_2F9C` (démarrage), `SUB_3046` (arrêt),
+`LAB_3060` (un tic) — **n’est pas transcrit** : `[APPROV]`.
+
+### Le tic est le VBL, 50 Hz
+
+Deux preuves convergentes, toutes deux tirées du listing :
+
+* `SUB_55BA` écrit une nouvelle liste de cuivre ( `MOVE.L D0,COP1LCH`
+  ;55ca) puis tourne sur `INTREQR & $0020` ( ;55d0-55e8) : c’est
+  l’attente du **vertical blank** — donc le bit `$0020` est `VERTB` ;
+* `LAB_5242` est installée en `AUTO_INT3` ( `$6C`, niveau 3) par
+  `SUB_5420` avec `INTENA #$C028` ( ;5446) et lit `JOY0DAT` une fois par
+  image ( ;525c) : le même masque `VERTB|AUD0` que celui qu’installe
+  `SUB_2C36` pour la musique.
+
+Le décuplage musical confirme : `($10,A0) = note × tempo` avec
+`tempo = 9`, et les notes employées `{1,2,4,5,6,7,8,12,14,16,30,32}` à
+50 Hz donnent une échelle binaire exacte (croche 0,18 s … blanche 2,88 s),
+soit ≈ 83 BPM. Un déclenchement par longueur de canal `AUD0` donnerait
+0,7 à 8 s par tic : invraisemblable musicalement.
+
+### `[ECART]` la musique vient de `reference/*.mp3`
+
+Le séquenceur n’est pas transcrit, et l’utilisateur a fourni deux
+fichiers : `reference/Main Theme.mp3` (~240 s) pour l’intro et
+`reference/BGM.mp3` (~128 s) pour la partie. `populous.musique` les joue
+via `pygame.mixer.music`, qui **mélange** son flux avec les canaux du
+`SoundEngine` : les codes de son (`_PlaySound`) passent donc par dessus la
+musique, comme sur l’Amiga où ils occupaient les voies libres.
+
+Trois conséquences, toutes marquées dans le code :
+
+* `MusicEngine.image()` **muë** la mesure synthétisée pendant qu’une piste
+  joue. `_mesure()` n’est qu’un substitut inventé faute d’avoir décodé
+  `_load_sound` : deux musiques de fond en même temps n’ont aucun sens.
+  L’horloge (`music_now`, `curbeat`) et le délai `0x28` des effets
+  gardent leur sens exact ;
+* `intro.demarrer(..., son=True)` arme `Main Theme` à l’entrée et la coupe
+  dans un `finally`, quel que soit le chemin de sortie. Chez lui
+  `SUB_2C36` n’est appelé qu’en ;1194 et remonté en ;1260 : la musique
+  n’existe que **pendant la scène**, et `SUB_456` (le titre) n’appelle
+  aucune routine de son — vérifié, les seuls `JSR` de ;041c à ;0714 vont
+  à `SUB_17B2`, `SUB_549A`, `SUB_55BA`, `SUB_29E`, `SUB_58CA`,
+  `SUB_10A2`, `SUB_110A`, `SUB_50B2` et `SUB_358`. Le port joue la piste
+  sur tout `demarrer` : reboucler le lecteur à chaque scène hacherait la
+  musique ;
+* `Game.run()` **arme** `BGM.mp3` et `maj_musique()` suit `music_on`
+  (icône de la barre, L1744-1750) ; les outils en ligne de commande qui
+  construisent un `Game` sans boucle d’image n’arment jamais la piste.
+
+Fichier manquant, carte son absente : `musique.demarrer()` renvoie `False`,
+`musique.actif()` reste faux et les mesures synthétisées reprennent la
+main — le port dégrade sans jamais casser.
 
 # 7. Chapitre 6 — Gestion du temps
 

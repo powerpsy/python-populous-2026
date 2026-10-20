@@ -54,6 +54,7 @@ from populous.assets import load_land as load_tiles  # noqa: E402
 from populous.config import DEFAULT_GROUND, DEFAULT_SEED  # noqa: E402
 from populous.config import TURNS_PER_FRAME, ZOOM  # noqa: E402
 from populous import endtext  # noqa: E402
+from populous import musique  # noqa: E402  ECART Phase 86 : reference/*.mp3
 from populous.conquest import load_levels  # noqa: E402
 from populous.conquest_win import (BLOC_H, BLOC_X, BLOC_Y,  # noqa: E402
                                    END_WORDS, PALIER_NOMS, WORDS,
@@ -201,6 +202,11 @@ class Game:
         # symbole. On suit le code, pas l'etiquette.
         self.music_on = 1
         self.effect_on = 1
+        # Phase 86 : la musique de fond par fichier (``reference/BGM.mp3``).
+        # Ce drapeau n'est arme que par ``run()`` : un outil qui construit
+        # un ``Game`` sans boucle d'image (autopilot, stress, check_*) ne
+        # doit pas lancer un MP3 pour rien ni laisser un son qui tourne.
+        self._piste_armee = False
         self.icon_toggles: set[tuple[int, int, int]] = set()
         # _left_button / _right_button : 0 = clic (1 image), 0x40 = relache,
         # 1 = stable, 2 = bloque (asm L19582-19591, L999, L2425-2448)
@@ -898,6 +904,7 @@ class Game:
         self.victory_music, self.music_on = self.music_on, 1
         self.victory_effect, self.effect_on = self.effect_on, 1
         self.sound.kill_effect(0, 4)                  # L148C48
+        self.maj_musique()                            # ECART Phase 86 : BGM.mp3
         # (9) L148DB2-148DC2
         self.left_button = 2
         self.victory_dir = 1                          # (-110,A5)
@@ -956,6 +963,7 @@ class Game:
             self.sound.kill_effect(0, 4)              # `_kill_effect(0, 4)`
             self.music_on, self.effect_on = (
                 self.victory_music, self.victory_effect)   # L148F8E-148F94
+            self.maj_musique()                         # ECART Phase 86
             self.victory_speech = False
             self._return_to_game()
             self._next_conquest()
@@ -1830,6 +1838,7 @@ class Game:
                     self.music_on ^= 1              # `_music_off` L1744-1750
                     if self.music_on:               # L1751-1756
                         self.kill_effect(0, 4)
+                    self.maj_musique()              # ECART Phase 86 : BGM.mp3
                 elif row == 4:                      # L1760-1780 effets
                     self.toggle_icon(col, row, 0x17E4)
                     self.effect_on ^= 1
@@ -4023,6 +4032,23 @@ class Game:
         self.start_seed = s
         self.set_ground(self.ground)
 
+    def maj_musique(self) -> None:
+        """La piste de fond suit ``music_on`` -- ECART Phase 86.
+
+        N'agit que si ``run()`` a arme la session : sinon un outil en ligne
+        de commande qui construit un ``Game`` declencherait le chargement de
+        ``BGM.mp3``. Fichier manquant ou carte son absente : ``demarrer``
+        renvoie ``False``, ``musique.actif()`` reste faux, et les mesures
+        synthétisees de ``populous.sound`` reprennent la main -- le port
+        degrade donc sans jamais casser.
+        """
+        if not self._piste_armee:
+            return
+        if self.music_on:
+            musique.demarrer(musique.MUSIQUE_JEU)
+        else:
+            musique.arreter()
+
     def run(self) -> None:
         """La boucle d'image.
 
@@ -4049,6 +4075,12 @@ class Game:
                               fenetre=self.screen,
                               im_par_seconde=50.0) < 0:
                 self.running = False
+
+        # Phase 86 : ``intro.demarrer`` a monte puis remonte ``Main Theme`` ;
+        # on arme ici la piste de la partie. Cet armement est aussi la porte
+        # des outils en ligne de commande : voir ``maj_musique``.
+        self._piste_armee = True
+        self.maj_musique()
 
         # _start_of_game == 2 : choix de monde direct (L3E7B0-3E7E3)
         # L'original : clear _start_of_game, ___clr_wsc, ___swap_screens,
@@ -4090,6 +4122,10 @@ class Game:
             self.afficher()
             self.frames += 1
             self.clock.tick(img_s)
+        # Phase 86 : la piste rend la main avant que ``pygame.quit()`` ne
+        # ferme le mixer -- meme chemin que ``SUB_2DD8`` ;1260.
+        musique.arreter()
+        self._piste_armee = False
         pygame.quit()
 
 

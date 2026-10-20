@@ -68,8 +68,8 @@ python -m populous.game --intro        # avec l'introduction (Phase 84)
 | # | étape | difficulté | état |
 |---|---|---|---|
 | A | **Pouvoirs jouables** (barre d'icônes → `_stats`) | moyenne | phase 4, à faire |
-| B | **Son** (`popsam`, module Amiga) | **haute** | pas commencé |
-| C | **Musique** (`gmusic1`) | **haute** | pas commencé |
+| B | **Son** (`popsam`, module Amiga) | **haute** | partiel : effets (`populous.sound`) et format `popsam` OK en phase 86 ; lecteur non transcrit |
+| C | **Musique** (`gmusic1`) | **haute** | MP3 fournis et joués (phase 86 : intro `Main Theme`, partie `BGM`) ; `gmusic1` toujours inutilisé |
 | D | **Conquest** | - | donnees, textes et boite de dialogue |
 | E | Interface complete | moyenne | OK : blason, jauges, `_text`, `_requester` |
 
@@ -7230,6 +7230,93 @@ ajouté :
   inutile ici.
 
 La scène est prête à être testée.
+
+### Phase 86 — `popsam` décodé, et la musique par fichier
+
+**Objectif initial** : décoder `popsam` et le lecteur de l’intro
+(`SUB_2F9C`, `SUB_3046`, `LAB_3060`) pour que l’attract joue sa
+vraie musique.
+
+**Décision de l’utilisateur en cours de phase** : deux fichiers ont été
+posés dans `reference/` — `Main Theme.mp3` (intro) et `BGM.mp3` (partie) —
+avec la consigne de les lire directement. Le séquenceur n’est donc pas
+transcrit ; il est remplacé par `populous.musique`.
+
+#### Ce qui a été vérifié à l’exécution
+
+* **`popsam` n’a pas d’en-tête plat.** Ma première lecture supposait
+  huit descripteurs contigus sur 48 octets : le contrôle a **échoué**
+  (longueurs absurdes). La forme réelle est un **flux de huit blocs**,
+  chacun `LONG longueur` + `WORD periode` suivi de ses données. Offsets
+  `0 / 21010 / 27048 / 35298 / 70966 / 86312 / 94326 / 96086`, longueurs
+  `21004 6032 8244 35662 15340 8008 1754 18626`, périodes
+  `10000 10000 8000 8000 4000 8000 5300 8000`. Somme `114670 + 48 =
+  114718 = $1C01E` et le parcours retombe pile sur la fin du fichier ;
+* **la musique n’est pas dans le fichier** : elle est dans l’exécutable,
+  `$3532..$3F91` ( `$A60` octets). Le tempo de la tune 0 vaut 9 ( ;3807) ;
+  ses quatre longs `$880 $8F0 $964 $9D0` sont relatifs à `A3 = $2F98` et
+  retombent sur les listes `$3818 $3888 $38FC $3968`, qui portent
+  27/28/26/25 motifs puis un long nul. Le premier motif
+  (`A3 + $E06 = $3D9E`) s’ouvre sur `$80 $00` et se ferme sur `$84` ;
+* **le tic est le VBL, 50 Hz.** `SUB_55BA` écrit `COP1LCH` ( ;55ca) puis
+  tourne sur `INTREQR & $0020` ( ;55d0) : ce bit est `VERTB`.
+  `LAB_5242`, en `AUTO_INT3` avec `INTENA #$C028`, lit `JOY0DAT` une fois
+  par image. Et `note × 9` à 50 Hz donne une échelle binaire exacte
+  (croche 0,18 s … blanche 2,88 s), ≈ 83 BPM. C’est la confirmation de
+  l’hypothèse qui restait ouverte en fin de reconnaissance ;
+* **`SUB_456` n’appelle aucune routine de son** : les seuls `JSR` de
+  ;041c à ;0714 vont à `SUB_17B2`, `SUB_549A`, `SUB_55BA`, `SUB_29E`,
+  `SUB_58CA`, `SUB_10A2`, `SUB_110A`, `SUB_50B2`, `SUB_358`. Chez
+  l’original la musique n’existe donc qu’en tête de `SUB_1186` ( ;1194)
+  et disparaît en ;1260.
+
+#### `[ECART]` la musique vient de `reference/*.mp3`
+
+* `populous.musique` : `demarrer` / `arreter` / `actif` / `courant` /
+  `dernier`, mixer ouvert en `44100 / -16 / 2` — la fréquence de
+  génération `sound.TAILLE`, donc les effets gardent leur hauteur ;
+* `MusicEngine.image()` muë `sound.mesure()` pendant qu’une piste joue ;
+  `_mesure()` n’est qu’un substitut inventé, deux musiques de fond en
+  même temps n’ont aucun sens. L’horloge et le délai `0x28` des effets
+  restent intacts ;
+* `intro.demarrer(..., son=True)` : nouveau levier, arme `Main Theme` à
+  l’entrée et la coupe dans un `finally`. Les deux passes de
+  `tools/check_intro.py` passent `son=False` pour rester silencieuses ;
+* `Game.run()` arme `BGM.mp3`, `Game.maj_musique()` suit `music_on`
+  (icône L1744-1750), et le drapeau `_piste_armee` empêche tout outil en
+  ligne de commande de lancer un MP3 ;
+* **dégradation propre** : fichier manquant ou carte son absente,
+  `demarrer()` renvoie `False` et les mesures synthétisées reprennent la
+  main.
+
+#### Suppressions
+
+`populous/popsam.py` (module inachevé, jamais importé) a été retiré ; ses
+constats ont migré dans `charger_son()`, `docs/game_logic.md` § 6.8 et les
+contrôles de `tools/check_intro.py`.
+
+#### Vérifications
+
+```bash
+python tools\check_intro.py        # 178 -> 205 controles
+python tools\autopilot.py 59 0 3   # 84/84
+python tools\check_render.py       # OK
+python tools\check_assets.py       # OK
+python tools\check_funny.py        # OK
+python tools\smoke_sim.py          # 5000 tours
+python tools\stress.py 2000 8      # 8/8 parties robustes
+python tools\check_mod.py          # aucune signature ProTracker
+```
+
+Tous au vert.
+
+#### Ce qui reste ouvert (Phase 86)
+
+* **le lecteur `popsam`** — `SUB_2F9C`, `SUB_3046`, `LAB_3060` — reste
+  non transcrit (`[APPROV]`). Les tables et le format sont connus et
+  contrôlés ; la transcription reste à faire si l’on veut la musique
+  d’origine plutôt que les MP3 ;
+* **`SUB_16E`** (exécute `populous.prg`) : hors de la portée du portage.
 
 ## Note honnête sur l'équilibrage
 

@@ -886,8 +886,11 @@ try:
     _clk = pygame.time.Clock()
     pygame.event.clear()
     _t0 = _time.time()
+    # ``son=False`` : ces deux passes mesurent la scene, pas la musique.
+    # Le son de l'intro est controle separement en Phase 86 plus bas.
     _r = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
-                        attente_titre=0.02, duree_script=0.05, boucle=False)
+                        attente_titre=0.02, duree_script=0.05, boucle=False,
+                        son=False)
     _dt = _time.time() - _t0
     chk(_r == 0,
         "le pilote fait titre -> scene (SUB_1186) -> retour et rend 0 : %s "
@@ -897,7 +900,8 @@ try:
     pygame.event.clear()
     pygame.event.post(pygame.event.Event(pygame.QUIT))
     _r2 = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
-                         attente_titre=0.02, duree_script=-1, boucle=False)
+                         attente_titre=0.02, duree_script=-1, boucle=False,
+                         son=False)
     chk(_r2 == -1, "fermeture de fenetre pendant la scene : -1 ( %s )" % (_r2,))
     pygame.display.quit()
 finally:
@@ -1481,6 +1485,218 @@ for _c, _t in ((38, 26), (8, 26), (99, 0), (0, 99), (45, 54), (7, 70)):
     chk(-11 <= _p <= 11 and _p != 0 and abs(_p) in (1, 9, 10, 11),
         "marche %d -> %d donne pas = %+d : un des neuf vecteurs de ;5130"
         % (_c, _t, _p))
+
+# ==================================================== Phase 86 : la musique
+print()
+print("Phase 86 : popsam et la musique par fichier (ECART)")
+print()
+
+import struct as _struct
+from populous import musique as _mus
+from populous.sound import MusicEngine as _MusicEngine
+
+# ---- (1) popsam : huit descripteurs LONG longueur + WORD periode ---------
+# SUB_2C36 ;2c36 alloue $1C020 puis lit $1C01E octets. L'en-tete ouvre sur
+# 00 00 52 0C 27 10 : un LONG 21004 suivi d'un WORD 10000, la periode du
+# premier descripteur.
+_b = (intro.assets.GAME / intro.SON_NOM).read_bytes()
+# Le fichier n'a PAS d'en-tete plat : c'est un flux de huit blocs, chacun
+# LONG longueur + WORD periode suivi immediatement de ses donnees.
+_desc, _o = [], 0
+while _o + 6 <= len(_b) and len(_desc) < 8:
+    _lg = _struct.unpack_from(">I", _b, _o)[0]
+    _per = _struct.unpack_from(">H", _b, _o + 4)[0]
+    _desc.append((_o, _lg, _per))
+    _o += 6 + _lg
+chk(len(_desc) == 8, "popsam porte huit descripteurs (%d)" % len(_desc))
+_attendu = [(0, 21004, 10000), (21010, 6032, 10000), (27048, 8244, 8000),
+            (35298, 35662, 8000), (70966, 15340, 4000), (86312, 8008, 8000),
+            (94326, 1754, 5300), (96086, 18626, 8000)]
+chk(_desc == _attendu,
+    "les 8 blocs (offset, longueur, periode) sont exactement %s" % (_desc,))
+chk(_o == len(_b) == intro.SON_TAILLE,
+    "le parcours des 8 blocs retombe pile sur la fin du fichier et sur "
+    "SON_TAILLE : %d = %d = %d" % (_o, len(_b), intro.SON_TAILLE))
+chk(len(_b) == 0x1C01E,
+    "popsam pese exactement $1C01E, la longueur lue en ;2cc0 (%d octets)"
+    % len(_b))
+chk(b"M.K." not in _b and b"4CHN" not in _b,
+    "popsam ne porte aucune signature ProTracker : aucun lecteur "
+    "existant ne saurait le lire")
+
+# ---- (2) la musique n'est PAS dans popsam : elle est dans le binaire ------
+# SUB_2F9C ;2f9c balaie $3532..$3F92 avec A3 = $2F98. Ce sont 0xA60 octets
+# de sequences, la table des periodes en tete, la table des instruments a
+# $35A0 et la barre de tunes a $3806 -- rien de tout cela n'est dans un
+# fichier de son, ce qui interdit d'employer un lecteur existant.
+_raw = (intro.assets.GAME / "populous").read_bytes()
+_A3 = 0x2F98
+_blk = _raw[intro.HUNK0 + 0x3532:intro.HUNK0 + 0x3F92]
+chk(len(_blk) == 0xA60,
+    "le bloc de sequences est dans le binaire et pese $A60 octets "
+    "($3532..$3F92) : %d" % len(_blk))
+chk([_struct.unpack_from(">H", _blk, 2 * k)[0] for k in range(4)]
+    == [0x1000, 0x0F18, 0x0E40, 0x0D74],
+    "la table LAB_3532 ouvre le bloc par $1000 $0F18 $0E40 $0D74 : ce sont "
+    "des periodes Paula, elles decroissent")
+
+_tempo = _raw[intro.HUNK0 + 0x3807]
+_off = [_struct.unpack_from(">I", _raw, intro.HUNK0 + a)[0]
+        for a in (0x3808, 0x380C, 0x3810, 0x3814)]
+chk(_tempo == 9, "la tune 0 porte tempo = 9 en ;3807 (%d)" % _tempo)
+chk(_off == [0x880, 0x8F0, 0x964, 0x9D0],
+    "les 4 longs de la tune 0 sont $880 $8F0 $964 $9D0 : %s"
+    % (" ".join("$%X" % _v for _v in _off),))
+chk([_A3 + _v for _v in _off] == [0x3818, 0x3888, 0x38FC, 0x3968],
+    "ces longs sont relatifs a A3=$2F98 : A3+off retombe sur les 4 listes "
+    "de motifs %s" % (" ".join("$%X" % (_A3 + _v) for _v in _off),))
+
+_lists = [_A3 + _v for _v in _off]
+_longueurs = []
+for _l in _lists:
+    _k = 0
+    while _k <= 64 and _struct.unpack_from(
+            ">I", _raw, intro.HUNK0 + _l + 4 * _k)[0] != 0:
+        _k += 1                       # le long nul de fin n'est pas un motif
+    _longueurs.append(_k)
+chk(_longueurs == [27, 28, 26, 25],
+    "les 4 listes contiennent 27/28/26/25 motifs puis un long nul : %s"
+    % (_longueurs,))
+
+# Le premier motif est lui-meme designe par un long de la liste, donc
+# relatif a A3 lui aussi : A3 + $E06 = $3D9E.
+_premier = _A3 + _struct.unpack_from(
+    ">I", _raw, intro.HUNK0 + _A3 + _off[0])[0]
+_debut = intro.HUNK0 + _premier
+_fin = _raw.index(0x84, _debut)
+chk(_premier == 0x3D9E,
+    "le premier motif de la liste 0 est A3+$E06 = $3D9E ($%04X)" % _premier)
+chk(_raw[_debut:_debut + 2] == bytes([0x80, 0]),
+    "il s'ouvre sur $80 $00 : %s" % _raw[_debut:_debut + 2].hex(" "))
+chk(0 < _fin - _debut + 1 < 256,
+    "il tient en %d octets avant le $84 de fin" % (_fin - _debut + 1))
+
+# ---- (3) les deux pistes fournies dans reference/ ------------------------
+def _est_mp3(chemin) -> bool:
+    if not chemin.is_file():
+        return False
+    with chemin.open("rb") as f:
+        tete = f.read(4)
+    if tete[:3] == b"ID3":
+        return True
+    return len(tete) >= 2 and tete[0] == 0xFF and (tete[1] & 0xE0) == 0xE0
+
+
+for _f in (_mus.MUSIQUE_INTRO, _mus.MUSIQUE_JEU):
+    _n = _f.stat().st_size if _f.is_file() else 0
+    chk(_est_mp3(_f) and _n > 100000,
+        "%s est un MP3 lisible de %d octets" % (_f.name, _n))
+
+# Les deux passes de la scene, plus haut, ont tourne avec son=False : si ce
+# levier mentait, dernier() pointerait deja sur Main Theme.
+chk(_mus.dernier() is None,
+    "les deux passes de la scene ont tourne avec son=False : aucune musique "
+    "lancee (%s)" % (_mus.dernier(),))
+
+# ---- (4) SDL_AUDIODRIVER=dummy : le controle est deterministe ------------
+_anc_aud = _os.environ.get("SDL_AUDIODRIVER")
+_anc_vid = _os.environ.get("SDL_VIDEODRIVER")
+pygame.mixer.quit()
+pygame.display.quit()
+_os.environ["SDL_AUDIODRIVER"] = "dummy"
+_os.environ["SDL_VIDEODRIVER"] = "dummy"
+try:
+    pygame.mixer.init(frequency=_mus.DEBIT, size=_mus.BITS,
+                      channels=_mus.CANAUX)
+    chk(pygame.mixer.get_init() is not None,
+        "mixer dummy ouvert en %s" % (pygame.mixer.get_init(),))
+
+    # (a) demarrer -> actif -> arreter
+    chk(_mus.demarrer(_mus.MUSIQUE_INTRO),
+        "demarrer(Main Theme) charge et lance la piste")
+    chk(_mus.actif() and _mus.courant() == _mus.MUSIQUE_INTRO,
+        "actif() et courant() voient la piste : %s" % (_mus.courant(),))
+    _mus.arreter()
+    chk(not _mus.actif() and _mus.courant() is None,
+        "arreter() coupe et rend courant() a None")
+    chk(_mus.dernier() == _mus.MUSIQUE_INTRO,
+        "dernier() garde le chemin lance, y compris apres arreter()")
+
+    # (b) tant qu'une piste joue, la mesure synthetisee se tait
+    class _JeuFaux:
+        music_on = 1
+        effect_on = 1
+        effect = 0
+
+    class _SonFaux:
+        def __init__(self) -> None:
+            self.mesures = 0
+            self.notes = 0
+
+        def mesure(self, pistes, curbeat) -> None:
+            self.mesures += 1
+
+        def sound_in(self) -> int:
+            return 0
+
+        def play(self, son, voie: int = 0) -> None:
+            self.notes += 1
+
+    def _une_mesure():
+        cap = _SonFaux()
+        moteur = _MusicEngine(cap)
+        for _ in range(moteur.music):
+            moteur.image(_JeuFaux())
+        return cap.mesures, cap.notes
+
+    _mus.demarrer(_mus.MUSIQUE_JEU)
+    _m, _n = _une_mesure()
+    chk(_mus.actif() and _m == 0,
+        "BGM.mp3 en play : la mesure synthetisee se tait -- %d mesure(s), "
+        "%d note(s)" % (_m, _n))
+    _mus.arreter()
+    _m, _n = _une_mesure()
+    chk(_m == 1 and _n == 0,
+        "sans piste : une seule mesure en 10 images et aucun tic de tempo "
+        "(tempo=0) -- %d mesure(s), %d note(s)" % (_m, _n))
+
+    # (c) l'intro : son=True a l'entree, coupe dans le finally
+    pygame.display.init()
+    _scr = pygame.display.set_mode((960, 768))
+    _cadre = pygame.Surface((320, 256)).convert()
+    _cadre.fill((0, 0, 0))
+    _clk = pygame.time.Clock()
+    pygame.event.clear()
+    _rc = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
+                         attente_titre=0.02, duree_script=0.05,
+                         boucle=False, son=True)
+    chk(_rc == 0, "intro avec son=True : titre -> scene -> 0 ( %s )"
+        % (_rc,))
+    chk(_mus.dernier() == _mus.MUSIQUE_INTRO,
+        "son=True : l'intro a bien arme Main Theme (%s)"
+        % (_mus.dernier().name if _mus.dernier() else None,))
+    chk(not _mus.actif() and _mus.courant() is None,
+        "l'intro rend la main avec la musique coupee : le finally tourne")
+    pygame.event.clear()
+finally:
+    _mus.arreter()
+    pygame.mixer.quit()
+    pygame.display.quit()
+    if _anc_aud is None:
+        _os.environ.pop("SDL_AUDIODRIVER", None)
+    else:
+        _os.environ["SDL_AUDIODRIVER"] = _anc_aud
+    if _anc_vid is None:
+        _os.environ.pop("SDL_VIDEODRIVER", None)
+    else:
+        _os.environ["SDL_VIDEODRIVER"] = _anc_vid
+    pygame.display.init()
+    try:
+        pygame.mixer.init()               # meme format que pygame.init()
+    except pygame.error:
+        pass
+    pygame.display.set_mode((1, 1))
+
 
 print()
 if ECHECS:

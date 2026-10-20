@@ -42,6 +42,8 @@ from array import array
 
 import pygame
 
+from . import musique                        # ECART Phase 86 : ``reference/*.mp3``
+
 TAILLE = 44100                     # Hz, frequence de generation
 
 
@@ -403,7 +405,14 @@ class MusicEngine:
             d0 = self.music_now + 1
             if d0 == self.music:
                 self.music = 10
-                self.sound.mesure(self.pistes, self.curbeat)
+                # Phase 86 : tant qu'une piste de fond (``reference/BGM.mp3``)
+                # joue, la mesure synthetisee se tait. ``_mesure()`` n'est
+                # qu'un substitut invente faute d'avoir decode ``_load_sound``
+                # ; l'horloge (``music_now``, ``curbeat``) tourne toujours,
+                # donc ``music_on`` et le delai ``0x28`` des effets gardent
+                # exactement leur sens.
+                if not musique.actif():
+                    self.sound.mesure(self.pistes, self.curbeat)
                 self.curbeat = (self.curbeat + 1) % _LG
                 d0 = 0
             self.music_now = d0
