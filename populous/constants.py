@@ -27,6 +27,22 @@ FUNNY = (
     (0x0041, 0x09, 0x0C),          # code 2
 )
 
+#: ``LAB_51686`` ($51686) = ``_funny + 6`` : les octets ``+6..+11`` de chaque
+#: fiche, lus par ``_do_funny`` comme **trois mots** a l'offset
+#: ``make_level_res * 12 + i * 2`` ( ``MULU #$000C`` puis ``ASL #1``,
+#: ;44616-44632 ). ``_do_place_funny`` ne lit pas ces six octets (cf. plus
+#: haut) ; lui seul ignore donc qu'ils portent les trois deltas du pas.
+#: Mots reunis depuis ``DC.L`` de L24168-24169 et ``DC.W $0001`` de L24170 :
+#: fiche 0 -> $51686/$51688/$5168A, fiche 1 -> $51692/$51694/$51696,
+#: fiche 2 -> $5169E/$516A0/$516A2. Les trois valeurs sont stockees **brutes**
+#: (non signees) : c'est ``_valid_move`` qui rebat son argument en signe dans
+#: sa prologue, et ``_do_funny`` fait pareil avant de l'appeler.
+FUNNY_DELTAS = (
+    (0x0000, 0xFFFF, 0x0001),      # 0 : au place, a gauche, a droite
+    (0x0000, 0xFFC0, 0xFFFF),      # 1 : au place, une ligne au dessus, a gauche
+    (0x0000, 0x0040, 0x0001),      # 2 : au place, une ligne en dessous, a droite
+)
+
 # ---------------------------------------------------------------- tables voisins
 # _offset_vector, $0005181A (asm 24274-24278) : 25 mots
 #  0..8   = carré 3x3 (centre + 8 voisins)

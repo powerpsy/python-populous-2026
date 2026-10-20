@@ -743,7 +743,15 @@ class Game:
             self.ren.draw_text(self.frame, 1, 0xBA, self.victory_texte[1])
 
     def tick(self) -> None:
-        """Un pas de temps : un seul appel a ``move_peeps``.
+        """Un pas de temps : ``_do_funny`` puis ``move_peeps``.
+
+        Le listing enchaîne les deux appels (L680-681) sous **une meme paire
+        de tests** : ``TST.W (_pause)`` puis ``TST.W (_paint_map)``, les deux
+        nuls ( ;3e942- ;3e94c ). Sinon il va a ``LAB_3E95A``, qui redessine
+        les peeps sans les faire bouger. Le port ne gardait pas cette garde :
+        en pause ou en mode peinture la simulation continuait. Les appels qui
+        suivent dans la boucle d'image (``_get_message`` a ``LAB_3EC88``) ne
+        sont pas sous la garde, d'ou ``_run_commands`` **apres**.
 
         ``move_peeps`` avance lui-meme ``game_turn``/``toggle`` ET appelle
         ``set_frame`` exactement aux endroits de l'asm. Il ne faut surtout pas
@@ -751,7 +759,10 @@ class Game:
         (« frames 0..6 puis transition ») ne se produirait jamais.
         Le canal de commandes est joue ensuite, comme dans l'asm (L1011).
         """
-        self.sim.move_peeps()
+        sim = self.sim
+        if not sim.pause and not sim.paint_map:        # ;3e942- ;3e94c
+            sim.do_funny()                             # ;3e94e
+            sim.move_peeps()                           # ;3e952
         self._run_commands()
         self._check_end()
 

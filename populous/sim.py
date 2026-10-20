@@ -32,7 +32,8 @@ from .constants import (
     A_FLAT,
     BIG_CITY, BLK_FLAT, BLK_ROCK, BLK_ROCK2, BLK_ROCK3, BLK_RUINS,
     BLK_SWAMP, BLK_TRIBE0, BLK_WATER,
-    FRAME_AGE, FRAME_TOWN, FUNNY, MANA_VALUES, MAP_CELLS, MAX_PEEPS,
+    FRAME_AGE, FRAME_TOWN, FUNNY, FUNNY_DELTAS, MANA_VALUES, MAP_CELLS,
+    MAX_PEEPS,
     PEEP_SLOTS, BK2_CITY, N_BIG_NEIGHBOURS, N_NEIGHBOURS, OFFSET_VECTOR,
     ST_DROWNING,
     ST_EXPLORER, ST_VILLAGER, ST_ANIM, ST_BATTLE,
@@ -1442,6 +1443,158 @@ class Game:
             p.w6 = weapons                             # L8996-8999
             p.make_level_res = code & 0xFF             # L9001 (9,A5)
             return                                     # L9002 -> LAB_449C6
+
+    # --------------------------------------------------------------- _do_funny
+    def map_couleur(self, block: int) -> int:
+        """``_map_colour[block]`` — l'octet de couleur indexe par ``map_blk``.
+
+        ``_load_ground`` recopie les seize octets lus dans ``LANDn`` sur
+        ``_map_colour[16..31]`` (boucle L4A348-4A36C) et le reste de la table
+        vaut ``$19`` (``DC.L $19191919`` L5177E). ``render.map_colours``
+        fait le meme calcul du cote rendu ; ici la meme regle, sans pygame.
+        """
+        tete = self.land.map_colour
+        if block < 16:
+            return tete[block]
+        if block < 32:
+            return tete[block - 16]
+        return 0x19
+
+    def do_funny(self) -> None:
+        """``_do_funny`` (L8630-8858) : le pas des deux « peeps droles ».
+
+        Appele par la boucle d'image **juste avant** ``_move_peeps``
+        (``JSR (_do_funny,PC)`` ;3e94e), sous ``_pause == 0`` et
+        ``_paint_map == 0`` ( ;3e942- ;3e94c ). Jusqu'a la Phase 88 le port
+        ne l'appelait pas : la creature etait bien posee par
+        ``_do_place_funny`` et bien dessinee (``who >= $D1``, ``spr_320.dat``)
+        mais restait figee.
+
+        La boucle part de ``LAB_5420A`` = ``_peeps + 209 * $16`` (``LEA
+        (LAB_5420A,A4)`` ;444f0 -> ``$593EE - $51E4 = $5420A``, et
+        ``$53014 + 209 * 22 = $5420A``), avance de ``$16`` octets
+        (``ADDI.L #$16,(-4,A5)`` ;447dc) et s'arrete a l'index ``$D3``
+        (``CMP.W #$00d3 / BLT`` ;447e4- ;447ea) : **deux** fiches, ``209``
+        et ``210`` — exactement celles que ``_do_place_funny`` remplit.
+
+        .. code-block:: none
+
+            si e.life == 0 : suivant                   # TST.W (4,A0) ;44502
+            e.frame += 1                               # ADDQ.W #1,(0xC) ;4450e
+            pas = s8(e.face)                           # MOVE.B ($15) ;44516
+            e.w6 = to_word(e.w6 + pas)                 # ADD.W D0,(6) ;44528
+            si e.w6 >= e.offspring (+2) ou e.w6 <= e.weapons (+3) :
+                pas = -pas ; e.face = octet bas        # ;4452c-44565
+            si e.frame <= 7 : suivant                  # CMPI #7,(0xC) ;4456a
+            e.frame = 0                                # CLR.W (0xC) ;44578
+            si map_who[e.block] - 1 == idx :           # ;44580-44590
+                map_who[e.block] = 0                   # CLR.B ;445a2
+            si e.prev_block == 0 :                     # TST.W ($A) ;445aa
+                e.prev_block = _funny[e.make_level_res*12]   ;445ca
+            si valid_move(e.block, e.prev_block) == 1 :      ;445e0
+                e.life = 0 ; suivant                         ;445f6
+            e.block = to_word(e.block + e.prev_block)        ;4460a
+            pour i dans 0..2 :                               ;4460e
+                delta = LAB_51686[e.make_level_res*12 + i*2] ;4462e
+                si valid_move(e.block, delta) == 1 : continue ;44648
+                nb = e.block + delta                         ;44674
+                make_level_res == 0 : si blk[nb] != 0 et != $10 :
+                    bk2[nb] = i + $32                        ;446b8
+                == 1 : si blk[nb] dans ($0F,$1F,$20,$42) : blk[nb] = $35
+                sinon : si blk[nb] != 0 et != $10 :
+                    blk[nb] = i + $2F ; a_putpixel(nb, _map_colour[blk[nb]])
+                si map_who[nb] != 0 : _zero_population(map_who[nb] - 1)
+            map_who[e.block] = idx + 1                       ;447d4
+
+        Le **rebond** de ``w6`` merite une attention : le listing teste
+        ``CMP.W`` puis ``BCC`` ( ;44540 ) et ``BHI`` ( ;44556 ), deux
+        comparaisons **non signees**, dans cet ordre :
+
+        * ``w6 >= octet(+2)`` -> negation ;
+        * sinon ``w6 <= octet(+3)`` -> negation, ``w6 > octet(+3)`` -> non.
+
+        Autrement dit ``NEG`` si ``w6 >= (+2)`` **ou** ``w6 <= (+3)`` :
+        ``+2`` (``offspring``) est la borne **haute**, ``+3`` (``weapons``) la
+        borne **basse**. ``_do_place_funny`` pose ``w6 = weapons`` (L8999) et
+        ``face = 1`` (L8994), donc la creature part de la borne basse et
+        rebondit entre ``weapons`` et ``offspring`` — pour FUNNY(0), entre
+        ``00`` et ``04``. ``docs/game_logic.md`` avait les deux bornes et le
+        sens du test inverses.
+        """
+        who, blk, bk2 = self.map.who, self.map.blk, self.map.bk2
+        for idx in range(0xD1, 0xD3):                # ;444f8 / ;447e4-;447ea
+            p = self.peeps[idx]
+            if not p.life:                           # TST.W (4,A0) ;44502
+                continue                             # BEQ LAB_447D8 ;44506
+            p.frame += 1                             # ADDQ.W #1,(0xC) ;4450e
+            # ``MOVE.B ($15,A0),D0 / EXT.W`` : l'octet ``face`` est **signe**.
+            pas = p.face if p.face < 0x80 else p.face - 0x100   # ;44516-;4451c
+            p.w6 = m68k.to_word(p.w6 + pas)          # ADD.W D0,(6,A0) ;44528
+            if p.w6 >= p.offspring or p.w6 <= p.weapons:      # ;4453e / ;44554
+                pas = -pas                           # NEG.W (-8,A5) ;44558
+                p.face = pas & 0xFF                  # MOVE.B (-7,A5) ;44560
+            if p.frame <= 7:                         # CMPI.W #7,(0xC) ;4456a
+                continue                             # BLE LAB_447D8 ;44570
+            p.frame = 0                              # CLR.W (0xC) ;44578
+            if who[p.block] - 1 == idx:              # ;44580-44590
+                who[p.block] = 0                     # CLR.B (0,A0,D0) ;445a2
+            if p.prev_block == 0:                    # TST.W ($A,A0) ;445aa
+                # ``MOVE.B ($14,A0)/EXT/MULU #$000C`` : l'octet bas de
+                # ``make_level_res`` indexe ``_funny`` ($51680), 12 octets
+                # par fiche — d'ou le mot ``+0`` que ``FUNNY`` porte deja.
+                k = p.make_level_res
+                if 0 <= k < len(FUNNY):              # ;445b4-;445be
+                    p.prev_block = m68k.s16(FUNNY[k][0])   # ;445ca
+            if self.map.valid_move(p.block, p.prev_block) == 1:   # ;445e0
+                p.life = 0                           # CLR.W (4,A0) ;445f6
+                continue                             # BRA LAB_447D8 ;445fa
+            p.block = m68k.to_word(p.block + p.prev_block)      # ;4460a
+            k = p.make_level_res
+            if not 0 <= k < len(FUNNY_DELTAS):
+                # Inatteignable : ``_do_place_funny`` n'ecrit que 0, 1 ou 2
+                # (``code > 2`` sort en tete, L8864-8868). Le 68000, lui,
+                # lirait sans borne dans ``LAB_51686``. On saute la fiche
+                # et non la routine : la seconde doit quand meme passer.
+                continue
+            deltas = FUNNY_DELTAS[k]                 # LAB_51686 ;4462e
+            for i in range(3):                       # ;4460e / < 3 ;447b8
+                # ``LAB_51686`` est une table de **mots** : le 68000 pousse
+                # le mot brut ( ;44632 ) et ``_valid_move`` rebat le deuxieme
+                # argument en signe dans sa propre prologue
+                # ( ``MOVE.W ($A,A5),D3`` ;4dcf6, puis ``ADD.W``/``BLT``
+                # ;4dcfe- ;4dd00 sur 16 bits ). ``FUNNY_DELTAS`` porte donc
+                # les valeurs brutes, qu'il faut etendre ici : sans quoi
+                # ``$FFFF`` vaudrait +65535, ``block + offset`` sortirait des
+                # 4096 cases et la case serait jugee hors carte.
+                delta = m68k.s16(deltas[i])          # ;4462e-44632
+                if self.map.valid_move(p.block, delta) == 1:    # ;4463e
+                    continue                         # -> LAB_447B4 ;4464c
+                nb = m68k.to_word(p.block + delta)   # ;4466c-4467c
+                if k == 0:                           # TST.B ($14) ;44684
+                    if blk[nb] != 0 and blk[nb] != 0x10:        # ;44692-446a6
+                        bk2[nb] = i + 0x32           # MOVE.B D0 ;446b8
+                elif k == 1:                         # CMPI.B #1 ;446c4
+                    if blk[nb] in (0x0F, 0x1F, 0x20, 0x42):     # ;446d4-44704
+                        blk[nb] = 0x35               # MOVE.B #$35 ;44714
+                else:
+                    if blk[nb] != 0 and blk[nb] != 0x10:        # ;44724-44738
+                        blk[nb] = i + 0x2F           # MOVE.B D0 ;4474a
+                        # ``_a_putpixel(nb, _map_colour[blk[nb]])`` ;4476c :
+                        # la couleur est lue **apres** l'ecriture, donc c'est
+                        # toujours ``_map_colour[$2F..$31]`` = ``$19``.
+                        self.putpixel(nb, self.map_couleur(blk[nb]))
+                if who[nb] != 0:                     # TST.B ;4477a
+                    cible = who[nb] - 1              # SUBQ.W #1 ;4478e
+                    # Le 68000 calcule ``_peeps + (who-1) * $16`` sans borne
+                    # ( ;447a2-447aa ). ``map_who`` ne porte que des indices
+                    # de fiche, donc ``cible`` tient ; on empeche quand meme
+                    # une sortie de table. **ECART** silencieux.
+                    if 0 <= cible < len(self.peeps):
+                        self.zero_population(cible)  # ;447ae
+            # ``(-6,A5) + 1`` = ``idx + 1`` : 210 ou 211, la valeur que
+            # ``render`` lit comme ``who >= $D1``.
+            if 0 <= p.block < MAP_CELLS:             # ;447c2-447d4
+                who[p.block] = idx + 1               # MOVE.B D0,(0,A0,D1.W)
 
     # ---------------------------------------------------------- explorateur
     def move_explorer(self, i: int, p: Peep) -> None:
