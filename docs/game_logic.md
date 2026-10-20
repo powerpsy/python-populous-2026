@@ -1914,20 +1914,172 @@ désassembleur a mis en commentaires (L2346-2371) redonne les mêmes 402
 octets, et le marqueur de fin est `DC.W $FF00` en ;1f60 : le `$FF` reboucle
 sur la première chaîne.
 
-Conséquence pratique, et c’est important : `LAB_11D8` **n’a aucune sortie**.
-Le rouleau boucle indéfiniment et dans l’original c’est `SUB_714`, lorsqu’il
-a épuisé ses 16 lignes de script, qui appelle `SUB_16E` et lance
-`populous.prg`. Tant que `SUB_714` n’est pas transcrit (Phase 85), le pilote
-borne le rouleau par un argument `duree_credits` (12 s par défaut,
-`< 0` = illimité).
+Conséquence pratique, et c’est importante : `LAB_11D8` **n’a aucune sortie**.
+Le rouleau boucle indéfiniment ; dans l’original c’est `SUB_714`, lorsqu’il a
+épuisé ses 16 lignes de script, qui appelle `SUB_16E` et lance `populous.prg`.
+
+## 6.7 La scène d’attract — `SUB_1186` et `SUB_714` (Phase 85)
+
+`SUB_1186` ( ;1186-1266) est la boucle qui joue l’attract, et `SUB_714`
+( ;0714-0e3c) son interpréteur de script. L’image que l’on se souvient
+d’enfance, **le fond du jeu pendant l’intro**, est `demo.pic` : l’original la
+charge et la recompose au-dessous de tout, à chaque image.
+
+### Le déroulé d’une image
+
+1. `bm1 ← bm3` ( ;11a6) : on repart du tampon de fond.
+2. Le fond est recomposé au-dessus de `demo.pic` — d’où l’impression, à
+   l’écran, que les personnages marchent sur la carte du jeu.
+3. `SUB_714` avance les 16 lignes de script.
+4. Le tout est blitté.
+
+### `SUB_714` : la marche
+
+Pour chaque ligne, `SUB_714` lit le prochain octet-donnée de son flux. La
+lecture ne s’arrête que sur une **barrière** ; entre deux barrières, la ligne
+avance d’un octet ( ;07e8) :
+
+| octet | action | avance ? |
+|---|---|---|
+| `< $64` | marcher vers la coordonnée isométrique à deux chiffres `b` ( `pas` , plus bas) | oui (rebouclage de `phase` sur 8, ;09ba-09ce) |
+| `$64`-`$81` | poser le marqueur `MARQUEURS_TABLE[b-$64]` à la clé `compteur`, dessiner (hauteur `0`), avancer ( ;09e6-0b36) | oui |
+| `$82`-`$DC` | dessiner avec le sprite `DONNEES_6E28[b-$82]` et avancer ( ;0b34-0b82) | oui |
+| `$FD` | révéler l’image `$800` sur le canal `(-14,A5)` ( ;0b8a-0bc2) | non : barrière tant que `compteur < 19` |
+| `$FE` | même révélation, offset `0`, sur `(-16,A5)` ( ;0bca-0bc6) | non |
+| `$FC` | avancer seulement si `(-14,A5) >= 20` ( ;0c04-0c16) | conditionnelle |
+| `$FB` | dessiner avec `DONNEES_6E28[bascule + $1B (+2 si ligne ≥ 7)]`, ou `DONNEES_6E28[((ligne≥7)<<2) + $E]` si `Random() > 30000` ( ;0c1a-0c80) | non |
+| `$FA` | dessiner `id + anim`, `anim` parcourant `0..3` ; `anim == -1` dessine `id` tel quel ( ;0c84-0cbe) | non |
+| `$F9` | réservé à la ligne `id == $20` — les autres dorment ( ;0d04-0d10). `images++`, et à `240` **toutes** les lignes avancent d’un octet ( ;0d20-0d36) ; puis `phase += anim` avec rebond à `-1`/`8` et dessin de `(images&3)+$8A` ( ;0d38-0d8c) | non |
+| `$F7` | avancer d’un octet **toutes** les lignes dont l’octet courant n’est pas `$FF`, la sienne comprise ( ;0d98-0de0) | oui (pour toutes) |
+| `$F6` | `images++` puis dessiner `(images&3)+$79` ( ;0de4-0e20) | non |
+| `$DD`-`$F5`, `$F8`, `$FF` | **rien**, pas même `hauteur` : `LAB_E24` est le seul saut ( ;0de4-0e24) | non |
+
+Le compteur `compteur` (l’abscisse isométrique de la ligne) avance par le
+« pas » calculé par `SUB_714` ;08c6-098a :
+
+```
+pas = signe(cible//10 - dizaines) * 10 + signe(cible%10 - unites)
+```
+
+où `cible` est la valeur reçue, `dizaines`/`unites` les deux chiffres de
+`compteur` ( `DIVU #10` + `SWAP` ;0904-0912). Ce sont les **signes**, et non
+les différences, qui sont multipliés — et c’est bien ce que fait
+;097e-098a.
+
+### Les codes de script, en clair
+
+* `$F6` et `$F9` font tourner `images` ( `(-31994)`) et dessinent
+  `(images&3)+$79` resp. `+ $8A` : c’est la petite animation du haut de
+  l’écran ;
+* `$F7` est le seul à faire avancer les **autres** lignes ;
+* `$F9` est réservé à `ident == $20` — la ligne 6, la seule qui en porte un.
+  Les quinze autres lignes dorment dessus ( ;0d04-0d10) ;
+* `$FB` n’est **pas** un saut : c’est un dessin d’objet, et l’appel ne pousse
+  que six arguments ( `LEA ($E,A7),A7` ;0c7c) — `hauteur` lirait le haut mot
+  de `A3`, soit zéro ;
+* `$FA` dessine `id + anim` puis fige la ligne. Les lignes 13 et 15
+  ( `anim == -1`) le subissent dès leur premier `$FA` ; c’est leur état final
+  **fidèle**, et non un bug ;
+* `$DD`-`$F5`, `$F8` et `$FF` ne font rien du tout : c’est la fin véritable
+  d’une ligne.
+
+### `SUB_E40` — le temple
+
+Avant la scène, l’attract pose le temple qui tombe puis remonte : dix-huit
+pièces. `SUB_10A2($12)` ( ;0e44) remplit `colonne[0..17]` avec
+`random()%13 + $E8` et `vitesse[i] = random()%9` — le **même** tableau que la
+chute des cent cases et que les seize lignes de script, qui partagent donc
+`Grille.colonnes`.
+
+Première cascade, ordonnée `$A8 - colonne` ( ;0e70) : les pièces tombent de
+hors écran vers `y = $A8`.
+
+* pièce `5` à `x=$50` sur `colonne[0]` ( ;0e6c-0e82) ;
+* pièces `6` à `x=$50+i*16` pour `i = 1..8` — le `BLE` ;0ecc **comprend** la
+  borne, la rangée compte donc neuf pièces ;
+* pièce `7` à `x=$E0` sur `colonne[9]`, lu via `(-31876,A4)` = la base
+  `(-31894,A4)` plus 18 octets, soit neuf mots ( ;0ece-0ee4) ;
+* les huit pièces de `OBJETS_MARQUEURS` à `x=$60+i*16`, `BLT` strict ( ;
+  0ef0-0f38).
+
+Quand `SUB_110A($12)` rend 0, `LAB_F58` ( ;0f58-0f98) remet les dix-huit
+colonnes à `$A0` et les vitesses à `random()&7`. **Puis `LAB_F58` retombe sur
+`LAB_F9A`**, qui rappelle `SUB_110A` ( ;0f9a) avant de dessiner : `colonne`
+vaut alors `$A0-(v+1)` et `vitesse` `v+1`, d’où l’invariant
+`colonne + vitesse == $A0`. Sans cet appel la seconde cascade démarrait une
+image trop tôt. La seconde cascade est donc ordonnée `colonne + 8` ( ;0fc0).
+
+`SUB_110A` finit par rendre 0 quand toutes les vitesses sont retombées à
+`-1` ( `DIVS #2` + `NEG` , ;1140-114a), et `LAB_109C` rend 0 : le temple
+s’épuise seul en **107 tours** pour la graine testée. Une touche ( `SUB_5792`
+;1082) le fait rendre 1, un bouton ( ;1090) rejoue la seconde cascade.
+
+### `SUB_50E6` — la projection
+
+```
+x = (unites - dizaines)*16 + $98
+y = (unites + dizaines)*8 + $1C - colonne - dec2[compteur]
+y += octet(dec2[compteur] - dec2[compteur + pas]) * phase >> 3
+```
+
+Le dernier terme donne la **marche** : les huit images d’une phase
+interpolent le décalage entre la case actuelle et la suivante. L’écart est
+pris sur un **octet** (`SUB.B` ;5124) puis signé (`EXT.W` ;5128). `MULU`
+donne 32 bits mais `ASR.W` ne décale que le mot faible.
+
+`dec2` = `LAB_640C+$C8`, les 100 octets `HAUTEUR_CASE`. Comme ;08d6 recharge
+l’octet suivant sans retester `$64` (et `$70` vaut 112), le compteur peut
+dépasser 99 et `SUB_50E6` va alors lire dans `SUB_6538`, qui suit le tableau.
+Le port lit le même bloc que l’original.
+
+### `SUB_3F92` — le tramage de révélation
+
+Une image de 64×64 se révèle pixel par pixel, plan par plan :
+
+```
+dest = (dest & MASQUES_REVELATION[d0]) | (source & ~MASQUES_REVELATION[d0])
+```
+
+`A0` part de `bm1` (ou `bm3`, selon l’appelant) et avance de deux octets par
+paquet, puis de `$20` par ligne ( ;4008-4010) — soit les `$28` du bitmap ;
+les quatre plans suivent à `0`, `$1F40`, `$3E80`, `$5DC0`. `A1` part de
+`LAB_4026 + ecart` et consigne quatre mots par paquet.
+
+Le masque ne vient pas de l’image mais de `LAB_1F62` : `$FFFF` laisse passer
+le fond, `$0000` le recouvre, et les vingt-six damiers intermédiaires font le
+fondu. `D0` n’est **pas** remis à zéro à chaque ligne : il tourne sur
+`2, 4, 0` d’un paquet à l’autre, à travers toute l’image ( ;3fb6 `CLR.W D0`
+une seule fois, puis ;3fc0-3fc8).
+
+### `demarrer()` — le pilote
+
+```
+demarrer(cadre, horloge=None, fenetre=None, im_par_seconde=50.0,
+         attente_titre=30.0, duree_script=45.0, boucle=True)
+```
+
+`duree_script` borne la scène ( `LAB_11D8` et `SUB_714` n’ont pas de sortie
+propre) ; `boucle=False` fait une passe unique et rend `0`, `-1` si
+l’utilisateur ferme la fenêtre.
+
+### Données
+
+| table | source | taille |
+|---|---|---|
+| `FLUX_TABLE` | `LAB_1272` (16 flux) | 836 o |
+| `LIGNES_ETAT` | `$6D28` | 224 o (16 × 7 mots) |
+| `DONNEES_6E28` | `$6E28` | 103 o |
+| `OBJETS_MARQUEURS` | `$6E98` | 8 mots ( `$0,1,0,2,3,1,2,4`) |
+| `MASQUES_REVELATION` | `$1F62` | 60 o |
+| `TABLE_COLONNE2` | `HAUTEUR_CASE` | 100 o |
 
 ### Ce qui reste ouvert (Phase 85)
 
-`SUB_714` ( ;0714-...) : l’interpréteur de script à 16 lignes (`SUB_50B2`,
-`SUB_50E6`, `SUB_1910`, lignes `LAB_15B6`→`LAB_15F6`, données `0x1272..0x15B4`),
-`SUB_16E` (exécute `populous.prg`) et la glue OS/cuivre (`SUB_358`/`SUB_308`,
-`SUB_58CA`). Les écrans d’attract `demo.pic` et `sprites0.dat` sont chargés par
-l’original mais pas encore rejoués ici.
+* **la musique** : `popsam` est chargé, mais le lecteur (`SUB_2F9C`,
+  `SUB_3046`, `LAB_2E9E`) n’est pas décodé ;
+* **`SUB_16E`** (exécute `populous.prg`) : hors de la portée du portage ;
+* le script du rouleau a une durée finie — dans l’original,
+  `SUB_1186` appelle `SUB_714` qui, lui-même, appelle `SUB_16E`.
 
 # 7. Chapitre 6 — Gestion du temps
 

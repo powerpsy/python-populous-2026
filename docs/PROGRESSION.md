@@ -7118,6 +7118,119 @@ Le rendu a été regardé : la grille au repos forme bien le losange
 isométrique de Populous avec ses drapeaux, les tuiles tombent du haut, et une
 ligne de crédits monte en se tramat.
 
+### Phase 85 — l’introduction : la scène `SUB_1186`, `SUB_714`, `SUB_E40`
+
+La Phase 84 a posé l’écran titre, la chute et le rouleau de crédits. Il
+restait l’attract lui-même : la scène où les personnages marchent sur la
+carte du jeu, image après image — c’est ce dont on se souvient d’avoir vu
+sur l’Amiga.
+
+#### Ce qui a été transcrit (Phase 85)
+
+| bloc | routine du listing | statut |
+|---|---|---|
+| l’interpréteur de script | `SUB_714` ;0714-0e3c | transcrit |
+| la marche d’une ligne | `LAB_8A8` ;08c6-09d2, `pas` ;08f8-098a | transcrit |
+| le tramage de révélation | `SUB_3F92` ;3f92-4024, masques `LAB_1F62` | transcrit |
+| le temple | `SUB_E40` ;0e4e-109c | transcrit |
+| la projection d’un acteur | `SUB_50E6` ;50e6-521c | transcrit |
+| la projection d’un marqueur | `SUB_1CBC` ;1cbc-1d0c | transcrit |
+| la pose d’un marqueur | `SUB_19EE` ;19ee-1b14 | repris de la Phase 84 |
+| le scripteur de personnages | `SUB_50B2` ;50b2-50e4 | transcrit |
+| la boucle de la scène | `SUB_1186` ;1186-1266 | transcrit |
+| la musique | `popsam` (chargement seul) | **[APPROV]** |
+
+L’image que l’on se souvient — **le fond du jeu pendant l’intro** — est
+`demo.pic`. Le port la recompose sous chaque image ; d’où l’impression, à
+l’écran, que les personnages marchent sur la carte.
+
+#### Ce qui a été vérifié (Phase 85)
+
+`check_intro` est passé de 110 à **178 contrôles**, tous verts. Ce qui a été
+ajouté :
+
+* `FLUX_TABLE` (16 flux, 836 octets) : octet à octet depuis `LAB_1272`, avec
+  la table de pointeurs `LAB_15B6` relue dans le dump du désassembleur ;
+* `LIGNES_ETAT` (224 octets de `$6D28`) : les 16 structures de 7 mots, plus
+  le fait que seule la ligne 6 a `ident == $20` (elle porte le `$F9`) ;
+* `DONNEES_6E28` (103 octets de `$6E28`), coupée en `TABLE_SPRITES` (73) et
+  `MARQUEURS_TABLE` (30) ;
+* `OBJETS_MARQUEURS` (les 8 mots de `$6E98`) — **constante corrigée**, le
+  port portait `(0,1,0,0,2,3,1,2)`, le listing et le binaire disent
+  `(0,1,0,2,3,1,2,4)` ;
+* `MASQUES_REVELATION` : les 60 octets de `LAB_1F62` (neuf `DC.L` puis une
+  `DS.L 6`), `$FFFF` en tête et `$0010` au dix-huitième mot ;
+* `_dec2` : les 272 octets de `LAB_640C+$C8` **jusque dans le code** de
+  `SUB_6538`, reconstruits depuis le listing, confrontés au binaire ;
+* `pas` ( ;08f8-098a) : **formule corrigée** — c’est le *signe* de la
+  différence, et non la différence elle-même, qui est multiplié par 10 ;
+  confronté à une réécriture indépendante sur les 10 000 couples
+  (`compteur`, `cible`), plus la convergence depuis n’importe quelle case ;
+* `SUB_50E6` ( ;50e6-521c) : projection isométrique confrontée à une
+  réécriture ligne à ligne du listing sur **40 320 figures** ;
+* `SUB_1CBC` ( ;1cbc-1d0c) : idem sur 500 figures, et le rappel final
+  `SUB_19EE` avec ses quatre arguments (`$16` lignes, limite `$B0`,
+  `$1E0` octets, 2 paquets) — donc `land0`, et non `sprites0.dat` ;
+* `SUB_3F92` ( ;3f92-4024) : le cycle `2, 4, 0` de `D0` (deux `CLR.W D0`
+  exactement, ;3fb6 et ;3fc8) et `reveler` confronté à une réécriture
+  indépendante sur 8 combinaisons (base, masque) ;
+* `SUB_E40` ( ;0e40-109e) : les dix pièces hautes (pièce 5 à `x=$50`,
+  pièces 6 à `$50+i*16` pour `i=1..8` — le `BLE` ;0ecc comprend la borne —
+  et pièce 7 à `x=$E0` sur `colonne[9]`, lu via `(-31876,A4)` =
+  `(-31894,A4)+18`) et les huit pièces basses (`x=$60+i*16`, `BLT` strict).
+  **Correction** : le listing enchaîne `LAB_F58` → `LAB_F9A`, donc appelle
+  `SUB_110A` une **seconde** fois juste après la remise à zéro ( ;0f9a). Le
+  port ne le faisait pas et sa seconde cascade démarrait une image trop tôt.
+  Le contrôle l’observe directement : à la remise à zéro
+  `colonne + vitesse == $A0` pour les 18 colonnes (sans ;0f9a on verrait
+  `colonne == $A0` brut), et le temple s’épuise seul en **107 tours**
+  (`LAB_109C`) ;
+* `DIRECTIONS` : les huit cas de ;5130-51ec relus un par un, plus le défaut
+  `$0008` de ;51f0 ;
+* vingt-trois repères du listing appariés à leur adresse exacte ( `JSR
+  SUB_1910` ;521c, `CMPI #$00f0,(-31994,A4)` ;0d18, `MOVE.W #$00a0,(0,A0,D0.L)`
+  ;0f68, `JSR SUB_110A` ;0f9e, `EXT.W D6` ;1cf4…) ;
+* enfin l’exécution : `demarrer` traverse titre → scène → retour, rend `0`,
+  et rend `-1` sur fermeture de fenêtre.
+
+#### Écarts assumés (Phase 85)
+
+* **`[ECART]` la hauteur du titre** : `zone_titre` limite `y` à 200, le port
+  à 256. L’original travaille sur une chaine de 256 octets, le port sur une
+  surface `pygame` — choix de portage ;
+* **`[ECART]` la borne de la scène** : `LAB_11D8` et `SUB_714` n’ont pas de
+  sortie propre. Dans l’original c’est `SUB_714` qui appelle `SUB_16E` et
+  lance `populous.prg` ; le port borne par `duree_script` (45 s par défaut)
+  et sait faire une passe unique avec `boucle=False` ;
+* **`[ECART]` les marqueurs** : `SUB_1CBC` insère dans un tableau de 8 slots.
+  L’original écrit au-delà et corromp ses voisins ; le port s’arrête à 8 ;
+* **`[ECART]` `$FB`** : l’appel ne pousse que six arguments ( `LEA
+  ($E,A7),A7` ;0c7c) — `hauteur` lirait le haut mot de `A3`, soit zéro. Le
+  port reproduit l’absence de hauteur ;
+* **`[ECART]` `_dec2`** : `compteur` peut dépasser 99 ( ;08d6 recharge
+  l’octet suivant sans retester `$64`, et `$70` vaut 112). `SUB_50E6` lit
+  alors dans `SUB_6538`, qui suit le tableau. Le port lit le même bloc que
+  l’original.
+
+#### Bugs d’origine reproduits
+
+* `SUB_110A` : le premier `D5` non nul ;
+* la troncature de `DIVS #2` (vers zéro, pas vers -∞) ;
+* les écritures de sprite linéaires, sans rebond, à `colonne >= 36` ;
+* `$F7` qui avance la ligne elle-même, et non ses seules voisines ;
+* `$F9` qui ne s’active que pour `ident == $20`, une seule fois dans tout
+  l’attract ;
+* `MULU` puis `ASR.W #3` : 32 bits produits, 16 bits décalés.
+
+#### Ce qui reste ouvert (Phase 85)
+
+* **la musique** : `popsam` est chargé, mais le lecteur ( `SUB_2F9C`,
+  `SUB_3046`, `LAB_2E9E`) n’est pas décodé — c’est le « lancement du .mod » ;
+* **`SUB_16E`** (exécute `populous.prg`) : hors de la portée du portage, et
+  inutile ici.
+
+La scène est prête à être testée.
+
 ## Note honnête sur l'équilibrage
 
 Les deux tribus ne prospèrent pas sur **toutes** les graines : sur les cartes

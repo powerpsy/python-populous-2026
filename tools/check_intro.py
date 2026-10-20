@@ -556,12 +556,12 @@ try:
         for _y in range(24):
             _r = _base + _y * 20
             for _x in range(32):
-                _bloc, _bit = divmod(_x, 16)
+                _seg16, _bit = divmod(_x, 16)
                 _v = 0
                 for _p in range(1, 5):
                     _w = int.from_bytes(
-                        tuiles[_r + _bloc * 10 + _p * 2:
-                               _r + _bloc * 10 + _p * 2 + 2], "big")
+                        tuiles[_r + _seg16 * 10 + _p * 2:
+                               _r + _seg16 * 10 + _p * 2 + 2], "big")
                     if _w & (0x8000 >> _bit):
                         _v |= 1 << (_p - 1)
                 if _v != _indice.get(_ref.get_at((_x, _y))[:3], -1):
@@ -859,16 +859,19 @@ if _p:
         "l'intro")
 
 # ------------------------- le rouleau de credits ne doit jamais etre sans fin
-# ``LAB_11D8`` n'a aucune sortie propre : le rouleau boucle sur ``0xFF`` et
-# c'est ``SUB_714`` (Phase 85) qui, dans l'original, appelle ``SUB_16E``.
-# Sans le script ni une borne, ``demarrer`` se fige -- vu a l'execution.
+# ``LAB_11D8`` n'a aucune sortie propre : le rouleau boucle sur ``0xFF``.
+# ``SUB_714`` non plus -- Phase 85 : on le borne par ``duree_script`` et on
+# sait faire une passe unique avec ``boucle=False`` (vu a l'execution).
 import inspect as _inspect
 _sig = _inspect.signature(intro.demarrer)
-chk("duree_credits" in _sig.parameters,
-    "demarrer sait borner le rouleau : parametre duree_credits")
-chk(_sig.parameters["duree_credits"].default > 0,
-    "duree_credits est borne par defaut (%s s), l'intro finit seule"
-    % (_sig.parameters["duree_credits"].default,))
+chk("duree_script" in _sig.parameters,
+    "demarrer sait borner la scene : parametre duree_script")
+chk(_sig.parameters["duree_script"].default > 0,
+    "duree_script est borne par defaut (%s s), l'intro finit seule"
+    % (_sig.parameters["duree_script"].default,))
+chk(_sig.parameters["boucle"].default is True,
+    "demarrer boucle par defaut, et sait faire une passe avec "
+    "boucle=False")
 
 import os as _os, time as _time
 import importlib as _importlib
@@ -884,18 +887,18 @@ try:
     pygame.event.clear()
     _t0 = _time.time()
     _r = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
-                        attente_titre=0.02, duree_credits=0.02)
+                        attente_titre=0.02, duree_script=0.05, boucle=False)
     _dt = _time.time() - _t0
     chk(_r == 0,
-        "le pilote traverse titre -> chute -> credits et rend 0 : %s "
+        "le pilote fait titre -> scene (SUB_1186) -> retour et rend 0 : %s "
         "(%.2f s)" % (_r, _dt))
     chk(_dt < 60.0,
         "il y arrive sans se figer (%.2f s)" % _dt)
     pygame.event.clear()
     pygame.event.post(pygame.event.Event(pygame.QUIT))
     _r2 = intro.demarrer(_cadre, _clk, fenetre=_scr, im_par_seconde=5000.0,
-                         attente_titre=0.02, duree_credits=-1)
-    chk(_r2 == -1, "fermeture de fenetre pendant les credits : -1 ( %s )" % (_r2,))
+                         attente_titre=0.02, duree_script=-1, boucle=False)
+    chk(_r2 == -1, "fermeture de fenetre pendant la scene : -1 ( %s )" % (_r2,))
     pygame.display.quit()
 finally:
     pygame.display.init()
@@ -938,6 +941,546 @@ from populous import config as _config
 chk(getattr(_config, "SHOW_INTRO", None) is False,
     "config.SHOW_INTRO est ferme par defaut : la phase 84 ne modifie pas le "
     "comportement du lanceur")
+
+
+# ==================================================== Phase 85 : la scene
+print()
+print("Phase 85 : la scene, SUB_714, SUB_E40, SUB_3F92")
+print()
+
+
+def _lignes_depuis(adresse):
+    """Numero de ligne (1-based) de la premiere donnee a cette adresse."""
+    for i, s in enumerate(LIGNES):
+        if _numero_adresse(i + 1) == adresse:
+            return i + 1
+    return -1
+
+
+def _dump(numero):
+    """Les octets du commentaire ``;aaaa: xxxx`` de la ligne ``numero``."""
+    m = re.search(r";[0-9a-f]{4}:\s*([0-9a-f]+)\s*$", LIGNES[numero - 1])
+    if not m:
+        return b""
+    h = m.group(1)
+    if len(h) % 2:
+        h = "0" + h
+    return bytes(int(h[i:i + 2], 16) for i in range(0, len(h), 2))
+
+
+def _octets_depuis(adresse, n, decalage=0):
+    """Les ``n`` octets du **listing** a partir d'une adresse.
+
+    On accumule les ``DC``/``DS`` de ligne en ligne ; quand le gabarit ne
+    convient pas (chaine ASCII, code machine) on retombe sur le dump
+    hexadecimal que le desassembleur depose en commentaire (``;aaaa: xxxx``),
+    exact par construction. C'est la seule facon de lire la suite de
+    ``HAUTEUR_CASE`` : ``SUB_6538`` est du code, pas des donnees.
+    """
+    debut = _lignes_depuis(adresse)
+    if debut < 0:
+        return b""
+    octets = bytearray()
+    i = debut
+    while len(octets) < decalage + n and i <= len(LIGNES) and i < debut + 800:
+        try:
+            b = _bloc(i, i)
+        except (ValueError, IndexError):
+            b = b""
+        if not b:
+            b = _dump(i)
+        octets += b
+        i += 1
+    return bytes(octets[decalage:decalage + n])
+
+
+class _Capture:
+    """Enregistre l'appel a ``sprite()`` au lieu de dessiner."""
+
+    def __init__(self):
+        self.vu = None
+        self.mots = None
+
+    def sprite(self, x, y, numero, tuiles, **k):
+        self.vu = (x, y, numero)
+        self.mots = k
+
+
+# ------------------------------------------------ LAB_1272 : les seize flux
+_fin = next(i for i, s in enumerate(LIGNES) if s.startswith("LAB_15B6:")) + 1
+_bruts = bytearray()
+_i = _lignes_depuis(0x1272)
+while _i < _fin:
+    _bruts += _bloc(_i, _i)
+    _i += 1
+_bruts = bytes(_bruts)
+chk(len(_bruts) == 0x15B6 - 0x1272,
+    "le bloc LAB_1272-LAB_15B5 pese $%X octets : %d"
+    % (0x15B6 - 0x1272, len(_bruts)))
+# ``DC.L LAB_1272 ;15b6: 00001272`` : le nom de etiquette ne se lit pas en
+# hexadecimal, mais le disassembleur a depose les octets reels dans le
+# commentaire -- on prend ceux-la, qui sont exacts par definition.
+_pointeurs = []
+_i = _fin + 1
+while len(_pointeurs) < 16 and _i <= len(LIGNES):
+    _pointeurs += [int.from_bytes(_dump(_i), "big")]
+    _i += 1
+chk(len(_pointeurs) == 16,
+    "la table LAB_15B6 contient seize pointeurs : %d" % len(_pointeurs))
+if len(_pointeurs) == 16:
+    attendus = []
+    for r in range(16):
+        _d = _pointeurs[r] - 0x1272
+        _f = (_pointeurs[r + 1] if r + 1 < 16 else 0x15B6) - 0x1272
+        attendus.append(_bruts[_d:_f])
+    ecarts = [r for r in range(16)
+              if bytes(attendus[r]) != intro.FLUX_TABLE[r]]
+    chk(not ecarts,
+        "les 16 flux de FLUX_TABLE sont octet a octet ceux du listing : %s"
+        % ([len(x) for x in attendus] if not ecarts else "ecart %s" % ecarts))
+    chk(sum(len(x) for x in attendus) == 0x15B6 - 0x1272,
+        "les seize flux se touchent et couvrent $1272..$15B5 sans trou")
+
+# ------------------------------------------------- LAB_6D28 : LIGNES_ETAT
+_att = _octets_depuis(0x6D28, 16 * 14)
+_plats = [tuple(int.from_bytes(_att[k * 14 + 2 * q:
+                                    k * 14 + 2 * q + 2], "big")
+                for q in range(7)) for k in range(16)]
+def _mot_signe(v):
+    return v - 0x10000 if v >= 0x8000 else v
+
+
+_plats_s = [tuple(_mot_signe(v) for v in p) for p in _plats]
+chk(len(_att) == 224 and _plats_s == list(intro.LIGNES_ETAT),
+    "LIGNES_ETAT == les 16 structures de 7 mots de $6D28, ``anim`` vu en "
+    "signe comme le fait le port ( %d o )" % len(_att))
+if _plats_s == list(intro.LIGNES_ETAT):
+    chk(all(t[1] < len(intro.FLUX_TABLE[i]) for i, t in enumerate(_plats)),
+        "chaque pos initiale tombe dans son propre flux")
+    chk([t[0] for t in _plats_s] == [0, 0, 0, 0, 0, 0, 32, 16, 16, 16,
+                                   16, 16, 16, 48, 64, 66],
+        "seule la ligne 6 a id=$20 : elle porte le $F9 et le bump unique "
+        "( %s )" % ([t[0] for t in _plats_s],))
+    chk([t[5] for t in _plats_s].count(-1) == 2,
+        "anim == -1 sur deux lignes seulement : $FA les dessine alors tel "
+        "quel ( %s )" % ([t[5] for t in _plats_s],))
+    chk([t[3] for t in _plats] == [8] * 16,
+        "pas vaut 8 partout, soit la direction neutre de ;51f0 ( %s )"
+        % ([t[3] for t in _plats],))
+
+# -------------------------------------- $6E28 : TABLE_SPRITES / MARQUEURS
+_att = _octets_depuis(0x6E20, 0x67, 8)
+chk(len(_att) == 0x67 and _att == intro.DONNEES_6E28,
+    "DONNEES_6E28 == les $67 octets de $6E28 du listing ( %d o )" % len(_att))
+chk(intro.DONNEES_6E28[:0x49] == intro.TABLE_SPRITES
+    and intro.DONNEES_6E28[0x49:0x49 + 0x1E] == intro.MARQUEURS_TABLE,
+    "TABLE_SPRITES = [0:73] et MARQUEURS_TABLE = [73:103] d'un meme bloc : "
+    "l'indice 73+ de l'opcode $82+i retombe donc dans les marqueurs")
+_att = _octets_depuis(0x6E90, 16, 8)
+_mots = tuple(int.from_bytes(_att[2 * q:2 * q + 2], "big") for q in range(8))
+chk(_mots == intro.OBJETS_MARQUEURS,
+    "OBJETS_MARQUEURS == les 8 mots de $6E98 : %s" % (_mots,))
+
+# ------------------------------------------------------- $1F62 : les masques
+_att = _octets_depuis(0x1F62, 60)
+chk(len(_att) == 60 and intro.MASQUES_REVELATION[:60] == _att,
+    "MASQUES_REVELATION commence par les 60 octets de LAB_1F62 : neuf DC.L "
+    "puis DS.L 6 ( %d o )" % len(_att))
+chk(len(intro.MASQUES_REVELATION) == 64,
+    "la constante du port tient les 60 octets du listing et quatre octets "
+    "de remplissage nuls : %d o" % len(intro.MASQUES_REVELATION))
+if len(_att) == 60:
+    chk(_att[:4] == b"\xff\xff\xff\xff" and _att[34:36] == b"\x00\x10"
+        and _att[36:] == bytes(24),
+        "le masque 0 est $FFFF (rien ne perce), le dix-huitieme mot $0010 -- "
+        "1/8e de bit fonde -- puis la DS.L 6 remplit 24 octets nuls ( %s )"
+        % _att[34:36].hex())
+
+# ------------------------------------------- $4026 : les deux revelations
+_att = _octets_depuis(0x4026, 0x1000)
+chk(len(_att) == 0x1000 and intro.charger_revelation() == _att,
+    "charger_revelation() == les $1000 octets de LAB_4026 ( %d o )"
+    % len(_att))
+
+# --------------------------------------------------------- $5A0C : LAB_5A0C
+_att = _octets_depuis(0x5A0C, 0xA00)
+chk(len(_att) == 0xA00 and intro.charger_objets() == _att,
+    "charger_objets() == les $A00 octets de LAB_5A0C ( %d o )" % len(_att))
+if len(_att) == 0xA00:
+    _nn = sum(1 for x in _att if x)
+    chk(_att[:2] == b"\xff\xff" and 0 < _nn < 0xA00,
+        "LAB_5A0C s'ouvre sur $FFFF (sprite vide) et porte de la matiere "
+        "ailleurs : %d octets non nuls sur $A00" % _nn)
+
+# ------------------------------------------------------------ _signe, exhaustif
+_b = [intro._signe(v) for v in range(-40, 41)]
+chk(_b == [-1] * 40 + [0] + [1] * 40,
+    "_signe : -1, 0, 1 sur [-40..40], comme le BLE/BGE/BLT soustractif de "
+    ";0924-0976")
+m = [s for s in LIGNES if ";0926:" in s]
+chk(bool(m) and "BLE" in m[0], ";0926 est un BLE : le cas nul tombe a 0 : %s"
+    % m[0].strip())
+m = [s for s in LIGNES if ";093e:" in s]
+chk(bool(m) and "BGE" in m[0], ";093e est un BGE : le cas negatif vaut 1 et "
+    "donc -1 apres SUB.W : %s" % m[0].strip())
+
+# ------------------------------------------------- le tableau de directions
+_rep = {}
+_case = None
+for _i in range(_lignes_depuis(0x5130), _lignes_depuis(0x51F0)):
+    _s = LIGNES[_i - 1]
+    _m = re.search(r"CMP\.W\t#\$([0-9a-f]{4}),D4\t", _s)
+    if _m:
+        _case = int(_m.group(1), 16)
+        if _case >= 0x8000:
+            _case -= 0x10000
+        continue
+    if _case is None:
+        continue
+    for _k, _nom in enumerate(("D4", "D7", "D6")):
+        _m = re.search(r"MOVE\.W\t#\$([0-9a-f]{4})," + _nom + r"\t", _s)
+        if _m:
+            _v = int(_m.group(1), 16)
+            if _v >= 0x8000:
+                _v -= 0x10000
+            _rep.setdefault(_case, [0, 0, 0])[_k] = _v
+_rep = {k: tuple(v) for k, v in _rep.items() if -12 < k < 12}
+chk(_rep == intro.DIRECTIONS,
+    "DIRECTIONS == les huit cas de ;5130-51ec ( %d cas lus )%s"
+    % (len(_rep), "" if _rep == intro.DIRECTIONS else " : %s" % _rep))
+m = [s for s in LIGNES if ";51f8:" in s]
+chk(bool(m) and "$0008" in m[0],
+    ";51f8 met D6 a $0008 : le defaut de ;51f0 est la direction neutre : %s"
+    % m[0].strip())
+
+# ------------------------------- SUB_50E6, reecriture independante du listing
+# 0x65E4 porte `DC.B "dos.library",0` : le listing y abandonne le dump
+# hexadecimal des octets, la reconstruction s'arrete donc la. Le tableau et
+# le corps de `SUB_6538` (jusqu'a 0x65E3) sont en revanche exacts.
+_dec2_ext = _octets_depuis(0x64D4, 0x65E4 - 0x64D4)
+
+
+def _d2(i):
+    """``LAB_640C+$C8`` lu comme le fait ``SUB_50E6``, jusque dans le code."""
+    if 0 <= i < len(_dec2_ext):
+        return _dec2_ext[i]
+    return 0
+
+
+def _octet_signe(v):
+    return v - 256 if v >= 128 else v
+
+
+# ``SUB_50E6`` lit ``(A2,A3.L)`` sans borne : pour un compteur au-dela de
+# 99 -- possible, car ;08d6 recharge l'octet suivant sans retester $64 et
+# ``$70`` vaut 112 -- il va chercher dans ``SUB_6538``, qui suit le tableau.
+# Le port fait de meme, depuis le binaire ; on confronte les 512 octets.
+_refus = [i for i in range(len(_dec2_ext))
+          if intro._dec2(i) != _dec2_ext[i]]
+chk(not _refus,
+    "_dec2 == LAB_640C+$C8 du listing sur les %d octets, hauteurs "
+    "comme code : %d ecart(s) %s" % (len(_dec2_ext), len(_refus),
+                                     _refus[:5]))
+chk(all(intro._dec2(i) == intro.TABLE_COLONNE2[i] for i in range(100)),
+    "sur 0..99, _dec2 se lit dans HAUTEUR_CASE : %s"
+    % intro._dec2(99))
+
+
+def _ref_50e6(compteur, pas, ident, phase, colonne, hauteur, bascule):
+    """``SUB_50E6`` ;50e6-521c, saisie ligne a ligne depuis le listing.
+
+    ``DIVU``/``SWAP`` ( ;50ea-5102) rend ``D0 = unites - dizaines`` et
+    ``D1 = unites + dizaines`` ; deux ``EXT.W`` ( ;511e et ;5128) font des
+    octets signes ; ``MULU`` puis ``ASR.W #3`` ( ;512a-512c) ne decale que le
+    mot faible, d'ou un produit pris modulo 65536.
+    """
+    tens, units = compteur // 10, compteur % 10
+    d0 = ((units - tens) << 4) + 0x98
+    d1 = ((units + tens) << 3) + 0x1C - colonne
+    a = _octet_signe(_d2(compteur))
+    d1 -= a
+    b = _octet_signe((a - _d2(compteur + pas)) & 0xFF)
+    d6 = ((b & 0xFFFF) * (phase & 0xFFFF)) & 0xFFFF
+    if d6 & 0x8000:
+        d6 -= 0x10000
+    d1 += d6 >> 3
+    glisse = intro.DIRECTIONS.get(pas, (0, 0, 8))
+    d0 += glisse[0] * phase
+    d1 += glisse[1] * phase
+    if hauteur == 0:
+        if ident >= 0x40:
+            return d0, d1, ident          # ;5212 saute meme le bascule
+        ident += glisse[2]
+    ident += bascule
+    return d0, d1, ident
+
+
+def _trace_50e6(c, p, ph, col, ha, base, ident=5):
+    cap = _Capture()
+    intro.acteur_dessiner(cap, b"\0" * 23520, c, p, ident, ph, col, ha, base)
+    return cap.vu
+
+
+refus, cas = 0, 0
+for _c in (0, 1, 9, 10, 11, 44, 45, 54, 55, 77, 88, 99, 112, 120):
+    for _p in (-11, -10, -9, -1, 1, 9, 10, 11, 0, 8):
+        for _ph in (0, 1, 3, 7):
+            for _ha in (0, 1, 200):
+                for _col in (0, 7, 168):
+                    for _base in (0, 1):
+                        for _id in (5, 0x20, 0x40, 0x8A):
+                            cas += 1
+                            attendu = _ref_50e6(_c, _p, _id, _ph, _col, _ha,
+                                                _base)
+                            vu = _trace_50e6(_c, _p, _ph, _col, _ha, _base,
+                                             _id)
+                            if vu != attendu:
+                                refus += 1
+                                if refus == 1:
+                                    print("     50E6 c=%d p=%d ph=%d col=%d "
+                                          "h=%d b=%d id=%X -> ref=%s port=%s"
+                                          % (_c, _p, _ph, _col, _ha, _base,
+                                             _id, attendu, vu))
+chk(refus == 0,
+    "acteur_dessiner == SUB_50E6 sur %d figures independantes (x, y, "
+    "sprite) : %d divergence(s)" % (cas, refus))
+
+# ------------------------------- SUB_1CBC : les marqueurs sont des tuiles
+refus, cas = 0, 0
+for _c in range(100):
+    for _id in (0, 17, 33, 0x41, 0x7E):
+        cas += 1
+        tens, units = divmod(_c, 10)
+        attendu = ((units - tens) * 16 + 0x90,
+                   (units + tens) * 8 + 0x18 - _d2(_c), _id)
+        cap = _Capture()
+        intro.marqueur_dessiner(cap, b"\0" * 23520, _c, _id)
+        if cap.vu != attendu:
+            refus += 1
+            if refus == 1:
+                print("     1CBC c=%d -> ref=%s port=%s"
+                      % (_c, attendu, cap.vu))
+chk(refus == 0,
+    "marqueur_dessiner == SUB_1CBC (x = (uni-diz)*16+$90, y = (uni+diz)*8+"
+    "$18-dec2) sur %d figures : %d divergence(s)" % (cas, refus))
+
+cap = _Capture()
+intro.marqueur_dessiner(cap, b"\0" * 23520, 44, 33)
+chk(bool(cap.mots) and cap.mots.get("lignes") == 0x16
+    and cap.mots.get("octets") == 0x1E0
+    and cap.mots.get("limite") == 0xB0
+    and cap.mots.get("paquets") == 2,
+    "SUB_1CBC finit sur SUB_19EE : 23 lignes, limite $B0, $1E0 octets, "
+    "2 paquets -- donc land0 et non sprites0.dat ( %s )" % (cap.mots,))
+
+# --------------------------------------------------- SUB_E40 : le temple
+# ``SUB_10A2($12)`` ;0e44 remplit dix-huit colonnes. La premiere cascade est
+# ``$A8 - colonne`` ( ;0e70), la seconde ``colonne + 8`` ( ;0fc0) : les pieces
+# remontent apres la remise a zero.
+_h = intro.Objets.PIECES_HAUTE
+_b = intro.Objets.PIECES_BASSE
+_att_h = (((0x50, 5, 0),)
+          + tuple((0x50 + i * 16, 6, i) for i in range(1, 9))
+          + ((0xE0, 7, 9),))
+chk(tuple(_h) == _att_h,
+    "PIECES_HAUTE == piece 5 a x=$50 sur colonne[0] ( ;0e6c-0e82), pieces 6 "
+    "a $50+i*16 pour i=1..8 ( ;0e90-0ecc, BLE compris), piece 7 a $E0 sur "
+    "colonne[9] ( ;0ece-0ee4) : %d pieces" % len(_h))
+_att_b = tuple((0x60 + i * 16, intro.OBJETS_MARQUEURS[i], i)
+               for i in range(8))
+chk(tuple(_b) == _att_b,
+    "PIECES_BASSE == les 8 OBJETS_MARQUEURS a x=$60+i*16 ( ;0ef0-0f38, "
+    "BLT strict) : %d pieces" % len(_b))
+chk(intro.Objets.NB_PIECES == 0x12 == len(_h) + len(_b),
+    "NB_PIECES == $12 == %d pieces hautes + %d pieces basses"
+    % (len(_h), len(_b)))
+
+# Le second ``SUB_110A`` ;0f9a, juste apres ``LAB_F58`` : sans lui la seconde
+# cascade demarrait une image trop tot. ``(-31876,A4)`` == ``(-31894,A4)+18``
+# == ``&colonne[9]`` : 18 octets, soit neuf mots.
+for contenu, adresse, message in (
+    ("MOVE.W\t#$0012,-(A7)", 0x0E44, "SUB_E40 devrait initialiser 18 "
+     "colonnes"),
+    ("JSR\t(SUB_110A,PC)", 0x0F9E, "le temple devrait rappeler SUB_110A "
+     "juste apres la remise a zero"),
+    ("SUB.W\t(-31876,A4),D0", 0x0ED6, "la piece 7 devrait lire colonne[9]"),
+    ("BLT.S\tLAB_F5C", 0x0F98, "le reglage devrait boucler sur les 18 "
+     "colonnes"),
+    ("BNE.S\tLAB_1098", 0x1090, "le bouton devrait rejouer la seconde "
+     "cascade"),
+):
+    _vus = None
+    for _n, s in enumerate(LIGNES, start=1):
+        if contenu in _sans_commentaire(s) and _numero_adresse(_n) == adresse:
+            _vus = s.strip()
+            break
+    chk(_vus is not None, "%s ( ;%04x ) : %s" % (message, adresse,
+                                                 _vus or "introuvable"))
+
+# Execution : la premiere cascade, la remise a zero, la seconde, l'epuisement
+# ``LAB_109C``. ``vitesse`` tombe a ``-1`` ( ``DIVS #2`` + ``NEG`` , ;1140-114a)
+# et ``D5 = vitesse + 1`` retombe alors a zero : c'est la seule fin possible.
+#
+# A la remise a zero ``colonne`` vaut ``$A0`` et ``vitesse`` ``random()&7`` ;
+# le second ``SUB_110A`` ;0f9a les fait passer a ``colonne = $A0-(v+1)`` et
+# ``vitesse = v+1``, soit ``colonne + vitesse == $A0``. Sans cet appel on
+# observerait ``colonne == $A0`` brut : c'est ce qui distingue les deux.
+_alea = intro.Alea(0x12345678)
+_gr = intro.Grille(_alea, b"\0" * len(intro.HAUTEUR_CASE))
+_ec = intro.Ecran(bytearray(32000))
+_obj = intro.Objets(_alea, _gr, _ec, intro.charger_objets())
+_n = intro.Objets.NB_PIECES
+_tours, _trans, _epuise = 0, None, None
+while _tours < 20000:
+    _r = _obj.pas(_ec)
+    _tours += 1
+    if _trans is None and _obj.repli:
+        _trans = list(zip(_gr.colonnes[:_n], _gr.vitesses[:_n]))
+    if _r == 2:
+        _epuise = _tours
+        break
+chk(_epuise is not None,
+    "SUB_E40 s'epuise seule (LAB_109C ;109c) : %s tours, repli vu=%s"
+    % (_epuise, _trans is not None))
+chk(_trans is not None and all(c + v == 0xA0 for c, v in _trans),
+    "a la remise a zero, colonne+vitesse == $A0 pour les 18 colonnes -- "
+    "donc ;0f9a a bien ete appele : %s" % ([c + v for c, v in
+                                            (_trans or [])][:6],))
+chk(_trans is not None and not any(c == 0xA0 for c, _ in _trans),
+    "et aucune colonne ne reste a $A0 brut, ce que donnerait l'absence de "
+    ";0f9a")
+
+# ------------------------------------- les reperes du listing, mot a mot
+for contenu, adresse, message in (
+    ("BSR.W\tSUB_19EE", 0x1D02, "SUB_1CBC devrait appeler SUB_19EE"),
+    ("JSR\tSUB_1910", 0x521C, "SUB_50E6 devrait appeler SUB_1910"),
+    ("LEA\t($E,A7),A7", 0x0C7C, "0xFB ne pousser que six arguments, donc "
+     "pas de hauteur"),
+    ("CMP.W\t#$00f7,D5", 0x0D98, "l'opcode $F7 devrait etre compare a "
+     "$00F7"),
+    ("MULS\t#$000e,D0", 0x0DB0, "une structure de script devrait peser "
+     "14 octets"),
+    ("MOVE.W\t#$007f,-(A7)", 0x1198, "SUB_1186 devrait regrainer a $7F"),
+    ("CMPI.W\t#$00f0,(-31994", 0x0D18, "le bump de $F9 devrait attendre "
+     "240"),
+    ("ADDQ.W\t#8,D0", 0x0FC0, "la deuxieme cascade du temple devrait "
+     "decaler de 8"),
+    ("MOVE.W\t#$00a8,D0", 0x0E70, "la premiere cascade devrait faire "
+     "$A8 - colonne"),
+    ("MOVE.W\t#$00a0,(0,A0,D0.L)", 0x0F68, "le reglage du temple devrait "
+     "mettre colonne a $A0"),
+    ("MULU\t#$01e0,D2", 0x1A20, "SUB_19EE devrait indexer sur $1E0"),
+    ("MULU\t#$0140,D2", 0x185E, "SUB_1802 devrait indexer sur $140"),
+    ("MULU\t#$00a0,D2", 0x1940, "SUB_1910 devrait indexer sur $A0"),
+    ("DIVU\t#$000a,D3", 0x50EA, "SUB_50E6 devrait diviser par 10"),
+    ("ADDI.W\t#$0098,D0", 0x50FE, "SUB_50E6 devrait ajouter $98 a x"),
+    ("ADDI.W\t#$001c,D1", 0x5102, "SUB_50E6 devrait ajouter $1C a y"),
+    ("MOVE.B\t(0,A1,D3.W),D6", 0x1CDE, "SUB_1CBC devrait lire le decalage "
+     "en octet"),
+    ("EXT.W\tD6", 0x1CF4, "puis l'etendre en signe -- d'ou _octet()"),
+):
+    trouve = None
+    for _n, s in enumerate(LIGNES, start=1):
+        if contenu in _sans_commentaire(s) and _numero_adresse(_n) == adresse:
+            trouve = s.strip()
+            break
+    chk(trouve is not None,
+        "%s ( ;%04x ) : %s" % (message, adresse, trouve or "introuvable"))
+
+# ------------------------------------------- SUB_3F92 : le cycle de D0
+_clr, _clr_adr = [], []
+for _n, _s in enumerate(LIGNES, start=1):
+    if "CLR.W\tD0" in _s:
+        _a = _numero_adresse(_n)
+        if _a is not None and 0x3FB0 <= _a <= 0x3FC8:
+            _clr.append(_s)
+            _clr_adr.append(_a)
+chk(len(_clr) == 2 and _clr_adr == [0x3FB6, 0x3FC8],
+    "SUB_3F92 remet D0 a zero au depart ( ;3fb6) puis a chaque tour "
+    "complet $6 ( ;3fc8) : %d CLR.W D0 a %s" % (len(_clr),
+                                                [";%04x" % a for a in _clr_adr]))
+
+
+def _ref_3f92(donnees, ecart, masque, base, dest):
+    """``SUB_3F92`` ;3f92-4024 reecrit : ``D0`` tourne sur 2,4,0 a travers
+    toute l'image -- ``CLR.W`` une fois ( ;3fb6) puis ``ADDQ #2``/``CMPI #6``
+    par paquet ( ;3fc0-3fc8). ``dest`` est une liste de 16000 mots."""
+    d0 = 0
+    a0 = base
+    for ligne in range(0x40):
+        for bloc in range(4):
+            d0 = (d0 + 2) % 6
+            msk = int.from_bytes(intro.MASQUES_REVELATION[
+                masque * 2 + d0:masque * 2 + d0 + 2], "big")
+            src = ecart + ligne * 32 + bloc * 8
+            for p in range(4):
+                o = a0 + bloc * 2 + p * 8000
+                v = int.from_bytes(donnees[src + p * 2:src + p * 2 + 2], "big")
+                w = dest[o // 2]
+                dest[o // 2] = (w & msk) | (v & (~msk & 0xFFFF))
+        a0 += 40
+    return dest
+
+
+_fond = bytes((k * 37 + 11) & 0xFF for k in range(32000))
+_source = bytes((k * 91 + 5) & 0xFF for k in range(0x1000))
+refus, cas = 0, 0
+for _base in (0, 0x20):
+    for _masque in (0, 1, 17, 19):
+        cas += 1
+        attendu = _ref_3f92(_source, 0x800, _masque, _base,
+                            [int.from_bytes(_fond[2 * k:2 * k + 2], "big")
+                             for k in range(16000)])
+        e = intro.Ecran(bytearray(_fond))
+        intro.reveler(e, _base, 0x800, _masque, _source)
+        vu = [int.from_bytes(e.donnees[2 * k:2 * k + 2], "big")
+              for k in range(16000)]
+        if vu != attendu:
+            refus += 1
+            if refus == 1:
+                k = next(i for i in range(16000) if vu[i] != attendu[i])
+                print("     3F92 base=%d masque=%d mot %d : ref=%04X port=%04X"
+                      % (_base, _masque, k, attendu[k], vu[k]))
+chk(refus == 0,
+    "reveler == SUB_3F92 sur %d combinaisons (base, masque) avec le cycle "
+    "D0 continu : %d divergence(s)" % (cas, refus))
+
+# --------------------------------------------------- la marche du script
+refus, cas = 0, 0
+for _cible in range(100):
+    for _c in range(100):
+        cas += 1
+        _t, _u = divmod(_c, 10)
+        _dt, _du = _cible // 10 - _t, _cible % 10 - _u
+        attendu = ((_dt > 0) - (_dt < 0)) * 10 + ((_du > 0) - (_du < 0))
+        if intro._pas_script(_c, _cible) != attendu:
+            refus += 1
+chk(refus == 0,
+    "_pas_script == sign(diz(cible)-diz(c))*10 + sign(uni(cible)-uni(c)) "
+    "sur %d couples : %d divergence(s)" % (cas, refus))
+
+ok, court = True, 0
+for _cible in range(100):
+    _c = (_cible * 7 + 13) % 100
+    for _k in range(40):
+        if _c == _cible:
+            court = max(court, _k)
+            break
+        _c += intro._pas_script(_c, _cible)
+        if not 0 <= _c <= 100:
+            ok = False
+            break
+    else:
+        ok = False
+chk(ok,
+    "la marche converge en moins de 40 pas et reste dans 0..100 depuis "
+    "n'importe quelle case : %s" % ("oui" if ok else "NON"))
+
+for _c, _t in ((38, 26), (8, 26), (99, 0), (0, 99), (45, 54), (7, 70)):
+    _p = intro._pas_script(_c, _t)
+    chk(-11 <= _p <= 11 and _p != 0 and abs(_p) in (1, 9, 10, 11),
+        "marche %d -> %d donne pas = %+d : un des neuf vecteurs de ;5130"
+        % (_c, _t, _p))
 
 print()
 if ECHECS:
