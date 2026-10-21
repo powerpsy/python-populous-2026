@@ -72,7 +72,7 @@ python -m populous.game --intro        # avec l'introduction (Phase 84)
 | C | **Musique** (`gmusic1`) | **haute** | MP3 fournis et joués (phase 86 : intro `Main Theme`, partie `BGM`) ; `gmusic1` **toujours inutilisé** — c'est une banque de mesures Amiga (`check_mod.py`), dont les tables de séquences résident dans l'exécutable (`$3532..$3F91`) et non dans le fichier : aucun lecteur externe ne pourrait la jouer telle quelle |
 | D | **Conquest** | - | **partiel** : `_end_game` et `_requester` transcrits (Phase 55) ; la boîte de dialogue de victoire est jouable |
 | E | Interface complete | moyenne | OK : blason, jauges, `_text`, `_requester` |
-| F | **Liaison série** (codes 2/8 de `powers.py`, `_two_players`) | **haute** | **à trancher** — hors périmètre assumé tant que l'arbitrage n'est pas rendu (voir note en fin de document) |
+| F | **Liaison série** (codes 2/8 de `powers.py`, `_two_players`) | - | **clos : hors périmètre**, décision du 21 octobre 2026. L'option est inutile à porter — le port n'est pas une émulation d'Amiga : la liaison passait par le port série matériel et `AddIntServer`, et sous pygame/SDL elle deviendrait un socket sans rapport avec le code original. Les 11 routines (`_setup_serial_interrupt`, `_set_serial`, `_check_serial`, `_r_ser_buff`, `_w_ser_buff`, `_serial`, `_serial_inter_1/2`, `_free_serial_interrupt` — 108 lignes) entrent dans les 185 hors périmètre assumé, au même titre que `SUB_16E` et le lecteur `popsam` |
 
 Les **226 routines non couvertes** (sur 393 avec code) se répartissent ainsi :
 185 hors périmètre assumé — OS Amiga (71), trampolines `___xxx` (55),
@@ -7329,14 +7329,78 @@ Tous au vert.
   d’origine plutôt que les MP3 ;
 * **`SUB_16E`** (exécute `populous.prg`) : hors de la portée du portage.
 
-## Note honnête sur l'équilibrage
+## Note honnête sur l'équilibrage — vérifiée par exécution (Phase 88)
 
-Les deux tribus ne prospèrent pas sur **toutes** les graines : sur les cartes
-très montagneuses (peu de `$0F`), la seconde tribu peut s'éteindre. Avec l'IA
-désactivée elles sont **parfaitement symétriques**. Dans le vrai jeu ce
-phénomène existe aussi, et le joueur y remédie en « relevant » le terrain :
-`ACT_RAISE` / `ACT_LOWER` sont transcrits depuis la Phase 63, donc cette
-interface est bien là.
+L'ancienne version de cette note affirmait que « sur les cartes très
+montagneuses (peu de `$0F`), la seconde tribu peut s'éteindre » et que «
+avec l'IA désactivée les deux tribus sont parfaitement symétriques ». Ces
+deux affirmations étaient **déduites**, non mesurées — et la mesure les
+contredit l'une et l'autre.
+
+### Ce qui est mesuré
+
+**150 graines × 1200 tours**, sols 0 à 3 :
+
+| mesure | résultat |
+|---|---|
+| populations finales, tribu 0 > tribu 1 | **0 / 150** |
+| populations finales, tribu 1 > tribu 0 | **150 / 150** |
+| seconde tribu éteinte | **0 / 150** |
+| départs asymétriques | **150 / 150**, toujours `45 / 135` |
+| IA gelée (`flags \|= 4`), populations différentes | 30 / 30 |
+
+### Ce que ce « 45 / 135 » veut dire
+
+`population()` est la **somme des vies** (asm 3472-3474), non un décompte.
+Au départ chaque peep porte `life = 45`, et la tribu 0 a **un** villageois
+tandis que la tribu 1 en a **trois** : d'où 45 et 135. Ce n'est pas un biais
+du port, c'est le jeu lui-même.
+
+### La symétrie n'existe pas, et c'est le listing qui le décide
+
+`_place_first_people` calcule le nombre de villageois ainsi (L7668-7678) :
+
+```asm
+    CMPI.W  #$0004,(LAB_516B0,A4)   ; threshold
+    BLE.S   LAB_439F4
+    MOVEQ   #1,D0
+    ...
+    ASL.W   #1,D0                   ; D0 *= 2
+    ADDQ.W  #1,D0                   ; D0 += 1        ->  n = 2*(threshold>4)+1
+```
+
+Et le `.data` de `_stats` porte, octet à octet (L24171-24232) :
+
+| champ | tribu 0 | tribu 1 | adresse |
+|---|---|---|---|
+| `threshold` | **1** | **5** | `LAB_516B0` = `$0001`, `LAB_516DE` = `$0005` |
+| `period` (pas de l'IA) | **1** | **3** | `LAB_516B4` = `$0001`, `LAB_516E2` = `$0003` |
+| `can_build` | 0 (humain) | 1 (Amiga) | `LAB_516AA`, `LAB_516D8` |
+| `power_mask` | `$FFFF` | `$FFFF` | `LAB_516B2`, `LAB_516E0` |
+
+D'où `n = 1` pour la tribu 0 et `n = 3` pour la tribu 1. Les deux tribus
+ne sont donc **pas** censées être symétriques : la tribu 1 commence avec
+trois fois plus de monde, décide elle aussi — la tribu 0, `can_build = 0`,
+ne prend aucune décision tant que personne ne la conduit — et son IA
+s'exerce **tous les trois tours** contre un tour pour la tribu 0. Comparer
+`population(0)` à `population(1)` ne teste donc pas la symétrie du port.
+
+Geler l'IA ne rétablit pas la symétrie non plus : avec `flags |= 4` ( bit2
+« gele l'IA » de `LAB_518A7` ), les populations restent différentes sur
+30/30 graines — c'est le rapport 1:3 de villageois de départ qui persiste.
+
+### Conclusion
+
+Le port n'a **pas** de biais d'équilibrage détecté : ce qu'il produit
+(tribu 1 l'emporte toujours en configuration monojoueur sans entrée
+humaine) est exactement ce que le `.data` du listing annonce. Le joueur
+humain ne peut gagner qu'en jouant — c'est le principe du jeu. Les
+pouvoirs de terrain `ACT_RAISE` / `ACT_LOWER`, transcrits depuis la Phase
+63, sont bien là pour retoucher la carte.
+
+La mesure est reproductible : 150 graines, `1 + i*37`, sol `i % 4`,
+`sim.stats[t].can_build` / `.period` / `.threshold` lus avant toute
+modification.
 
 ---
 
