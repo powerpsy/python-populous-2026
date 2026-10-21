@@ -7518,3 +7518,107 @@ faire » : 185 hors périmètre assumé, 38 à revoir.
   écrivant sans borne — même régime que `_do_place_funny` ;
 * `gmusic1` reste inutilisé : c'est une banque de **mesures**, dont les
   tables de séquences résident dans l'exécutable et non dans le fichier.
+
+---
+
+## Phase 89 — les quatre pouvoirs, transcrites (21 octobre 2026)
+
+`_do_magnet` (L6769-6819), `_do_lower_point` (L7091-7176),
+`_do_raise_point` (L7180-7267) et `_do_swamp` (L8295-8388) : **314 lignes**,
+les dernières de logique de jeu qui restaient marquées `[APPROX]`. Le port
+en avait les **primitives** (`Terrain.raise_point` / `Terrain.lower_point`,
+L1274 / L2571) mais pas les **gabarits de pouvoir**. Toutes les écarts sont
+levés par transcription ; `tools/check_powers.py` en donne 37 contrôles.
+
+### Ce qui était faux
+
+**Le dépôt n'était pas un fixe 10.** Les deux routines prélèvent
+`10 + 4 * _build_count` (L7215-7219 / L7124-7128), et `_build_count` compte
+**chaque sommet relevé** — lui-même et les voisins lissés — puisqu'il est
+incrémenté à `;3ef9c` et `;3feac`, *à l'intérieur même* de `_raise_point` /
+`_lower_point`. Les primitives portaient déjà le compteur ; les gabarits ne
+le remettaient jamais à zéro et ne le lisaient jamais.
+
+**Les deux gardes ne sont pas les mêmes**, et ce n'est pas un oubli du port
+mais un fait du listing :
+
+* `_do_raise_point` ne **retourne** que si les trois tests échouent —
+  `mana < 10` **et** `paint_map == 0` **et** `war == 0` (L7186-7192). En
+  guerre le relever est donc toujours possible, et gratuit ;
+* `_do_lower_point` ne compte que `mana` et `paint_map` (L7102-7105), sans
+  `_war`. Pendant une guerre, abaisser exige donc encore 10 de mana, puis
+  ne prélève rien.
+
+**L'ordre des bornes diffère.** L'abaissement pose `_xmin/_xmax/_ymin/_ymax`
+**avant** sa garde (L7093-7096), donc il les change même quand il sort sans
+rien faire ; le relever les pose **après** (L7197-7200). Le port ne les
+posait ni l'un ni l'autre.
+
+**La boîte de `_make_map` n'était pas la carte entière.** Le port faisait
+`mod_map(0,0,0x3F,0x3F)` ; l'asm appelle `_make_map(_xmin-1, _ymin-1,
+_xmax, _ymax)` (L7146-7154), après un bornage **d'un seul côté** —
+`_xmin/_ymin >= 1` et `_xmax/_ymax <= 0x3F` (L7130-7144), précisément pour
+que `_xmin-1` reste valide. Mesuré : un recalcul sur toute la carte diffère
+du recalcul sur la boîte sur **38 cases hors boîte**, où il écrasait des
+tuiles rocher `$30`/`$31` que la boîte laisse intactes.
+
+**La portée du marais tirait sa case de départ au hasard** (`rng.below(64)`)
+au lieu de la case visée. L'asm fait `x + newrand()%7 - 3` (L8335-8348), un
+carré 7x7 centré sur la cible — `_newrand` effaçant le bit 15 ( `BCLR #$F`,
+L19133 ), `% 7` vaut bien 0..6. Manquaient aussi : les portes `war` et
+`pause` (L8306-8309), le test `power_mask & 0x10` (L8310-8313), la
+contournement de `_paint_map` qui saute **par-dessus garde et dépôt**
+(L8297-8298 -> `LAB_4415A`) en laissant tourner les 30 essais, et
+`_score += 50` quand `tribu == _player` (L8331).
+
+**Trois `_effect` fantômes.** `_do_raise_point`, `_do_lower_point` et
+`_do_swamp` n'écrivent **aucun** `_effect` ; le port écrivait `$40|tribu`
+et `$48`. `$48` est, selon le propre tableau de `sound.py`, le *temps du
+tempo* (`LAB_4CA0E`). Seul `_do_magnet` en écrit un : `$4D` (L6786).
+
+### Le piège de la mana signée
+
+C'est la seule correction qui ait régressé quelque chose, et elle a fallu
+la chercher.
+
+La mana est rangée dans un **LONG** et comparée par `CMP.L` suivi d'une
+branche **signée** (`BGE`/`BLT`), mais le champ lui-même boucle en
+`SUB.L`/`ADD.L`. Or un dépôt **peut** légitimement passer sous zéro : la
+charge `10 + 4*_build_count` dépasse souvent les 10 exigés par la garde, et
+le `.data` du listing range même un plancher signé `$FFFFFF06` = **−250**
+(`MANA_VALUES[0]`, L24288). Revenue sous zéro, la mana revient sous la forme
+`$FF......`. Relue en **non signé**, la garde `mana < 10` voit alors quatre
+milliards, l'IA déclenche tous ses pouvoirs d'un coup jusqu'à déclarer la
+guerre — et la guerre rend `_sculpt` faux partout (`sim.war or sim.pause`,
+game.py:1666), ce qui faisait tomber `autopilot` de **84/84 à 75/84**.
+
+Corrigé par une lecture en `m68k.s32`, le même outil que `sim.py` emploie
+déjà pour la même raison sur `CMPI.L #$14,(LAB_52DF0+t*16) / BLT`. Appliqué
+à `PowerEngine.mana()`, aux quatre gardes, au choix de l'IA et au plancher
+de fin de bataille.
+
+### Ce que le contrôle mesure (`tools/check_powers.py`, 37 contrôles)
+
+* le dépôt suivi sur 64 relevages, tous conformes à `10 + 4*_build_count`,
+  avec au moins un cas où `_build_count >= 2` — la surcharge est donc
+  mesurée, pas supposée ;
+* l'asymétrie `_war` dans les deux sens ;
+* les bornes posées avant la garde par l'abaissement, après par le relever ;
+* le bornage unilatéral (`_xmin/_ymin` retombant à 1, `_xmax/_ymax` à 0x3F) ;
+* les six portes du marais, chacune isolément ;
+* la portée : toutes les cases posées doivent tomber dans le carré 7x7, et
+  jamais plus de 30 ;
+* la mana signée, dans les deux sens — `$FFFEA84D` lu comme −87987, et une
+  mana négative bloquant relevage et marais comme le ferait le `BGE` ;
+* l'aimant, ses trois refus, son `_effect = $4D` et sa cible `(y<<6)|x` ;
+* et, régression directe des écarts levés, le fait qu'aucune des trois
+  routines n'écrit plus d'_effect`.
+
+### Écarts assumés restants
+
+* les deux appels `___Setscreen`/`___draw_map` de fin de `_do_raise_point`
+  et `_do_lower_point` (L7247-7266 / L7146-7175) sont de l'affichage, hors
+  périmètre : le port se contente de `mod_map` ;
+* `_do_swamp` lit `_map_blk` **avant** de tester les bornes (L8349-8355),
+  en index mot signé. Le port teste d'abord — le résultat de cette lecture
+  hors carte n'étant jamais utilisé, l'observable est le même.

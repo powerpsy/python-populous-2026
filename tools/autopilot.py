@@ -387,16 +387,21 @@ def main() -> int:
 
     # ---- 9b. le clic choisit l'action (L7452-7561) -------------------
     # Aucune icone d'armee : `act` = 4/5/1/2 vient du **clic**, pas de la
-    # palette. Cout 10 pour relever/abaisser, 5000/200 pour les autres.
+    # palette. Cout 5000/200 pour les autres, et pour relever/abaisser
+    # `10 + 4*_build_count` (L7215-7219 / L7124-7128) : le depot compte
+    # **chaque sommet releve**, lui-meme et les voisins lisses ( ;3ef9c ),
+    # et non pas un fixe 10.
     g.sim.mode = 2
     for bouton, act_att, lbl, delta in ((1, 1, "gauche", 1),
                                         (3, 2, "droite", -1)):
         v0, m0 = sommet(), pl.mana
         clic(bouton)
-        v1, m1 = sommet(), pl.mana
-        results.append(ok("clic %s : act=%d, haut %+d, mana -10"
-                          % (lbl, act_att, delta),
-                          v1 == v0 + delta and m0 - m1 == 10,
+        v1, m1, n = sommet(), pl.mana, g.terrain.build_count
+        cout = 10 + 4 * n
+        results.append(ok("clic %s : act=%d, haut %+d, mana -%d "
+                          "(= 10 + 4 x %d sommets releves)"
+                          % (lbl, act_att, delta, cout, n),
+                          v1 == v0 + delta and n >= 1 and m0 - m1 == cout,
                           "sommet %d -> %d, mana %d -> %d, act=%d p1=%d p2=%d"
                           % (v0, v1, m0, m1, st.act, st.p1, st.p2)))
 

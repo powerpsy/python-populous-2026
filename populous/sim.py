@@ -739,7 +739,11 @@ class Game:
         table = self.land.battle_add1
         gain = table[age] if 0 <= age < len(table) else 100
         pl = self.players[w.tribe]
-        pl.mana = max(pl.mana + gain, MANA_VALUES[0])
+        # `MANA_VALUES[0]` vaut `$FFFFFF06`, c'est-à-dire **-250 en signé** :
+        # le plancher de la mana est donc nul ou negatif. Il faut lire la
+        # mana en signe, sinon une mana revenue en `$FF......` apres un
+        # depot passerait au-dessus de ce plancher au lieu d'y etre retouvee.
+        pl.mana = max(m68k.s32(pl.mana) + gain, MANA_VALUES[0])
 
         n = N_BIG_NEIGHBOURS if l.frame == FRAME_TOWN else N_NEIGHBOURS
         blk, bk2 = self.map.blk, self.map.bk2

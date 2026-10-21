@@ -48,12 +48,13 @@ desassemblage** du binaire original.
 ## Verification avant de dire « c'est fait »
 
 ```bash
-python tools\autopilot.py 59 0 3   # 68 controles d'interaction
+python tools\autopilot.py 59 0 3   # 84 controles d'interaction
 python tools\check_render.py       # rendu et transparence
 python tools\check_assets.py       # decodage des assets
 python tools\check_funny.py        # _do_place_funny (Phase 56)
 python tools\check_do_funny.py     # _do_funny (Phase 88)
 python tools\check_equilibre.py    # equilibrage des deux tribus (Phase 88)
+python tools\check_powers.py       # les 4 pouvoirs, 37 controles (Phase 89)
 python tools\check_intro.py        # intro, 217 controles (Phase 87)
 python tools\check_mod.py          # banque popsam (Phase 86)
 python tools\smoke_sim.py          # 5000 tours de simulation

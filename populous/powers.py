@@ -45,7 +45,24 @@ class PowerEngine:
 
     # ------------------------------------------------------------------ mana
     def mana(self, tribe: int) -> int:
-        return self.g.sim.players[tribe].mana
+        """La mana de la tribu, **lue comme un LONG signe**.
+
+        L'asm range la mana dans un long et la compare par ``CMP.L`` suivi
+        d'une branche **signee** (``BGE``/``BLT``). Le champ lui-meme boucle
+        en ``SUB.L``/``ADD.L`` : une mana passant sous zero revient donc sous
+        la forme ``$FF......``. Relue en **non signe**, elle vaut alors
+        quatre milliards, la garde ``mana < 10`` passe, et l'IA declenche
+        tous ses pouvoirs d'un coup jusqu'a declancher la guerre — qui elle
+        bloque `_sculpt`. C'est le piege deja signale a `sim.py` pour
+        ``CMPI.L #$14,(LAB_52DF0+t*16) / BLT``, et `m68k.s32` est le meme
+        outil.
+
+        La mana **peut** etre negative : le depot ``10 + 4*_build_count``
+        du relever depasse souvent les 10 exigés par la garde, et le
+        `.data` du listing range meme un plancher signe ``$FFFFFF06`` =
+        -250 (`MANA_VALUES[0]`, L24288).
+        """
+        return m68k.s32(self.g.sim.players[tribe].mana)
 
     def can_pay(self, tribe: int, cost: int) -> bool:
         return self.mana(tribe) >= cost
@@ -55,38 +72,117 @@ class PowerEngine:
     # mana, le deduit, et renvoie True s'il a agi.
 
     def do_raise_point(self, tribe: int, x: int, y: int) -> bool:
-        """**Relever** (L7187) — cout 10. Le plus courant."""
-        if not self._pay(tribe, COST_RAISE):
-            return False
+        """**Relever** — `_do_raise_point` (L7180-7267, `LAB_43414`).
+
+        La garde (L7186-7192) ne **retourne** que si les trois tests
+        echouent : ``mana < 10`` **et** ``_paint_map == 0`` **et**
+        ``_war == 0``. En guerre le relever est donc toujours possible —
+        difference avec `_do_lower_point`, dont la garde ignore `_war`.
+
+        Le cout n'est pas un fixe 10 : c'est ``10 + 4 * _build_count``
+        (L7215-7219), ou `_build_count` compte **chaque sommet releve**,
+        lui-meme et les voisins lisses ( `;3ef9c` ). Il n'est preleve que
+        si ``_paint_map == 0`` **et** ``_war == 0`` (L7206-7209) — sans
+        quoi le relever est gratuit.
+
+        **ECART corrige (Phase 89)** : la version precedente imposait un
+        cout fixe 10 par :meth:`_pay` et ecrivait ``_effect = 0x40|tribu``,
+        lequel n'apparait ni dans `_do_raise_point` ni dans le dispatch
+        `_get_message` (L17983-17988).
+        """
+        sim = self.g.sim
+        if (self.mana(tribe) < COST_RAISE       # L7186-7188
+                and not sim.paint_map                  # L7189-7190
+                and not sim.war):                      # L7191-7192
+            return False                               # L7193-7195
         terr = self.g.terrain
-        # l'asm eleve le sommet (x, y) ; les coordonnees de case (0..63) sont
-        # acceptees telles quelles (le sommet (64,*) existe).
-        terr.raise_point(_clamp_cell(x), _clamp_cell(y))
-        self._remap()
-        self.g.effect = 0x40 | (tribe & 1)
+        terr.xmin = terr.xmax = x                       # L7197-7198
+        terr.ymin = terr.ymax = y                       # L7199-7200
+        terr.build_count = 0                            # L7201
+        terr.raise_point(x, y)                          # L7202-7205
+        if not sim.paint_map and not sim.war:           # L7206-7209
+            sim.players[tribe].mana -= (4 * terr.build_count
+                                        + COST_RAISE)   # L7215-7219
+        self._remap_box()                               # L7221-7266
         return True
 
     def do_lower_point(self, tribe: int, x: int, y: int) -> bool:
-        """**Abaisser** (L7208) — cout 10."""
-        if not self._pay(tribe, COST_RAISE):
-            return False
+        """**Abaisser** — `_do_lower_point` (L7091-7176, `LAB_43310`).
+
+        Deux differences de forme avec `_do_raise_point`, et ce sont des
+        faits du listing, pas des oublis :
+
+        * les bornes sont posees **avant** la garde (L7093-7096), donc
+          elles changent meme quand la routine sort sans rien faire ;
+          `_do_raise_point` les pose lui apres (L7197-7200) ;
+        * la garde (L7102-7105) ne compte que ``mana`` et `_paint_map`,
+          **sans `_war`**. Pendant une guerre, abaisser exige donc 10 de
+          mana, alors que relever est libre.
+
+        **ECART corrige (Phase 89)** : idem `do_raise_point` — cout fixe
+        et `_effect = 0x40|tribu` etaient absent du listing (L7091-7176).
+        """
+        sim = self.g.sim
         terr = self.g.terrain
-        terr.lower_point(_clamp_cell(x), _clamp_cell(y))
-        self._remap()
-        self.g.effect = 0x40 | (tribe & 1)
+        terr.xmin = terr.xmax = x                       # L7093-7094
+        terr.ymin = terr.ymax = y                       # L7095-7096
+        if (self.mana(tribe) < COST_RAISE        # L7102-7103
+                and not sim.paint_map):                 # L7104-7105
+            return False                               # L7106-7108
+        terr.build_count = 0                            # L7110
+        terr.lower_point(x, y)                          # L7111-7114
+        if not sim.paint_map and not sim.war:           # L7115-7118
+            sim.players[tribe].mana -= (4 * terr.build_count
+                                        + COST_RAISE)   # L7124-7128
+        self._remap_box()                               # L7130-7175
         return True
 
+    def _remap_box(self) -> None:
+        """`_make_map` sur la boîte `_xmin/_ymin/_xmax/_ymax` (L7221-7266).
+
+        Les quatre bornes ne sont bornees que d'un seul cote : `_xmin` et
+        `_ymin` **par en dessous** a 1, `_xmax` et `_ymax` **par en dessus**
+        a 0x3F (L7130-7144). C'est precisement pour que ``_xmin-1`` et
+        ``_ymin-1`` restent valides quand on les passe a `_make_map`
+        (L7146-7154). Les deux appels `___Setscreen`/`___draw_map` sont
+        de l'affichage, hors perimetre.
+        """
+        terr = self.g.terrain
+        if terr.xmin < 0x0001:
+            terr.xmin = 0x0001
+        if terr.xmax > 0x003F:
+            terr.xmax = 0x003F
+        if terr.ymin < 0x0001:
+            terr.ymin = 0x0001
+        if terr.ymax > 0x003F:
+            terr.ymax = 0x003F
+        terr.mod_map(terr.xmin - 1, terr.ymin - 1,
+                     terr.xmax, terr.ymax)
+
     def do_magnet(self, tribe: int, x: int, y: int) -> bool:
-        """**Aimanter** (L6769) — cout 200. Il faut une cible, et pas de guerre."""
+        """**Aimanter** — `_do_magnet` (L6769-6819, `LAB_42FC6`).
+
+        Garde dans cet ordre (L6776-6785) : ``mana < 200``, puis
+        ``_magnet[tribe] == 0``, puis ``_war != 0`` — les trois sont sans
+        effet de bord, donc l'ordre dans lequel on les teste est
+        indifferenciable. `_effect = $4D` (L6786) puis `mana -= 200`
+        (L6792-6793), puis ``(x, y)`` borne a [0, 0x3F] (L6794-6808) et
+        `_set_magnet_to(tribe, (y<<6)|x)` (L6810-6815).
+
+        Les coordonnees arrivent deja bornees par le dispatch (L17722),
+        ce qui rend le second clamp de l'asm inoperant ici.
+        """
         sim = self.g.sim
-        if self.g.sim.war:
+        if self.mana(tribe) < COST_MAGNET:            # L6776-6777
             return False
-        if sim.players[tribe].magnet == 0:
+        if sim.players[tribe].magnet == 0:              # L6781-6783
             return False
-        if not self._pay(tribe, COST_MAGNET):
+        if sim.war:                                     # L6784-6785
             return False
-        sim.set_magnet_to(tribe, (_clamp_cell(y) << 6) | _clamp_cell(x))
-        self.g.effect = 0x4D
+        sim.players[tribe].mana -= COST_MAGNET          # L6792-6793
+        self.g.effect = 0x4D                            # L6786
+        sim.set_magnet_to(tribe, ((_clamp_cell(y) << 6)
+                                  | _clamp_cell(x)))    # L6810-6815
         return True
 
     def do_quake(self, tribe: int, x: int, y: int) -> bool:
@@ -113,21 +209,57 @@ class PowerEngine:
         return True
 
     def do_swamp(self, tribe: int, x: int, y: int) -> bool:
-        """**Marais** (L8295) — cout 5000. 30 essais sur une case libre."""
-        if not self._pay(tribe, COST_SWAMP):
-            return False
+        """**Marais** — `_do_swamp` (L8295-8388, `LAB_44142`).
+
+        La structure est un piege : ``_paint_map != 0`` saute **par-dessus
+        toute la garde ET le paiement** (L8297-8298 -> `LAB_4415A`) mais
+        laisse tourner les 30 essais. Sinon il faut, dans l'ordre :
+        ``mana >= 5000`` (L8303-8305), pas de guerre (L8306), pas de pause
+        (L8308), et le bit 4 de ``_stats[t].power_mask`` (L8310-8313) —
+        sinon retour immediat **sans rien prelever**.
+
+        Le paiement n'a lieu qu'apres ces tests (L8319-8325), et les 50
+        points de score (L8331) ne vont qu'a la tribu ``== _player``.
+
+        **ECART corrige (Phase 89)** : la version precedente partait d'une
+        case **au hasard** (``rng.below(64)``) au lieu de la case visee,
+        ne connaissait ni ``_war`` ni ``_pause`` ni `power_mask` ni
+        `_score`, prelevait 5000 **avant** tout test, et ecrivait
+        ``_effect = 0x48`` — code qui, selon le propre tableau de
+        `sound.py`, est le *temps du tempo* (`LAB_4CA0E`) ; `_do_swamp`
+        n'ecrit aucun `_effect`.
+
+        Les 30 essais (L8333-8387) font deux tirages chacun : la case est
+        ``(x + newrand()%7 - 3, y + newrand()%7 - 3)``, un carre 7x7 centre
+        sur la case visee. `_newrand` efface le bit 15 ( `BCLR #$F` L19133 ),
+        donc ``% 7`` vaut bien 0..6. L'asm lit `_map_blk` *avant* de tester
+        les bornes (L8349-8355) mais ignore le resultat quand la case sort,
+        ce qui revient au meme.
+        """
         sim = self.g.sim
+        if not sim.paint_map:                           # L8297-8298
+            if self.mana(tribe) < COST_SWAMP:         # L8303-8305
+                return False                            # L8315-8317
+            if sim.war or sim.pause:                    # L8306-8309
+                return False
+            # L8310-8313 : D0 = tribe * $2E (taille de `_stats`), puis
+            # `BTST #4,(1,LAB_516B2,D0)` = bit 4 de l'octet BAS de
+            # `power_mask` (gros-boutiste), donc `power_mask & $10`.
+            if not (sim.stats[tribe].power_mask & 0x0010):
+                return False                            # L8315-8317
+            sim.players[tribe].mana -= COST_SWAMP       # L8319-8325
+        if tribe == sim.player:                         # L8327-8329
+            self.g.score += 50                          # L8331  +$32 points
         rng = sim.rng
-        ok = (BLK_FLAT, BLK_TRIBE0, BLK_TRIBE1, 0x42)
-        for _ in range(30):
-            xx = _clamp_cell(rng.below(64)) + (rng.below(7) - 3)
-            yy = _clamp_cell(rng.below(64)) + (rng.below(7) - 3)
-            if not (0 <= xx < 64 and 0 <= yy < 64):
+        ok = (BLK_FLAT, BLK_TRIBE0, BLK_TRIBE1, 0x42)   # $0F/$1F/$20/$42
+        for _ in range(30):                             # L8385-8387, borne $1E
+            xx = x + rng.below(7) - 3                   # L8335-8341
+            yy = y + rng.below(7) - 3                   # L8342-8348
+            if not (0 <= xx < 0x40 and 0 <= yy < 0x40): # L8356-8363
                 continue
             b = (yy << 6) | xx
-            if sim.map.blk[b] in ok and sim.map.who[b] == 0:
-                sim.map.blk[b] = BLK_SWAMP
-        self.g.effect = 0x48
+            if sim.map.blk[b] in ok and sim.map.who[b] == 0:  # L8364-8378
+                sim.map.blk[b] = BLK_SWAMP              # L8379-8383 : $35
         return True
 
     def do_knight(self, tribe: int, x: int, y: int) -> bool:
@@ -456,7 +588,7 @@ class PowerEngine:
             return
         pl = sim.players[tribe]
         other = sim.players[1 - tribe]                  # L9331-9340 `good_pop[1-tribu]`
-        mana = pl.mana
+        mana = m68k.s32(pl.mana)
         m = st.power_mask                                # L9315
 
         def fiche(idx):
