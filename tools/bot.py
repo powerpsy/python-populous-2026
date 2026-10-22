@@ -31,8 +31,13 @@ import os
 import sys
 import time
 
-os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+# `--visible` se lit avant argparse, comme `--intro` dans game.py (L4328) :
+# le driver `dummy` est pose au chargement du module, donc trop tard sinon.
+# Sans cette option le bot tourne en tete, ce qui est ce qu'on veut pour une
+# mesure, et exactement ce qu'on ne veut pas pour regarder l'IA jouer.
+if "--visible" not in sys.argv:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -320,6 +325,9 @@ def main(argv: list[str]) -> int:
                     help="un tour de decision tous les N tours")
     ap.add_argument("--rendu", action="store_true",
                     help="compose chaque image (plus lent, pour inspecter)")
+    ap.add_argument("--visible", action="store_true",
+                    help="ouvre la fenetre et plafonne a 30 tours/s, "
+                         "pour regarder jouer au lieu de mesurer")
     a = ap.parse_args(argv)
 
     g = Game(a.graine, a.sol, a.zoom)
@@ -346,6 +354,10 @@ def main(argv: list[str]) -> int:
             elif g.sim.game_turn % (a.pas * 8) == 0:
                 print("  %s" % etat(g))
         g.image()
+        if a.visible:
+            # sans plafond la partie file a ~400 tours/s : impossible a
+            # suivre des yeux
+            g.clock.tick(30)
 
     # ------------------------------------------------------------- bilan
     sim = g.sim
@@ -372,6 +384,13 @@ def main(argv: list[str]) -> int:
 
     if g.game_ended:
         ok = g.victory
+        if a.reference:
+            # ligne de base : le bot n'agit pas, c'est tout son principe.
+            # Dire « sans jamais agir » ici serait un faux KO.
+            print("\n[OK] ligne de base, sans aucune entree humaine : la "
+                  "tribu %s l'emporte au tour %d"
+                  % ("jouee ( 0 )" if ok else "Amiga ( 1 )", sim.game_turn))
+            return 0
         # un bot qui gagne sans avoir agi ne prouve rien : il faut le dire
         if ok and bot.actions == 0:
             print("\n[KO] le bot a GAGNE **sans jamais agir** (%d tour) : "
