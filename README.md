@@ -22,6 +22,8 @@ Par défaut : graine 1, sol 0, zoom 3.
 | touche | effet |
 |---|---|
 | clic gauche | palettes d'outils et d'icônes (comme l'original) |
+| flèches | faire défiler la vue d'une case (`scroll_w` ... `scroll_e`, L773-831) |
+| clic mini-carte | recentrer la vue |
 | `[` / `]` | ouvrir la boîte de conquete / changer de palier |
 | `Entrée` | valider la saisie du numéro de palier |
 | `Échap` | annuler |
@@ -29,18 +31,30 @@ Par défaut : graine 1, sol 0, zoom 3.
 L'interface suit celle de l'original : pas de raccourcis clavier inventés, la
 sélection passe par la barre d'icônes et la palette en bas à gauche.
 
+**La vue s'ouvre en (0, 0)** — le coin haut-gauche — car c'est ce que fait
+`_animate` (L507-508). L'original **ne recentre jamais** la vue au démarrage :
+les flèches et la mini-carte sont les seuls moyens de se déplacer. Les
+habitants sont placés par un balayage qui démarre en (0, 2) (L7688), juste
+sous cette vue initiale ; ils peuvent donc se trouver hors écran sur une
+carte où la première case plane est loin du bord.
+
 ## Vérification
 
 Le port est validé par exécution, pas par relecture.
 
 ```bash
-python tools/autopilot.py 59 0 3    # 68 contrôles d'interaction
-python tools/check_render.py        # rendu, blits, transparence
-python tools/check_assets.py        # décodage des assets
-python tools/smoke_sim.py           # 5000 tours de simulation
+python tools\autopilot.py 59 0 3   # 84 controles d'interaction
+python tools\check_render.py       # rendu et transparence
+python tools\check_assets.py       # decodage des assets
+python tools\check_funny.py        # _do_place_funny (Phase 56)
+python tools\check_do_funny.py     # _do_funny (Phase 88)
+python tools\check_equilibre.py    # equilibrage des deux tribus (Phase 88)
+python tools\check_powers.py       # les 4 pouvoirs, 37 controles (Phase 89)
+python tools\check_intro.py        # intro, 217 controles (Phase 87)
+python tools\check_mod.py          # banque popsam (Phase 86)
+python tools\smoke_sim.py          # 5000 tours de simulation
+python tools\stress.py 2000 8      # N graines x M tours, invariants
 ```
-
-`autopilot.py` passe 68/68 sur plusieurs graines (1, 7, 42, 59, 99, 200, 314).
 
 ## Ce qui est porté
 

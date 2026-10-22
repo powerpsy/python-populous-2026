@@ -70,6 +70,7 @@ from populous.powers import PowerEngine  # noqa: E402
 from populous.sound import MusicEngine, SoundEngine  # noqa: E402
 from populous.sim import Game as Sim  # noqa: E402
 from populous.terrain import MAX_OFF, build_map  # noqa: E402
+from populous.rng import Rng  # noqa: E402
 
 KEY_STEP = 4                    # cases par appui (le jeu d'origine fait defiler
                                 # d'une case par image, cf. pavé _zoom_map)
@@ -157,8 +158,29 @@ class Game:
         self.start_of_game = 0
         self.ground = ground
         self.zoom = max(1, zoom)
-        self.xoff = 24
-        self.yoff = 8
+        # Vue de depart, `_animate` L507-508 : `CLR.W (_xoff,A4)` puis
+        # `CLR.W (_yoff,A4)`, soit **(0, 0)**. `_draw_it` (L15797-15806)
+        # ancre ensuite la fenetre en `_map_blk[yoff*64 + xoff]` sans
+        # aucune soustraction : (0, 0) est donc le **coin haut-gauche**,
+        # pas le centre.
+        #
+        # **ECART supprime** : le port ouvrait ici sur (24, 8), une valeur
+        # sans base dans le listing. Un balayage exhaustif de toutes les
+        # ecritures de `_xoff`/`_yoff` (formes MOVE/CLR/ADD/SUB, et pas de
+        # forme hexadecimale `$99f0(A4)` — le desassembleur resout le
+        # symbole partout) ne trouve que :
+        #   * le `CLR` initial, L507-508 ;
+        #   * le defilement au clavier, L773-831 (`scroll_w` ... `scroll_e`) ;
+        #   * la souris, le pave et la mini-carte, L1697-1698 et L1865-2440.
+        # **Rien ne recentre la vue au demarrage**, pas meme
+        # `_show_the_shield` (L2769), appele une seule fois depuis le
+        # gestionnaire clavier (L761).
+        #
+        # C'est aussi coherent avec `_place_first_people` : son balayage
+        # demarre en (0, 2) (L7688, `#$0080`), c'est-a-dire **juste sous**
+        # la vue initiale. La tribu 0 est cherchee la ou l'ecran regarde.
+        self.xoff = 0
+        self.yoff = 0
         self.frames = 0
         self.running = True
         self.conquest = None          # palier de conquete courant (si charge)
@@ -248,12 +270,42 @@ class Game:
                                                SCREEN_H * self.zoom))
         self.clock = pygame.time.Clock()
 
-        self.terrain, rng = build_map(seed, ground)
+        # `_setup_display` L431-433 : `_seed != 0` -> un `_newrand` avance la
+        # graine **avant** `_make_alt` (L462). La carte est donc battue depuis
+        # la graine **avancee**, pas depuis la graine de depart - celle-ci n'est
+        # sauvegardee qu'en `_start_seed` (L430). L496 fait `_seed += 1` une
+        # fois `place_first_people` passe. Sans ce tirage, la mer occupe 66 %
+        # de la carte au lieu de 41 % (graine 1) et les deux tribus tombe
+        # cote a cote sur le bord : aucun habitant visible a l'ouverture.
+        #
+        # Sequense exacte de tirages de `_setup_display`, dans l'ordre :
+        #   L433          1 tirage  (`___newrand` inconditionnel des que
+        #                            `_seed != 0` : le `BTST #0,D0` qui suit
+        #                            ne pilote que le cycle de `ground_in`)
+        #   L458          4 tirages (`_clear_map` L1093 et L1110, une paire
+        #                            par joueur - verifie dans `clear()`)
+        #   L462          `_make_alt` (3 marches)
+        #   L469          `_make_woods_rocks`
+        #   L495          `_place_first_people` : **zero** tirage
+        #                            (`_place_people` L6982-7651 n'en a pas)
+        #   L496          `_seed += 1` : increment entier, pas un tirage
+        graine_carte = seed
+        if seed != 0:                          # L431-432 : `TST.W / BEQ`
+            _av = Rng(seed)
+            _av.raw()                          # L433 `JSR ___newrand`
+            graine_carte = _av.seed
+        self.terrain, rng = build_map(graine_carte, ground)
         self.ren = Renderer(ground)
         self.colours = map_colours(self.ren.header)
         # La simulation partage les tableaux du terrain : `map_who`, `map_bk2`
         # et `map_blk` sont donc vus a l'identique par le rendu.
-        self.sim = Sim(seed + 1, load_land(ground),
+        # `rng` est rendu par `build_map` a l'etat ou l'a laisse
+        # `_make_woods_rocks` : c'est exactement `_seed` au moment de L496,
+        # d'ou le `+ 1`. `terrain.seed` porte la meme valeur (`build()`).
+        # L'ancien `graine_carte + 1` sautait les 4 tirages de `_clear_map`
+        # et les marches de `_make_alt`, emetant la simulation sur une
+        # suite de tirages que l'original n'a jamais parcourue.
+        self.sim = Sim((rng.seed + 1) & 0xFFFF, load_land(ground),
                        map=self.terrain.game_map())
         # `_one_block_flat` (L9148) lit les altitudes de sommet, qui sont dans
         # le terrain et pas dans `GameMap`.
@@ -501,11 +553,18 @@ class Game:
         # et L496 (`_seed += 1`) sont rendus par `set_ground` - dont les
         # quatre ecritures de L407-427 doivent **suivre**, sinon elles
         # tomberaient sur la fiche qui vient d'etre jetee.
+        #
+        # La branche conquete saute L429-458 entierement : ni le tirage de
+        # L433 ni rien d'autre n'avance `_seed` avant `_clear_map`. On pose
+        # donc `_seed = self.seed` sur la fiche **avant** l'appel, pour que
+        # `set_ground` (qui lit l'etat vivant) parte de la bonne valeur.
+        self.sim.rng.seed = self.seed
         self.set_ground(lv.terrain, conserver_etat=True)
-        # `_ground_in` (L399) et le `_seed += 1` de L496, appliques a la
-        # fiche neuve.
+        # `_ground_in` (L399). Le `_seed += 1` de L496 est deja rendu par
+        # `set_ground` (`rng.seed + 1`) ; l'ecriture qui suivait ici
+        # remettait le RNG en arriere sur la graine de depart, sans les
+        # tirages de `_clear_map` ni les marches de `_make_alt`.
         self.sim.ground_in = self.ground
-        self.sim.rng.seed = (self.seed + 1) & 0xFFFF
         self._ecritures_palier(lv)
 
     def load_conquest(self, n: int) -> bool:
@@ -611,9 +670,14 @@ class Game:
         # L448-456 : `_load_ground(_ground_in)` si `ground != _ground_in` et
         # `ground != -1` — c'est toujours le sol **courant**, jamais
         # l'argument. `set_ground` recharge les tables, donc couvert.
-        vivant = sim.rng.seed                        # L453 (etat post-tirage)
+        #
+        # `set_ground` lit `sim.rng.seed`, qui est ici l'etat post-tirage de
+        # L433 : c'est exactement `_seed` au moment de `_clear_map` (L458).
+        # L'ecriture `sim.rng.seed = vivant + 1` qui suivait ici autrefois
+        # (L496) est **retiree** : `set_ground` rend deja la fiche neuve
+        # faconnee avec `rng.seed + 1`, et cette ecriture la-dessus
+        # remettait le RNG quatre tirages en arriere (ceux de `_clear_map`).
         self.set_ground(self.ground, conserver_etat=True)   # L458 `_clear_map`
-        self.sim.rng.seed = (vivant + 1) & 0xFFFF    # L496 `_seed += 1`
         self.sim.ground_in = self.ground             # `_ground_in` (L438-441)
 
     # ---------------------------------------- saisie du numero (asm L11942)
@@ -1150,6 +1214,13 @@ class Game:
         if self.game_ended:
             self.draw_victory_screen()
             return
+        # L604-609 : `_toggle` bascule **une fois par image**, juste avant
+        # `__clr_wsc` (L611). C'est lui qui anime la mer — `_draw_it`
+        # (L15817-15822) substitue la tuile 16 a la tuile 0 lorsque
+        # `_toggle == 0` — et qui choisit le sprite du blason (L2894) et
+        # de l'habitant immobile (L16054). Sans cette bascule la mer reste
+        # figee sur la tuile 16 : l'ecart que decrivait le joueur.
+        self.ren.toggle ^= 1
         self.frame.blit(self.backdrop, (0, 0))
         self._apply_icon_toggles()          # etat persistant des icones (_back_scr)
         self.ren.draw_minimap(self.frame, self.terrain, colours=self.colours)
@@ -3964,21 +4035,34 @@ class Game:
         t1.power_mask = 0x000A
         t1.colour = 1
 
-        # _seed = _start_seed = 0x69bc (L48654, L4865A)
+        # `_start_game`, L13998-13999 (`$48654`, `$4865a`) :
+        # `_seed = _start_seed = $69bc`. La routine **retourne** ensuite
+        # (L14001-14011) sans rien generer : la carte n'est batie que plus
+        # tard, par `_setup_display`, qui passe par L433.
+        #
+        # **ECART supprime** : le port avancait ici le RNG de `+ 1` (un
+        # increment entier) puis battait la carte depuis `self.seed` brut.
+        # Il manquait donc le tirage reel de L433 - meme ecart que celui
+        # corrige dans `__init__` - et il remettait le RNG sur une valeur
+        # que `_seed` n'a jamais eue.
         self.seed = 0x69BC
         self.start_seed = 0x69BC
-        # Re-seed le RNG de la simulation
-        sim.rng.seed = (self.seed + 1) & 0xFFFF
+        sim.rng.seed = self.seed               # L13998 `_seed = $69bc`
+        if self.seed != 0:                     # L431-432 `TST.W / BEQ`
+            sim.rng.raw()                      # L433 `JSR ___newrand`
 
-        # _game_mode = 1 (L48660 : _tutorial_game_mode)
+        # _game_mode = 1 (L14000, `$48660` : `_tutorial_game_mode`)
         sim.game_mode = 1
 
         # _pause = 1 (L48636)
         sim.pause = 1
 
-        # Re-regenerer la carte avec la graine tutelle
-        # Note: build_map utilise self.seed, qui est maintenant 0x69BC
-        self.terrain, _ = build_map(self.seed, self.ground)
+        # Re-regenerer la carte depuis l'etat vivant du RNG, puis rendre
+        # `_seed += 1` (L496) : increment entier sur l'etat que laisse
+        # `_make_woods_rocks` (L469). `_place_first_people` (L495) n'a
+        # consomme aucun tirage.
+        self.terrain, _rng_tut = build_map(sim.rng.seed, self.ground)
+        sim.rng.seed = (_rng_tut.seed + 1) & 0xFFFF   # L496 `_seed += 1`
         self.ren = Renderer(self.ground)
         self.colours = map_colours(self.ren.header)
         sim.terrain = self.terrain
@@ -4025,10 +4109,20 @@ class Game:
         """
         ancien = self.sim
         self.ground = g
-        self.terrain, _ = build_map(self.seed, g)
+        # Le relief est battu depuis l'**etat vivant** de `_seed`
+        # (`self.sim.rng.seed`), pas depuis `self.seed` : en partie libre,
+        # `_setup_display` a deja passe le tirage de L433 quand il appelle
+        # ici, et `self.seed` reste la graine de depart. Construire depuis
+        # `self.seed` sautait ce tirage - meme ecart que celui corrige dans
+        # `__init__`, et il faisait au passage deriver toute la suite de
+        # tirages de la simulation.
+        self.terrain, rng = build_map(self.sim.rng.seed, g)
         self.ren = Renderer(g)
         self.colours = map_colours(self.ren.header)
-        self.sim = Sim(self.seed + 1, load_land(g),
+        # `_seed += 1` (L496) : increment entier applique a l'etat que laisse
+        # `_make_woods_rocks`. `_place_first_people` (L495) n'a consomme
+        # aucun tirage (`_place_people` L6982-7651 n'en a pas), d'ou le `+ 1`.
+        self.sim = Sim((rng.seed + 1) & 0xFFFF, load_land(g),
                        map=self.terrain.game_map())
         self.sim.terrain = self.terrain
         if conserver_etat:
