@@ -355,6 +355,11 @@ def main(argv: list[str]) -> int:
                 print("  %s" % etat(g))
         g.image()
         if a.visible:
+            # `image()` compose dans `frame`, mais c'est `afficher()` qui
+            # recopie dans `screen` puis fait le flip (game.py L2215-2218).
+            # Sans cela la fenetre reste noire : c'est exactement ce que
+            # `run()` fait en L4300, juste apres l'image.
+            g.afficher()
             # sans plafond la partie file a ~400 tours/s : impossible a
             # suivre des yeux
             g.clock.tick(30)
