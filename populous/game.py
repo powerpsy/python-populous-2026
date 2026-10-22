@@ -362,6 +362,69 @@ class Game:
             sim.stats[t].colour = 11 if t == 0 else 14
             sim.players[t].magnet = 0          # L3ed4e: _clear_map efface _magnet
         self._place_first_people()
+        self._recentrer_depart()
+
+    # ------------------------------------------------- ECART : vue de depart
+    def _recentrer_depart(self) -> None:
+        """Recentre la vue sur le premier villageois de la tribu jouee.
+
+        **ECART declare et volontaire — le listing ne fait PAS ceci.**
+
+        Ce que le listing fait, et que le port suit a la lettre ailleurs :
+
+        * `_animate` L507-508 efface `_xoff` et `_yoff`, soit (0, 0) ;
+        * L623-625 appelle `_draw_it(_xoff, _yoff)` ;
+        * `_draw_it` L15797-15806 ancre la fenetre en
+          ``_map_blk[yoff*64 + xoff]``, **sans aucune soustraction**, et
+          L15873 / L15880 bornent les deux boucles a 8 : la fenetre est
+          **8 x 8 cases**, coin haut-gauche en (xoff, yoff) ;
+        * un balayage exhaustif de toutes les ecritures de `_xoff` /
+          `_yoff` (formes MOVE / CLR / ADD / SUB — il n'existe pas de
+          forme hexadecimale `$99f0(A4)`, le desassembleur resout le
+          symbole partout) ne trouve que le `CLR` initial (L507-508), le
+          defilement au clavier (L773-831) et la souris / le pave / la
+          mini-carte (L1697-1698 et L1865-2440). **Rien ne recentre au
+          demarrage**, pas meme `_show_the_shield` (L2769), appele une
+          seule fois depuis le gestionnaire clavier (L761).
+
+        Autrement dit l'original ouvre vraiment sur le coin haut-gauche.
+        Mais `_place_first_people` cherche le premier `0x0F` en partant du
+        bloc `#$0080` = **(0, 2)** (L7688, condition `CMPI.B #$0f` en
+        L7692) — c'est-a-dire **juste sous** cette vue initiale. Le design
+        original suppose que la case plane est pres du bord.
+
+        Or la carte generee n'a que ~3 % de cases planes : `make_alt`
+        (L1189) fait trois marches aleatoires (`_make_thing(2,4)`,
+        `(4,2)`, `(3,3)`) qui s'arretent a l'altitude 6 (L1226
+        `CMP.W #$0006`), et `make_map` (L1420) ne marque `BLK_FLAT` que
+        quand les **quatre** sommets d'une case sont egaux et non nuls —
+        donc uniquement les plateaux. Mesure : le premier `0x0F` tombe en
+        y = 2..5 mais en **x quasi uniforme sur 0..63**, si bien que la
+        tribu 0 n'est visible depuis (0, 0) que sur **10 graines sur 64**.
+
+        Le port ne pouvait donc pas rester sur (24, 8) — une valeur sans
+        base dans le listing, qui montrait le vide *plus souvent* que
+        (0, 0) — ni laisser le joueur chercher ses propres habitants sur
+        une vue de 8x8 dans une carte de 64x64 (1,5 % de la surface).
+
+        **Ce que fait ici le port** : apres le placement, la vue est
+        amenee sur le premier villageois de la tribu jouee, avec le meme
+        serrement de 0 a 0x38 (56) que celui du pave et de la mini-carte
+        (L1917 / L1925 : `MOVE.W #$0038,(_xoff,A4)`).
+
+        La suite de tirages n'est **pas** modifiee : cette methode ne
+        touche ni a `_seed` ni a la carte, seulement a la fenetre.
+        """
+        sim = self.sim
+        cible = None
+        for idx, peep in sim.living():
+            if peep.tribe == sim.player:
+                cible = peep.block
+                break
+        if cible is None:                       # nadir : rien a suivre
+            return
+        self.xoff = max(0, min(0x38, (cible & 0x3F) - 3))
+        self.yoff = max(0, min(0x38, (cible >> 6) - 3))
 
     # ------------------------------------------- _place_first_people (L7652)
     def _nb_peeps(self, tribu: int) -> int:
@@ -1228,6 +1291,16 @@ class Game:
         self.ren.draw_window(self.frame, self.terrain, self.xoff, self.yoff)
         self.ren.draw_peeps(self.frame, self.terrain, self.xoff, self.yoff,
                             self.sim)
+        # Sur l'Amiga le pointeur est un **sprite materiel** que gere
+        # l'OS : le jeu ne le dessine pas, il se contente de le laisser
+        # en place. `_sculpt` (L7440-7449) n'ajoute a l'ecran que son
+        # propre sprite 0x54, et seulement quand un pouvoir de relief est
+        # arme (L966, appele depuis `LAB_3EC20` quand `mode & 0x0E`).
+        #
+        # Le port n'a pas ce sprite materiel : il substitue la fleche de
+        # pygame. Il faut donc **masquer** celle-ci des que le jeu trace
+        # son propre curseur, sans quoi l'on voit deux pointeurs.
+        pygame.mouse.set_visible(self.sim.cur_screen is None)
         self._draw_cursor()
         if self.sim.game_turn == 0x1000:        # L752-753
             # L755-757 : `_start_seed & 3`, un seul mot pousse ; ($A,A5)
