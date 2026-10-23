@@ -61,7 +61,7 @@ from populous.conquest_win import (BLOC_H, BLOC_X, BLOC_Y,  # noqa: E402
                                    YEUX_X, YEUX_Y, nouveau_niveau, texte_fin)
 from populous.constants import (ACT_ACTION, ACT_LOWER, ACT_MAGNET,  # noqa: E402
                                 ACT_NOP, ACT_QUAKE, ACT_RAISE, ACT_SWAMP,
-                                ACT_TREE, ACT_VOLCANO, BLK_FLAT,
+                                ACT_TREE, ACT_VOLCANO, BLK_FLAT, DIR_SPRITE,
                                 MANA_VALUES, ST_BATTLE, ST_VILLAGER)
 from populous.land import load_land  # noqa: E402
 from populous.render import (SCREEN_H, SCREEN_W, Renderer,  # noqa: E402
@@ -1373,12 +1373,18 @@ class Game:
 
         * L2772 ``_view_who == 0``            -> rien ;
         * L2780 ``life <= 0``                  -> on oublie l'habitant ;
-        * L2790 ``_draw_icon(0x11, 0x04, tribu)``    le blason ;
+        * L2790 ``_draw_icon(x=0x11, y=4, icone=tribu)``  le blason ;
         * L2796 recherche de l'arme dans ``_weapons_order[1..10]`` ;
-        * L2813 ``_draw_icon(0x12, i+1, 4)``   l'icone d'arme (icone 4 = 0x04) ;
-        * L2823 ``state & 8`` (combattant)      -> sprite + 2 barres ;
-        * L2888 ``tribune == 1`` (ennemi)      -> sprite 0x16 + 2 barres ;
-        * L2965 villageois                    -> 2 barres (vie / arme).
+        * L2815 ``_draw_icon(x=0x12, y=4, icone=i+1)``    l'icone d'arme ;
+        * L2823 ``state & 8`` (combattant)   -> sprite + 2 barres ($0F/$08) ;
+        * L2889 ``state == 1`` (villageois)  -> sprite + 2 barres ($0A/$0C) ;
+        * L2965 repli                        -> sprite + 2 barres ($0A/$09
+          ou $09/$09 selon la magnitude de ``life``).
+
+        Les trois branches dessinent **toutes** un sprite en (272, 22) —
+        sauf le villageois, en (268, 22) — puis les deux barres de
+        ``_bars``. L'ecusson est suivi par L3092-L3145, les deux jauges
+        de population.
         """
         sim = self.sim
         who = sim.view_who
@@ -1399,15 +1405,45 @@ class Game:
         i = 1
         while i <= 10 and sim.weapons_order[i] != p.weapons:
             i += 1
+        # L2815-2821 : l'icone d'arme. L'ordre de push est (icone, y, x,
+        # ecran) — donc l'ordre d'appel est (ecran, x, y, icone) :
+        # `_draw_icon(_w_screen, x=0x12, y=0x04, icone=i+1)`. `x` est en
+        # unites de 16 px (render.py L216) : l'arme tombe en (288, 4),
+        # a cote du blason en (272, 4). Le code passait `i+1` en **y** et
+        # `4` en icone : l'icone tracee etait toujours la 4, decalee
+        # verticalement selon l'arme.
         if i < 11:
-            r.draw_icon(d, 0x12, i + 1, 0x04)
+            r.draw_icon(d, 0x12, 0x04, i + 1)
 
         # ---- L2823 : combattant (bit 3 de l'etat) ------------------------
         if p.state & 0x08:
-            # L2826 : le sprite de l'arme, a x=0x110 (272 px), y=0x16 (22)
+            # L2826 : le sprite du combattant, x=$110 (272 px), y=$16 (22)
             self._draw_sprite_at(0x110, 0x16, p.frame)
-            # L2859 : deux barres, largeurs issues de deux __divs par la vie
-            self._bars_for(p.life)
+            # L2832-2847 : les deux pointeurs du duel. Si `tribu == 0`,
+            # -10(A5) = A2 (le suivi) et -14(A5) = l'adversaire ; sinon
+            # c'est l'inverse. Autrement dit **-10 est toujours le peep
+            # de tribu 0 et -14 celui de tribu 1** : la barre de gauche
+            # (x=$24, drapeaux $0F) est celle de la tribu 0, celle de
+            # droite (x=$25, drapeaux $08) celle de la tribu 1, comme les
+            # deux jauges de population.
+            adv = (sim.peeps[p.w6]
+                   if 0 <= p.w6 < len(sim.peeps) else None)
+            if p.tribe == 0:
+                a, b = p, adv
+            else:
+                a, b = adv, p
+            # L2849-2869 : rempli = vie*16 / (vie_a + vie_b), deux fois.
+            # La somme est calculee en **mot** (`ADD.W` puis `EXT.L`,
+            # L2853-2857) et les vies etendues avec signe (`EXT.L`) ; le
+            # quotient vient de `_divs` (troncature vers zero).
+            va = m68k.to_long_word(a.life) if a else 0
+            vb = m68k.to_long_word(b.life) if b else 0
+            somme = m68k.to_long_word(va + vb)
+            f1 = m68k.divs_long(va << 4, somme)
+            f2 = m68k.divs_long(vb << 4, somme)
+            # L2871-2885 : hauteur $10 partout, y=$25 ; barre 1 drapeaux
+            # $0F, barre 2 drapeaux $08 (et non $0F).
+            self._bars(f1, 0x0F, f2, 0x08)
             return
 
         # ---- L2889 : villageois (`CMPI.B #$01,(A2)`) ----------------------
@@ -1421,23 +1457,97 @@ class Game:
         # n'avaient donc jamais leur ligne, et tous les peeps de la tribu 1
         # l'avaient, quelle que soit leur etat.
         if p.state == ST_VILLAGER:
-            # L2891 : sprite = (tribe << 1) + _toggle + $40 (animation eau)
+            # L2891-2901 : sprite = (tribe << 1) + _toggle + $40, trace en
+            # ($10C, $16) = (268, 22). L'ordre de push est (sprite, y, x,
+            # ecran), donc l'ordre d'appel est (ecran, x, y, sprite).
             sprite = ((p.tribe << 1) + self.ren.toggle + 0x40) & 0xFFFF
-            # L2888-2894 : l'ordre de push est sprite, y, x, ecran, donc
-            # `_draw_sprite(_w_screen, $10C, $16, sprite)` -- **sprite est le
-            # quatrieme argument**, pas une composante de x. Le code faisait
-            # `0x10C + x` avec sprite 0 : x valait 334 (hors des 320 px) et
-            # on dessinait le mauvais sprite.
             self._draw_sprite_at(0x10C, 0x16, sprite)
-            # L2906 : la vie Â« reelle Â» (_check_life) et non la valeur stockee
-            vie = sim.check_life(p.tribe, p.block)
-            if vie <= 0:
+            # L2902-2911 : la vie « reelle » (`_check_life(tribu, block)`),
+            # stockee en -6(A5), et un zero remplace par 1 (division !).
+            vie = m68k.to_word(sim.check_life(p.tribe, p.block))
+            if vie == 0:
                 vie = 1
-            self._bars_for(vie)
+            # L2913-2938 : barre 1, drapeaux $0A, x=$24, y=$25, h=$10.
+            # `vie == $0BEA` (3050) est le cas « plein » : rempli $10.
+            # Sinon DIVU ($0131 = 305) : rempli = (vie << 4) / 305.
+            # Le `SWAP/CLR.W/SWAP` de L2928-2930 est l'idiome 68000
+            # d'extension nulle d'un mot apres son `ASL.W #4` : le mot bas
+            # vaut (vie*16) & $FFFF, le haut est mis a zero.
+            if vie == 0x0BEA:
+                f1 = 0x10
+            else:
+                f1 = ((vie << 4) & 0xFFFF) // 0x131
+            # L2940-2955 : barre 2, drapeaux $0C, x=$25 : la meme DIVU par
+            # `vie`, sur la vie stockee `(4,A2) << 4`, et bornage en
+            # **mot signe** — `CMP.W #$0010 / BLE` puis `TST.W / BGE` sont
+            # des tests signes (L2948-2954). Un quotient > 32767 devient
+            # donc negatif en mot et retombe a 0, pas a $10.
+            q = m68k.to_word((p.life << 4)) // vie
+            f2 = m68k.s16(q)
+            if f2 > 0x10:
+                f2 = 0x10
+            if f2 < 0:
+                f2 = 0
+            self._bars(f1, 0x0A, f2, 0x0C)
             return
 
-        # ---- L2965 : villageois -------------------------------------------
-        self._bars_for(p.life)
+        # ---- L2965 : repli -------------------------------------------------
+        # Trois sous-cas, tous deux tests sur **l'etat** et non sur le peep.
+        if p.state & 0x60:
+            # L2969-2981 : si cible (TST.L ($E,A2)) $7D, sinon $65 ; puis
+            # + (tribe << 1) + _toggle.
+            base = 0x7D if p.target != -1 else 0x65
+            sprite = (base + (p.tribe << 1) + self.ren.toggle) & 0xFFFF
+        elif p.state & 0x10:
+            # L2985-2999 : si cible $6D, sinon $5D ; puis + (tribe << 2)
+            # + (_game_turn & 3) — l'animation a 4 images.
+            base = 0x6D if p.target != -1 else 0x5D
+            sprite = (base + (p.tribe << 2)
+                      + (self.sim.game_turn & 3)) & 0xFFFF
+        else:
+            # L3000-3031 : la direction. On cherche `prev_block` (offset
+            # $A) dans `_dir_sprite` ; l'indice retenu est borne a 7, et
+            # **4** quand la recherche echoue.
+            #
+            # La boucle asm va de 0 a 8 (`CMP.W #9 / BGE`) : elle lit
+            # l'indice 8, au-dela des 8 entrees du tableau. C'est inutile,
+            # et la suite le prouve — `CMP.W #7 / BLE`, sinon D4 = 4 — :
+            # un indice 8 ou 9 est remplace par 4 quoi qu'il arrive. On
+            # ne cherche donc que dans les 8 entrees reelles, sans perte.
+            index = 4
+            for k, delta in enumerate(DIR_SPRITE):
+                # `CMP.W ($A,A2),D1` (L3013) compare des **motifs de 16
+                # bits** : on ramene donc les deux cotes a un mot, et non
+                # `prev_block` (stocke en signe, sim.py L1443) a un non-
+                # signe — -65 s'ecrit $BFBF et ne vaut jamais 65471.
+                if (m68k.to_word(delta) == m68k.to_word(p.prev_block)):
+                    index = k
+                    break
+            # L3020-3031 : D4 = index*2, + _toggle, + $20 si cible,
+            # + (tribe << 4).
+            sprite = (index * 2 + self.ren.toggle) & 0xFFFF
+            if p.target != -1:
+                sprite = (sprite + 0x20) & 0xFFFF
+            sprite = (sprite + (p.tribe << 4)) & 0xFFFF
+        # L3033-3037 : ce sprite est trace en ($110, $16) = (272, 22) —
+        # sous le blason. Le port l'oubliait : les trois sous-cas ne
+        # dessinaient rien et se contentaient des deux barres.
+        self._draw_sprite_at(0x110, 0x16, sprite)
+        # L3039-3091 : les deux barres, d'apres la magnitude de `life`.
+        life = m68k.to_word(p.life)
+        if life > 0x1000:
+            # L3042-3064 : DIVS #$0400 — barre 1 quotient (drapeaux $0A),
+            # barre 2 reste (drapeaux $09).
+            f1 = m68k.divs_long(life, 0x400)
+            f2 = m68k.to_word(life - (f1 * 0x400))
+            self._bars(f1, 0x0A, f2, 0x09)
+        else:
+            # L3067-3090 : DIVS #$0100, puis le reste divise par $10 —
+            # deux fois drapeaux $09.
+            f1 = m68k.divs_long(life, 0x100)
+            reste = m68k.to_word(life - (f1 * 0x100))
+            f2 = m68k.divs_long(reste, 0x10)
+            self._bars(f1, 0x09, f2, 0x09)
 
     def move_mana(self) -> None:
         """``_move_mana`` (L3164-3241) — le curseur de la jauge de mana.
@@ -1536,21 +1646,36 @@ class Game:
             return
         self.frame.blit(sp[sprite % len(sp)], (x, y))
 
-    def _bars_for(self, valeur: int) -> None:
-        """Les deux barres de l'ecusson (L2871 et L2879, puis L3042/L3053).
+    def _bars(self, rempli1: int, drapeaux1: int,
+              rempli2: int, drapeaux2: int) -> None:
+        """Les deux barres de l'ecusson : ``_draw_bar`` deux fois.
 
-        L'asm calcule deux fois une division par ``life`` pour obtenir des
-        largeurs de barre, puis trace deux ``_draw_bar`` de 15 lignes. La
-        seconde valeur du couple est, elle, une division par 16 donnee par
-        ``weapons`` (L3084 ``DIVS #$0010``).
+        Tous les sites du listing — combat (L2871-2885), villageois
+        (L2915-2921 et L2956-2962), repli (L3042-3090) — emploient la
+        **meme geometrie** ; seuls le remplissage et les drapeaux
+        changent :
+
+        .. code-block:: none
+
+            barre 1 : _draw_bar(ecran, x=$24, y=$25, h=$10, rempli1, dr1)
+            barre 2 : _draw_bar(ecran, x=$25, y=$25, h=$10, rempli2, dr2)
+
+        ``x`` est un offset en **octets** (render.py L245) : $24 donne le
+        pixel 288, $25 le pixel 296 — soit 8 pixels de large chacune, a
+        cote du sprite trace en (272, 22).
+
+        L'ancien ``_bars_for`` avait justement ces deux ``x`` et ces deux
+        ``y``. Ce qu'il se trompait sur les trois autres comptes : la
+        **hauteur** (0x0F puis 0x08, au lieu de $10 partout), le
+        **remplissage** (``valeur >> 8`` et ``valeur >> 9``, au lieu des
+        divisions propres a chaque branche) et les **drapeaux** (toujours
+        $0F, alors que le listing emploie $0F, $08, $0A, $0C et $09 selon
+        la branche). D'ou le partage des arguments ci-dessus : le port ne
+        pouvait pas les deviner, il les reçoit.
         """
         r = self.ren
-        # L2871 : 15 lignes a x=0x24 (pixel 288), flags 0x0F (les 4 plans)
-        r.draw_bar(self.frame, 0x24, 0x25, 0x0F, max(0, min(0x0F, valeur >> 8)),
-                   0x0F)
-        # L2879 : 8 lignes a x=0x25 (pixel 296) â€” meme principe, barre fine
-        r.draw_bar(self.frame, 0x25, 0x25, 0x08, max(0, min(0x08, valeur >> 9)),
-                   0x0F)
+        r.draw_bar(self.frame, 0x24, 0x25, 0x10, rempli1, drapeaux1)
+        r.draw_bar(self.frame, 0x25, 0x25, 0x10, rempli2, drapeaux2)
 
 # ---------------------------------------------------- _requester (asm L9901)
     # Les boites de dialogue (intro de niveau, messages du Conseil, etc.).
@@ -1668,19 +1793,42 @@ class Game:
 
 
     # --------------------------------------------- jauges de population (L403F4)
-    # Apres le bouclier, l'asm trace les jauges : ``good_pop`` (le peuple du
-    # joueur) et ``bad_pop``, chacune divisee par 0x1F (L403FE) puis tracee
-    # en 0x1F lignes a partir de x=0x20.
+    # Appelées en fin de `_show_the_shield` (L3092 et L3119). Les deux
+    # jauges sont lues à des adresses **absolues**, pas indexées par
+    # `_player` : `good_pop = $52DEC` et `bad_pop = $52DFC` (stride 16
+    # depuis la base joueur `$52DE4`, champ pop en +8). La colonne de
+    # gauche est donc toujours la tribu 0 et celle de droite la tribu 1,
+    # même quand l'humain joue la tribu 1 — comme les deux barres du
+    # duel en combat (L2871-2885).
     def draw_pop_gauge(self) -> None:
-        """Les deux jauges de population (asm L403F4-40446)."""
+        """Les deux jauges de population (asm L3092-3145).
+
+        .. code-block:: none
+
+            D0 = pop ; D1 = $1F   ; _mulu   -> pop * 31
+            D1 = $C350            ; _divs   -> / 50000
+            ADDQ.L #1,D0                      ; + 1
+            _draw_bar(ecran, x, y=$1F, h=$20, rempli, drapeaux)
+
+        La jauge adverse (L3119-3145) est identique en `x=$27`,
+        `drapeaux=$08`. Les deux branches `pop == 0` (L3110 et L3137)
+        tracent une jauge **vide** plutôt que de sauter l'appel : c'est
+        ce qui efface la barre quand une tribu est éliminée.
+        """
         sim = self.sim
         r = self.ren
-        # L40403 : good_pop / 31 -> _draw_bar(x=0x20, y=0x20, h=0x1F)
-        r.draw_bar(self.frame, 0x20, 0x20, 0x1F,
-                   min(0x1F, sim.good.pop * 0x1F // 1000), 0x0F)
-        # LAB_40430 : bad_pop, meme position (la colonne x=0x20)
-        r.draw_bar(self.frame, 0x20, 0x1F, 0x1F,
-                   min(0x1F, sim.bad.pop * 0x1F // 1000), 0x0F)
+        for pl, x, drapeaux in ((sim.players[0], 0x20, 0x0F),
+                                (sim.players[1], 0x27, 0x08)):
+            pop = pl.pop
+            if pop:
+                # `_mulu` puis `_divs` (L3098-3100) : produit non signé,
+                # quotient signe tronque vers zero. `pop * 31` est toujours
+                # positif ici, donc `//` Python coïncide.
+                rempli = pop * 0x1F // 0xC350 + 1      # L3098-3101
+            else:
+                rempli = 0                            # L3112 / L3139 CLR.W
+            # L3103-3105 : y=$1F (31), h=$20 (32), x en octets.
+            r.draw_bar(self.frame, x, 0x1F, 0x20, rempli, drapeaux)
     def _draw_cursor(self) -> None:
         """Le curseur de la carte : le sprite 0x54 (``_sculpt`` L7440-7449).
 

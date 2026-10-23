@@ -7622,3 +7622,111 @@ de fin de bataille.
 * `_do_swamp` lit `_map_blk` **avant** de tester les bornes (L8349-8355),
   en index mot signé. Le port teste d'abord — le résultat de cette lecture
   hors carte n'étant jamais utilisé, l'observable est le même.
+
+## Phase 90 — le panneau de droite : `_show_the_shield` entière (23 octobre 2026)
+
+**377 lignes** (L2769-3145), relevées parce que le joueur voyait le panneau
+haut-droit décalé. Le port en avait les *primitives* — `_draw_icon` et
+`_draw_bar` étaient justes, vérifiés depuis la Phase 5 — mais les appelait
+avec des arguments que rien ne contrôlait. Trois écarts, tous du même
+genre : la bonne routine, les mauvais arguments.
+
+### A — les deux jauges de population (L3092-3145)
+
+`draw_pop_gauge` traçait les deux jauges **à la même colonne** `x=0x20`,
+avec `h=0x1F`, `y=0x20`/`0x1F`, un diviseur **1000**, et sans la branche
+`pop == 0`. Le listing donne :
+
+    _draw_bar(ecran, x, y=$1F, h=$20, rempli, drapeaux)
+    rempli = pop * $1F / $C350 + 1         (50000, et non 1000)
+
+La jauge joueuse en `x=$20`, `drapeaux=$0F` ; l'adverse en `x=$27`,
+`drapeaux=$08`. Les deux `pop == 0` (L3110, L3137) tracent une jauge
+**vide** plutôt que de sauter l'appel — c'est ce qui efface la barre d'une
+tribu éliminée, et le port la laissait traîner.
+
+`good_pop`/`bad_pop` sont des adresses **absolues** (`$52DEC`/`$52DFC`,
+stride 16 depuis la base joueur `$52DE4`, champ `pop` en +8), pas indexées
+par `_player` : la colonne de gauche est donc toujours la tribu 0, même
+quand l'humain joue la tribu 1. C'est aussi ce que font les deux barres du
+duel — un fait du listing, pas un oubli de symétrie.
+
+### B — l'icône d'arme (L2815-2821)
+
+L'ordre de push est (icone, y, x, ecran), donc l'appel est
+`_draw_icon(ecran, x=0x12, y=0x04, icone=i+1)`. Le port passait `i+1` en
+**y** et `4` en icône : il dessinait toujours l'icône 4, décalée
+verticalement selon l'arme. Le blason, lui, était juste — autopilot
+l'asserte en (272, 4) avec 0/256 pixels d'écart.
+
+### C — les trois branches (L2823 / L2889 / L2965)
+
+`_bars_for(valeur)` ne pouvait pas être juste : le remplissage, la
+hauteur et les drapeaux changent **par branche**, et elle ne recevait
+qu'un entier. Ses `x` et `y` étaient bons ; les trois autres comptes
+étaient faux.
+
+| branche | barre 1 | barre 2 |
+|---|---|---|
+| combat | x=$24 dr=$0F | x=$25 dr=$08 |
+| villageois | x=$24 dr=$0A | x=$25 dr=$0C |
+| repli, life > $1000 | x=$24 dr=$0A | x=$25 dr=$09 |
+| repli, life <= $1000 | x=$24 dr=$09 | x=$25 dr=$09 |
+
+La géométrie, elle, ne change jamais : `y=$25`, `h=$10` partout, et `x`
+en octets (`$24` = pixel 288, `$25` = pixel 296).
+
+Trois points relevés dans le listing plutôt que devinés :
+
+* **le sprite du repli n'était pas dessiné du tout.** L2965 calcule un
+  sprite dans trois sous-cas (`state & $60`, `state & $10`, sinon la
+  direction) puis le trace en (272, 22) à L3033 — le port sautait
+  directement aux barres. Le villageois, lui, trace le sien en (268, 22) ;
+* **la direction lit `_dir_sprite` hors table** : la boucle va de 0 à 8
+  (`CMP.W #9 / BGE`) pour 8 entrées. Inutile de protéger l'index 8 : la
+  suite (`CMP.W #7 / BLE`, sinon `D4 = 4`) remplace 8 comme 9 par 4 quoi
+  qu'il arrive. On ne cherche donc que dans les 8 entrées réelles, sans
+  perte ;
+* **`CMP.W` compare des motifs de 16 bits** : `prev_block` est stocké en
+  signe (sim.py L1443) et `DIR_SPRITE` contient des négatifs ; il faut
+  ramener les deux côtés à un mot (`m68k.to_word`), sinon −65 s'écrit
+  `$BFBF` et ne vaut jamais 65471.
+
+Le combat inverse `a`/`b` selon la tribu (L2832-2847) : −10(A5) est
+toujours le peep de tribu 0, −14 celui de tribu 1. D'où les drapeaux $0F
+et $08, alignés sur les deux jauges.
+
+Le bornage de la barre 2 du villageois (L2948-2954) est lui aussi signé :
+`CMP.W #$0010 / BLE` puis `TST.W / BGE`. Un quotient DIVU supérieur à
+32767 devient négatif en mot et retombe à 0, pas à $10.
+
+### Vérification
+
+Confrontation à une **réécriture indépendante** du listing, écrite à part
+du port, sur 4 graines — y compris les cas qui ne se présentent pas seuls
+en 400 tours et qui ont été provoqués : combat de tribu 1 (l'inversion
+a/b), `_check_life` rendant `$0BEA`, `life > $1000`, `life <= $1000`, et
+une direction inconnue tombant sur l'index 4. **46/46 états identiques
+pixel à pixel** sur la zone (256, 0, 64, 40).
+
+Limite honnête : la réécriture et le port viennent de la même lecture du
+listing ; elles valident la cohérence de la transcription, pas l'Amiga.
+En revanche les jauges ont un croisement **indépendant** :
+`tools/render_screen.py` L72-74 et `tools/compare_blit.py` L57-58
+portaient déjà cette transcription, écrite avant — et les formules
+coïncident terme à terme (0x20/0x27, 31, 32, 50000, 0x0F/0x08).
+
+Suite complète : **11/11 EXIT=0**, autopilot 84/84, le bot gagne en 520
+actions. Aucun `[APPROX]` ne s'ajoute : `_show_the_shield` et les jauges
+sont transcription, ligne à ligne.
+
+### Écarts assumés restants
+
+* `_show_the_shield` lit `p.w6` comme indice d'adversaire et le borne à
+  `len(sim.peeps)` ; l'asm, lui, lit `_peeps + w6*22` sans borne. Le port
+  préfère `adv = None` à un `IndexError` — l'observable est le même hors
+  cas de mémoire corrompue ;
+* si les deux vies du duel valaient `0` et `−vie` en même temps, la somme
+  de L2856 s'annulerait et `_divs` prendrait une division par zéro. C'est
+  inaccessible : `p.life > 0` est vérifié à L2788, et `zero_population`
+  remet `life = 0` (et non une valeur négative) dès qu'il est `<= 0`.
