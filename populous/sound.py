@@ -433,8 +433,17 @@ class MusicEngine:
             return                                # `TST.W _tempo / BEQ`
         d0 = self.tempo_now + 1
         self.tempo_now = d0
-        if d0 >= self.tempo:
-            self.sound.play(0x47, 0)               # le tic
-            self.tempo_now = 0
-        elif self.tempo - self.beat_two == self.tempo_now:
-            self.sound.play(0x48, 0)               # le contretemps
+        # 0x47 / 0x48 sont les **percussions de la mesure** : sur l'Amiga
+        # ils faisaient partie de la meme musique que `_mesure()`, appelee
+        # plus haut (L403-416). Phase 86 a remplace celle-ci par
+        # `reference/BGM.mp3`, qui apporte la sienne, sans etouffer les
+        # deux temps. Le port cliquait donc un metronome nu par dessus la
+        # piste — le « tas de bips » que decrivait le joueur. On coupe les
+        # deux d'un meme geste, et **seulement** quand la piste tourne :
+        # sans carte son ni BGM, le comportement reste celui du port.
+        if not musique.actif():
+            if d0 >= self.tempo:
+                self.sound.play(0x47, 0)               # le tic
+                self.tempo_now = 0
+            elif self.tempo - self.beat_two == self.tempo_now:
+                self.sound.play(0x48, 0)               # le contretemps
