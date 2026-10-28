@@ -1286,7 +1286,7 @@ class Game:
         self.ren.toggle ^= 1
         self.frame.blit(self.backdrop, (0, 0))
         self._apply_icon_toggles()          # etat persistant des icones (_back_scr)
-        self.ren.draw_minimap(self.frame, self.terrain, colours=self.colours)
+        self.ren.draw_minimap(self.frame, self.terrain, colours=self.colours, sim=self.sim, xoff=self.xoff, yoff=self.yoff)
         self.move_mana()                    # L622 : avant __draw_it
         self.ren.draw_window(self.frame, self.terrain, self.xoff, self.yoff)
         self.ren.draw_peeps(self.frame, self.terrain, self.xoff, self.yoff,
@@ -1354,7 +1354,8 @@ class Game:
         sim.no_peeps = 0                           # CLR.W (_no_peeps)
         terr.make_map(0, 0, 0x3F, 0x3F)            # ___make_map
         self.ren.draw_minimap(self.frame, self.terrain,
-                              colours=self.colours)   # ___draw_map
+                              colours=self.colours, sim=self.sim,
+                              xoff=self.xoff, yoff=self.yoff)   # ___draw_map
 
 # ------------------------------------------- _show_the_shield (asm L2769)
     # Le Â« bouclier Â» : le panneau de l'habitant selectionne dans

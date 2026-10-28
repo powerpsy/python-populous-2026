@@ -477,9 +477,10 @@ class Renderer:
 
     # ------------------------------------------------------------- mini-carte
     def draw_minimap(self, dest: pygame.Surface, terr: Terrain,
-                     colours: list[int] | None = None,
-                     rgb: dict[int, tuple[int, int, int]] | None = None) -> None:
-        """``_draw_map(0, 0, 0x3F, 0x3F)`` : ``x = X-Y+64``, ``y = (X+Y)>>1``."""
+                      colours: list[int] | None = None,
+                      rgb: dict[int, tuple[int, int, int]] | None = None,
+                      sim=None, xoff: int = 0, yoff: int = 0) -> None:
+        """Terrain (fidele) + maisons, peeps, viseur courant (APPROX)."""
         if colours is None:
             colours = map_colours(self.header)
         base = rgb or _map_rgb()
@@ -489,6 +490,51 @@ class Renderer:
                 if c == 0x19:
                     c = colours[0x1F]
                 dest.set_at((x - y + 64, (x + y) >> 1), base.get(c, (0, 0, 0)))
+        # maisons (BLK_TRIBE0/1)
+        try:
+            from populous.constants import BLK_TRIBE0, BLK_TRIBE1
+        except Exception:
+            BLK_TRIBE0, BLK_TRIBE1 = 0x1F, 0x20
+        for idx in range(64 * 64):
+            b = terr.blk[idx]
+            if b == BLK_TRIBE0 or b == BLK_TRIBE1:
+                tribe = 0 if b == BLK_TRIBE0 else 1
+                x, y = idx % 64, idx // 64
+                sx, sy = x - y + 64, (x + y) >> 1
+                col = (0xFF, 0xFF, 0x44) if tribe == 0 else (0xFF, 0x44, 0xFF)
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        nx, ny = sx + dx, sy + dy
+                        if 0 <= nx < dest.get_width() and 0 <= ny < dest.get_height():
+                            dest.set_at((nx, ny), col)
+        # peeps
+        if sim is not None:
+            peep_col = ((0x44, 0x88, 0xFF), (0xFF, 0x44, 0x44))
+            for p in getattr(sim, "peeps", []):
+                if getattr(p, "life", 0) <= 0:
+                    continue
+                blk = getattr(p, "block", 0)
+                if not (0 <= blk < 64 * 64):
+                    continue
+                tribe = getattr(p, "tribe", 0) & 1
+                x, y = blk % 64, blk // 64
+                sx, sy = x - y + 64, (x + y) >> 1
+                col = peep_col[tribe]
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        nx, ny = sx + dx, sy + dy
+                        if 0 <= nx < dest.get_width() and 0 <= ny < dest.get_height():
+                            dest.set_at((nx, ny), col)
+        # viseur courant (8x8)
+        if xoff is not None and yoff is not None:
+            for dx in range(8):
+                for dy in range(8):
+                    if dx == 0 or dy == 0 or dx == 7 or dy == 7:
+                        x, y = xoff + dx, yoff + dy
+                        if 0 <= x < 64 and 0 <= y < 64:
+                            sx, sy = x - y + 64, (x + y) >> 1
+                            if 0 <= sx < dest.get_width() and 0 <= sy < dest.get_height():
+                                dest.set_at((sx, sy), (0xFF, 0xFF, 0xFF))
 
     def step_toggle(self) -> int:
         """``_toggle`` bascule à chaque image (boucle d'animation L604)."""
